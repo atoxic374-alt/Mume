@@ -1,0 +1,10 @@
+[
+  {
+    "name": "main",
+    "host": "de2.kerit.cloud",
+    "port": 9367,
+    "secure": false,
+    "password": "Ahmed150?",
+    "resumeKey": "Aaa"
+  }
+]

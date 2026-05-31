@@ -1,0 +1,7 @@
+node_modules/
+npm-debug.log*
+settings/tokens.json
+settings/bots.json
+settings/backup/
+settings/config.json
+music-updated.rar
