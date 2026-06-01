@@ -1,14 +1,22 @@
 {
-  "owners": [],
+  "owners": [
+    "636930315503534110"
+  ],
   "Token": "",
   "prefix": "!",
   "logChannelId": "",
   "Colors": "#7d8b7f",
-  "statuses": [],
-  "Botsname": [],
+  "statuses": [
+    "tnbeh"
+  ],
+  "Botsname": [
+    "tnbeh"
+  ],
   "Email": "",
   "mode": "live",
   "client_secret": "",
   "client_id": "",
-  "TwitchUrl": []
+  "TwitchUrl": [
+    "https://www.twitch.tv/Tnbeh"
+  ]
 }

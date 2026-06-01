@@ -1,9 +1,9 @@
 [
   {
     "name": "main",
-    "host": "",
-    "port": 2333,
+    "host": "de2.kerit.cloud",
+    "port": 9367,
     "secure": false,
-    "password": ""
+    "password": "Ahmed150?"
   }
 ]
