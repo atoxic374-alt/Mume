@@ -232,12 +232,22 @@ module.exports = {
             // Toggles
             if (i.customId === `stg_${mid}_toggle_buttons`) {
                 const cur = getDisplay(selectedCode);
-                setDisplay(selectedCode, { buttons: !cur.buttons });
+                const newVal = !cur.buttons;
+                setDisplay(selectedCode, { buttons: newVal });
+                // Apply to tokens so music.js reads the correct value
+                tokens = store.get('tokens') || [];
+                tokens.forEach(t => { if (t.code === selectedCode) t.buttons = newVal ? 'on' : 'off'; });
+                store.set('tokens', tokens);
                 return updatePanel(i);
             }
             if (i.customId === `stg_${mid}_toggle_embeds`) {
                 const cur = getDisplay(selectedCode);
-                setDisplay(selectedCode, { embeds: !cur.embeds });
+                const newVal = !cur.embeds;
+                setDisplay(selectedCode, { embeds: newVal });
+                // Apply to tokens for consistency
+                tokens = store.get('tokens') || [];
+                tokens.forEach(t => { if (t.code === selectedCode) t.embeds = newVal ? 'on' : 'off'; });
+                store.set('tokens', tokens);
                 return updatePanel(i);
             }
 
@@ -245,16 +255,18 @@ module.exports = {
             if (i.customId.startsWith(`stg_${mid}_plat_`)) {
                 const plat = i.customId.split('_').pop();
                 setDisplay(selectedCode, { platform: plat });
-                
-                // Update running bots
-                const subTokens = tokens.filter(t => t.code === selectedCode);
-                subTokens.forEach(entry => {
+
+                // Write to tokens.source so music.js picks it up
+                tokens = store.get('tokens') || [];
+                tokens.forEach(t => { if (t.code === selectedCode) t.source = plat; });
+                store.set('tokens', tokens);
+
+                // Apply live to running bots immediately
+                tokens.filter(t => t.code === selectedCode).forEach(entry => {
                     const bot = runningBots.get(entry.token);
-                    if (bot && bot.poru) {
-                        bot.poru.options.defaultPlatform = plat;
-                    }
+                    if (bot?.poru) bot.poru.options.defaultPlatform = plat;
                 });
-                
+
                 return updatePanel(i);
             }
 
@@ -472,7 +484,12 @@ module.exports = {
                     vsCollector.stop();
                 }
                 if (i.customId === `stg_vs_${mid}_links`) {
-                    const links = subTokens.map((t, idx) => `Bot #${idx + 1}: https://discord.com/api/oauth2/authorize?client_id=${t.token.split('.')[0]}&permissions=8&scope=bot`).join('\n');
+                    // Extract real client_id by decoding the first segment of the token (base64 → numeric ID)
+                    const links = subTokens.map((t, idx) => {
+                        let clientId = '';
+                        try { clientId = Buffer.from(t.token.split('.')[0], 'base64').toString('utf8'); } catch {}
+                        return `Bot #${idx + 1}: https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot`;
+                    }).join('\n');
                     await message.author.send({ content: `🔗 روابط دعوة البوتات للاشتراك \`${selectedCode}\`:\n${links.substring(0, 1900)}` }).catch(() => {});
                     await i.reply({ content: '✅ تم إرسال الروابط في الخاص.', ephemeral: true });
                 }

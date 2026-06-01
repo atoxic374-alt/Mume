@@ -265,39 +265,38 @@ module.exports = {
                                     }));
                                 }
 
+                                const disabledComponentsLinks = interaction.message.components.map(row => {
+                                    return new ActionRowBuilder().addComponents(
+                                        row.components.map(component => {
+                                            if (component.type === ComponentType.Button) {
+                                                return ButtonBuilder.from(component).setDisabled(true);
+                                            } else if (component.type === ComponentType.StringSelect) {
+                                                return StringSelectMenuBuilder.from(component).setDisabled(true);
+                                            } else {
+                                                return component;
+                                            }
+                                        })
+                                    );
+                                });
+
                                 Promise.all(botInfoPromises)
                                     .then(botInfos => {
                                         botInfos.forEach((botInfo, index) => {
                                             interaction.user.send(`**🔗 : رابط بوت الميوزك رقم ${index + 1} :**\n${botInfo}`)
-                                                .catch((err) => {
-                                                    console.error("حدث خطأ أثناء إرسال الرابط:", err);
+                                                .catch((sendErr) => {
+                                                    console.error("حدث خطأ أثناء إرسال الرابط:", sendErr);
                                                 });
-                                        });
-
-                                        const disabledComponents = interaction.message.components.map(row => {
-                                            return new ActionRowBuilder().addComponents(
-                                                row.components.map(component => {
-                                                    if (component.type === ComponentType.Button) {
-                                                        return ButtonBuilder.from(component).setDisabled(true);
-                                                    } else if (component.type === ComponentType.StringSelect) {
-                                                        return StringSelectMenuBuilder.from(component).setDisabled(true);
-                                                    } else {
-                                                        return component;
-                                                    }
-                                                })
-                                            );
                                         });
 
                                         db.set(`linktime_${message.author.id}`, currentTime);
 
                                         interaction.followUp({ content: `تم إرسال **${totalBots}** من الروابط إلى الخاص.` });
-                                        interaction.editReply({ components: disabledComponents });
+                                        interaction.editReply({ components: disabledComponentsLinks });
                                     })
                                     .catch(err => {
                                         console.error("حدث خطأ أثناء جمع روابط البوتات:", err);
                                         interaction.followUp({ content: `\`\`\`.حدث خطأ، يرجى التواصل مع الدعم الفني\`\`\`` });
-                                        interaction.editReply({ components: disabledComponents });
-
+                                        interaction.editReply({ components: disabledComponentsLinks });
                                     });
                             } else if (selectedOption === 'Off-serverlinks') {
 
@@ -353,13 +352,27 @@ module.exports = {
                                     }));
                                 }
 
+                                const disabledComponentsOff = interaction.message.components.map(row => {
+                                    return new ActionRowBuilder().addComponents(
+                                        row.components.map(component => {
+                                            if (component.type === ComponentType.Button) {
+                                                return ButtonBuilder.from(component).setDisabled(true);
+                                            } else if (component.type === ComponentType.StringSelect) {
+                                                return StringSelectMenuBuilder.from(component).setDisabled(true);
+                                            } else {
+                                                return component;
+                                            }
+                                        })
+                                    );
+                                });
+
                                 Promise.all(botInfoPromises)
                                     .then(botInfos => {
                                         botInfos.forEach((botInfo, index) => {
                                             if (botInfo) {
                                                 interaction.user.send(`**🔗 : رابط بوت الميوزك رقم ${index + 1} :**\n${botInfo}`)
-                                                    .catch((err) => {
-                                                        console.error("حدث خطأ أثناء إرسال الرابط:", err);
+                                                    .catch((sendErr) => {
+                                                        console.error("حدث خطأ أثناء إرسال الرابط:", sendErr);
                                                     });
                                                 totalSentBots++;
                                             }
@@ -367,35 +380,17 @@ module.exports = {
 
                                         db.set(`Off-serverlinks-${message.author.id}`, currentTime);
 
-                                        const disabledComponents = interaction.message.components.map(row => {
-                                            return new ActionRowBuilder().addComponents(
-                                                row.components.map(component => {
-                                                    if (component.type === ComponentType.Button) {
-                                                        return ButtonBuilder.from(component).setDisabled(true);
-                                                    } else if (component.type === ComponentType.StringSelect) {
-                                                        return StringSelectMenuBuilder.from(component).setDisabled(true);
-                                                    } else {
-                                                        return component;
-                                                    }
-                                                })
-                                            );
-                                        });
-
-
                                         if (totalSentBots > 0) {
                                             interaction.followUp({ content: `تم إرسال **${totalSentBots}** من الروابط إلى الخاص.` });
-                                            interaction.editReply({ components: disabledComponents });
-
                                         } else {
                                             interaction.followUp({ content: `جميع البوتات موجودة بالسيرفر بالفعل.` });
-                                            interaction.editReply({ components: disabledComponents });
                                         }
+                                        interaction.editReply({ components: disabledComponentsOff });
                                     })
                                     .catch(err => {
                                         console.error("حدث خطأ أثناء جمع روابط البوتات:", err);
                                         interaction.followUp({ content: `\`\`\`.حدث خطأ، يرجى التواصل مع الدعم الفني\`\`\`` });
-                                        interaction.editReply({ components: disabledComponents });
-
+                                        interaction.editReply({ components: disabledComponentsOff });
                                     });
                             }
 
@@ -1066,8 +1061,8 @@ module.exports = {
 
                                     botInviteLinks.forEach((botInviteLink, index) => {
                                         message.author.send(`**🔗 : رابط بوت الميوزك رقم ${index + 1}:**\n${botInviteLink}`)
-                                            .catch(() => {
-                                                console.error("حدث خطأ أثناء إرسال رابط البوت:", err);
+                                            .catch((sendErr) => {
+                                                console.error("حدث خطأ أثناء إرسال رابط البوت:", sendErr);
                                             });
                                     });
 
@@ -1253,6 +1248,7 @@ module.exports = {
                         const formattedDate = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}_${date.getHours().toString().padStart(2, '0')}-${date.getMinutes().toString().padStart(2, '0')}-${date.getSeconds().toString().padStart(2, '0')}`;
                         const backupFile = `./settings/backup/tokensbackup-${formattedDate}.json`;
 
+                        fs.mkdirSync('./settings/backup', { recursive: true });
                         fs.copyFileSync('./settings/tokens.json', backupFile);
 
 
@@ -1389,7 +1385,7 @@ module.exports = {
 
                             } else if (selectedOption === 'SoundCloud') {
 
-                                const lastClaimTime = await db.get(`YouTubeeditbuttons_${message.author.id}`) || 0;
+                                const lastClaimTime = await db.get(`soundcloudeditbuttons_${message.author.id}`) || 0;
                                 const currentTime = Date.now();
                                 const timeDifference = currentTime - lastClaimTime;
 
