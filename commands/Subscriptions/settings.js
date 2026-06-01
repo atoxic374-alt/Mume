@@ -427,72 +427,210 @@ module.exports = {
             let page = 0;
             const subTokens = tokens.filter(t => t.code === selectedCode);
 
+            // Helper: decode bot client_id from token
+            function getClientId(token) {
+                try { return Buffer.from(token.split('.')[0], 'base64').toString('utf8'); } catch { return ''; }
+            }
+
+            // Helper: get bot voice state info
+            function getBotVoiceInfo(t) {
+                const bot = runningBots.get(t.token);
+                if (!bot) return { bot: null, statusText: '🚫 غير متصل', inRoom: false, inServer: false };
+                const guild = bot.guilds.cache.get(t.Server);
+                if (!guild) return { bot, statusText: '🌐 خارج السيرفر', inRoom: false, inServer: false };
+                const vc = guild.members.me?.voice?.channel;
+                return {
+                    bot,
+                    statusText: vc ? `🔊 <#${vc.id}>` : '💤 لا يوجد في روم',
+                    inRoom: !!vc,
+                    inServer: true
+                };
+            }
+
             async function renderVoicePanel(i = null) {
                 const start = page * 5;
-                const end = start + 5;
+                const end = Math.min(start + 5, subTokens.length);
                 const slice = subTokens.slice(start, end);
 
                 const embed = new EmbedBuilder()
-                    .setTitle(`حالة الصوت — ${selectedCode}`)
-                    .setDescription(`عرض البوتات من ${start + 1} إلى ${Math.min(end, subTokens.length)} من أصل ${subTokens.length}`)
+                    .setTitle(`📊 حالة الصوت — ${selectedCode}`)
+                    .setDescription(
+                        `البوتات **${start + 1}–${end}** من أصل **${subTokens.length}**\n` +
+                        `🔊 بروم | 💤 بدون روم | 🌐 خارج سيرفر | 🚫 غير متصل`
+                    )
                     .setColor(Colors);
 
                 slice.forEach((t, idx) => {
-                    const bot = runningBots.get(t.token);
-                    let statusText = '🚫 غير متصل';
-                    if (bot) {
-                        const guild = bot.guilds.cache.get(t.Server);
-                        const vc = guild?.members.me?.voice?.channel;
-                        statusText = vc ? `🔊 <#${vc.id}>` : '💤 لا يوجد في روم';
-                    }
-                    embed.addFields({ name: `بوت #${start + idx + 1}`, value: `${bot ? `<@${bot.user.id}>` : '`غير معروف`'} | ${statusText}` });
+                    const { bot, statusText } = getBotVoiceInfo(t);
+                    const mention = bot ? `<@${bot.user.id}>` : '`غير معروف`';
+                    embed.addFields({ name: `#${start + idx + 1}`, value: `${mention}\n${statusText}`, inline: true });
                 });
 
-                const row = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_prev`).setLabel('السابق').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
-                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_next`).setLabel('التالي').setStyle(ButtonStyle.Secondary).setDisabled(end >= subTokens.length),
-                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_restart`).setLabel('إعادة تشغيل').setEmoji('🔄').setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_links`).setLabel('روابط الدعوة').setEmoji('📤').setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setCustomId(`stg_${mid}_panel_rooms`).setLabel('رجوع').setEmoji('⬅️').setStyle(ButtonStyle.Secondary)
+                const row1 = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_prev`).setLabel('◀️').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_next`).setLabel('▶️').setStyle(ButtonStyle.Secondary).setDisabled(end >= subTokens.length),
+                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_restart`).setLabel('🔄 Restart').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_moveidle`).setLabel('📥 إدخال الخاملين').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId(`stg_${mid}_panel_rooms`).setLabel('⬅️ رجوع').setStyle(ButtonStyle.Secondary)
+                );
+                const row2 = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_links_all`).setLabel('📤 روابط الكل').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_links_out`).setLabel('🌐 خارج السيرفر').setStyle(ButtonStyle.Secondary)
                 );
 
-                if (i) await i.update({ embeds: [embed], components: [row] });
-                else await mainMsg.edit({ embeds: [embed], components: [row] });
+                const payload = { embeds: [embed], components: [row1, row2], content: '' };
+                if (i) await i.update(payload);
+                else await mainMsg.edit(payload);
             }
 
             await renderVoicePanel(interaction);
 
             const vsCollector = mainMsg.createMessageComponentCollector({
-                filter: i => i.user.id === userId && i.customId.startsWith(`stg_vs_${mid}_`),
-                time: 60000
+                filter: i => i.user.id === userId && (
+                    i.customId.startsWith(`stg_vs_${mid}_`) || i.customId.startsWith(`stg_vsc_${mid}_`)
+                ),
+                time: 120000
             });
 
             vsCollector.on('collect', async i => {
-                if (i.customId === `stg_vs_${mid}_prev`) { page--; await renderVoicePanel(i); }
-                if (i.customId === `stg_vs_${mid}_next`) { page++; await renderVoicePanel(i); }
+                // ── Pagination ─────────────────────────────────────────────
+                if (i.customId === `stg_vs_${mid}_prev`) { page--; return renderVoicePanel(i); }
+                if (i.customId === `stg_vs_${mid}_next`) { page++; return renderVoicePanel(i); }
+
+                // ── Restart → اسأل: الكل أم اللي بالرومات فقط ─────────────
                 if (i.customId === `stg_vs_${mid}_restart`) {
-                    await i.update({ content: '⏳ جاري تدمير جلسات البوتات لإعادة تشغيلها...', embeds: [], components: [] });
-                    subTokens.forEach(t => {
+                    const row = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`stg_vsc_${mid}_rst_all`).setLabel('🔄 الكل').setStyle(ButtonStyle.Danger),
+                        new ButtonBuilder().setCustomId(`stg_vsc_${mid}_rst_rooms`).setLabel('🔊 اللي بالرومات فقط').setStyle(ButtonStyle.Primary),
+                        new ButtonBuilder().setCustomId(`stg_vsc_${mid}_rst_cancel`).setLabel('إلغاء').setStyle(ButtonStyle.Secondary)
+                    );
+                    return i.update({ content: '⚠️ اختر نوع إعادة التشغيل:', embeds: [], components: [row] });
+                }
+
+                if (i.customId === `stg_vsc_${mid}_rst_cancel`) {
+                    return renderVoicePanel(i);
+                }
+
+                if (i.customId === `stg_vsc_${mid}_rst_all` || i.customId === `stg_vsc_${mid}_rst_rooms`) {
+                    const roomsOnly = i.customId === `stg_vsc_${mid}_rst_rooms`;
+                    const targets = roomsOnly
+                        ? subTokens.filter(t => getBotVoiceInfo(t).inRoom)
+                        : subTokens;
+
+                    await i.update({ content: `⏳ جاري إعادة تشغيل **${targets.length}** بوت...`, embeds: [], components: [] });
+
+                    targets.forEach(t => {
                         const bot = runningBots.get(t.token);
-                        if (bot) {
-                            bot.destroy().catch(() => {});
-                            runningBots.delete(t.token);
-                        }
+                        if (bot) { bot.destroy().catch(() => {}); runningBots.delete(t.token); }
                     });
-                    await mainMsg.edit({ content: '✅ تم تدمير الجلسات. سيقوم النظام بإعادة تشغيلها خلال 10 ثوانٍ.' });
-                    setTimeout(() => updatePanel(), 5000);
+
+                    await mainMsg.edit({ content: `✅ تم إعادة تشغيل **${targets.length}** بوت. سيُعاد تشغيلها خلال 10 ثوانٍ.` });
                     vsCollector.stop();
+                    setTimeout(() => updatePanel(), 10000);
+                    return;
                 }
-                if (i.customId === `stg_vs_${mid}_links`) {
-                    // Extract real client_id by decoding the first segment of the token (base64 → numeric ID)
-                    const links = subTokens.map((t, idx) => {
-                        let clientId = '';
-                        try { clientId = Buffer.from(t.token.split('.')[0], 'base64').toString('utf8'); } catch {}
-                        return `Bot #${idx + 1}: https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot`;
-                    }).join('\n');
-                    await message.author.send({ content: `🔗 روابط دعوة البوتات للاشتراك \`${selectedCode}\`:\n${links.substring(0, 1900)}` }).catch(() => {});
-                    await i.reply({ content: '✅ تم إرسال الروابط في الخاص.', ephemeral: true });
+
+                // ── روابط الكل ─────────────────────────────────────────────
+                if (i.customId === `stg_vs_${mid}_links_all`) {
+                    await i.deferReply({ ephemeral: true });
+                    const chunks = [];
+                    let chunk = `🔗 روابط كل بوتات الاشتراك \`${selectedCode}\`:\n`;
+                    subTokens.forEach((t, idx) => {
+                        const clientId = getClientId(t.token);
+                        const line = `**#${idx + 1}** https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot\n`;
+                        if ((chunk + line).length > 1900) { chunks.push(chunk); chunk = ''; }
+                        chunk += line;
+                    });
+                    if (chunk) chunks.push(chunk);
+
+                    for (const c of chunks) {
+                        await message.author.send({ content: c }).catch(() => {});
+                    }
+                    return i.editReply({ content: `✅ تم إرسال روابط **${subTokens.length}** بوت في الخاص.` });
                 }
+
+                // ── روابط خارج السيرفر ────────────────────────────────────
+                if (i.customId === `stg_vs_${mid}_links_out`) {
+                    await i.deferReply({ ephemeral: true });
+                    const outsideBots = subTokens.filter(t => !getBotVoiceInfo(t).inServer);
+
+                    if (outsideBots.length === 0) {
+                        return i.editReply({ content: '✅ جميع البوتات موجودة في السيرفر.' });
+                    }
+
+                    const chunks = [];
+                    let chunk = `🌐 روابط البوتات خارج السيرفر (اشتراك \`${selectedCode}\`):\n`;
+                    outsideBots.forEach((t, idx) => {
+                        const clientId = getClientId(t.token);
+                        const line = `**#${idx + 1}** https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot\n`;
+                        if ((chunk + line).length > 1900) { chunks.push(chunk); chunk = ''; }
+                        chunk += line;
+                    });
+                    if (chunk) chunks.push(chunk);
+
+                    for (const c of chunks) {
+                        await message.author.send({ content: c }).catch(() => {});
+                    }
+                    return i.editReply({ content: `✅ تم إرسال روابط **${outsideBots.length}** بوت خارج السيرفر في الخاص.` });
+                }
+
+                // ── إدخال الخاملين إلى روم ───────────────────────────────
+                if (i.customId === `stg_vs_${mid}_moveidle`) {
+                    const idleBots = subTokens.filter(t => {
+                        const info = getBotVoiceInfo(t);
+                        return info.inServer && !info.inRoom;
+                    });
+
+                    if (idleBots.length === 0) {
+                        return i.reply({ content: '✅ لا يوجد بوتات خاملة — كلها في رومات.', ephemeral: true });
+                    }
+
+                    const modal = new ModalBuilder()
+                        .setCustomId(`stg_mod_${mid}_moveidle`)
+                        .setTitle(`إدخال ${idleBots.length} بوت خامل`);
+                    modal.addComponents(
+                        new ActionRowBuilder().addComponents(
+                            new TextInputBuilder()
+                                .setCustomId('channelId')
+                                .setLabel('ID الروم الصوتي (أو عدة IDs مفصولة بفاصلة للتوزيع)')
+                                .setPlaceholder('مثال: 123456789  أو  111,222,333')
+                                .setRequired(true)
+                                .setStyle(TextInputStyle.Short)
+                        )
+                    );
+                    return i.showModal(modal);
+                }
+            });
+
+            // Modal: إدخال الخاملين
+            client.on('interactionCreate', async (interaction) => {
+                if (!interaction.isModalSubmit()) return;
+                if (interaction.customId !== `stg_mod_${mid}_moveidle`) return;
+
+                const input = interaction.fields.getTextInputValue('channelId');
+                const channelIds = input.split(',').map(s => s.trim()).filter(Boolean);
+                const idleBots = subTokens.filter(t => {
+                    const info = getBotVoiceInfo(t);
+                    return info.inServer && !info.inRoom;
+                });
+
+                await interaction.deferUpdate();
+                await mainMsg.edit({ content: `⏳ جاري إدخال **${idleBots.length}** بوت خامل...`, embeds: [], components: [] });
+
+                let success = 0;
+                const results = await Promise.allSettled(idleBots.map(async (t, idx) => {
+                    const targetChannelId = channelIds[idx % channelIds.length];
+                    t.channel = targetChannelId;
+                    success++;
+                }));
+
+                store.set('tokens', tokens);
+
+                const failed = results.filter(r => r.status === 'rejected').length;
+                await mainMsg.edit({
+                    content: `✅ تم تحديث روم **${success}** بوت خامل.${failed ? ` (${failed} فشلت)` : ''}\nسيدخل البوتات عند إعادة الاتصال.`
+                });
+                setTimeout(() => updatePanel(), 3000);
             });
         }
     }
