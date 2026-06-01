@@ -58,6 +58,9 @@ require('./manager.js');
       });
 
 client.once('ready', () => {
+    const { checkAndReplaceTokens } = require('./tokenHealthChecker');
+    setTimeout(() => checkAndReplaceTokens(client), 15000);
+    setInterval(() => checkAndReplaceTokens(client), 30 * 60 * 1000);
     setInterval(checkSubscriptions, 30000);
     });
     

@@ -1470,4 +1470,5 @@ module.exports = {
         }
 
     }
-}
+};
+module.exports.runningBots = runningBots;

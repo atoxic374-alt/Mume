@@ -28,14 +28,11 @@ module.exports = {
     const userId = mention.id;
     const mid = message.id;
 
-    let bots = [];
-    try {
-      const data = fs.readFileSync('./settings/bots.json', 'utf8');
-      bots = JSON.parse(data);
-      if (!Array.isArray(bots)) bots = [];
-    } catch {
-      return message.reply({ embeds: [new EmbedBuilder().setDescription('> ❌ خطأ أثناء قراءة ملف البوتات.').setColor('#e74c3c')] });
-    }
+    let state = 'COUNT';
+    let selectedCount = null;
+    let selectedDuration = null;
+    let selectedDurationLabel = null;
+    let serverId = null;
 
     const baseEmbed = () => new EmbedBuilder()
       .setAuthor({ name: message.author.username, iconURL: message.author.displayAvatarURL({ dynamic: true }) })
@@ -44,345 +41,223 @@ module.exports = {
       .setFooter({ text: `${message.guild.name} | إضافة اشتراك`, iconURL: message.guild.iconURL({ dynamic: true }) })
       .setColor(Colors);
 
-    const cancelBtn = () => new ButtonBuilder()
-      .setCustomId(`cancel_${mid}`)
-      .setLabel('إلغاء')
-      .setEmoji('✖️')
-      .setStyle(ButtonStyle.Danger);
+    const getBots = () => {
+      try {
+        const data = fs.readFileSync('./settings/bots.json', 'utf8');
+        let bots = JSON.parse(data);
+        return Array.isArray(bots) ? bots : [];
+      } catch {
+        return [];
+      }
+    };
 
-    // ════════════════════════════════════════════════════════════
-    // المرحلة 1 — اختيار عدد البوتات
-    // ════════════════════════════════════════════════════════════
-    const maxAllowed = Math.min(bots.length, 5);
+    const generateContent = () => {
+      const bots = getBots();
+      const maxAllowed = Math.min(bots.length, 5);
+      const embeds = [];
+      const components = [];
 
-    const countRow1 = new ActionRowBuilder();
-    for (let i = 1; i <= Math.min(maxAllowed, 5); i++) {
-      countRow1.addComponents(
-        new ButtonBuilder()
-          .setCustomId(`count_${i}_${mid}`)
-          .setLabel(`${i}`)
-          .setStyle(ButtonStyle.Secondary)
-      );
-    }
-    const countRow2 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`count_custom_${mid}`).setLabel('مخصص').setEmoji('✏️').setStyle(ButtonStyle.Primary),
-      cancelBtn()
-    );
-
-    const components1 = maxAllowed > 0 ? [countRow1, countRow2] : [countRow2];
-
-    const prompt = await message.channel.send({
-      embeds: [
-        baseEmbed()
+      if (state === 'COUNT') {
+        const embed = baseEmbed()
           .setTitle('➕ إضافة اشتراك — عدد البوتات')
           .setDescription(`> اختر عدد البوتات المراد إضافتها.\n> المتاح حالياً: \`${bots.length}\` بوت`)
-          .addFields({ name: '🤖 المتاح', value: `\`${bots.length}\` بوت`, inline: true })
-      ],
-      components: components1
-    });
+          .addFields({ name: '🤖 المتاح', value: `\`${bots.length}\` بوت`, inline: true });
+        embeds.push(embed);
 
-    const btnFilter = i => i.user.id === message.author.id;
-    let selectedCount = null;
-
-    // collector المرحلة 1
-    try {
-      const i1 = await prompt.awaitMessageComponent({ filter: btnFilter, time: 60000 });
-
-      if (i1.customId === `cancel_${mid}`) {
-        await i1.update({ embeds: [new EmbedBuilder().setDescription('> ✖️ تم الإلغاء.').setColor('#e74c3c')], components: [] });
-        return;
-      }
-
-      if (i1.customId === `count_custom_${mid}`) {
-        // مودل للعدد المخصص
-        const modal = new ModalBuilder().setCustomId(`count_modal_${mid}`).setTitle('عدد البوتات المخصص');
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId('custom_count')
-              .setLabel(`عدد البوتات (المتاح: ${bots.length})`)
-              .setPlaceholder(`أدخل رقماً من 1 إلى ${bots.length}`)
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-              .setMaxLength(4)
-          )
+        const countRow1 = new ActionRowBuilder();
+        for (let i = 1; i <= maxAllowed; i++) {
+          countRow1.addComponents(
+            new ButtonBuilder()
+              .setCustomId(`st_count_${i}_${mid}`)
+              .setLabel(`${i}`)
+              .setStyle(ButtonStyle.Secondary)
+          );
+        }
+        const countRow2 = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`st_count_custom_${mid}`).setLabel('مخصص').setEmoji('✏️').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId(`st_cancel_${mid}`).setLabel('إلغاء').setEmoji('✖️').setStyle(ButtonStyle.Danger)
         );
-        await i1.showModal(modal);
-        let modalSubmit;
-        try {
-          modalSubmit = await i1.awaitModalSubmit({ filter: i => i.customId === `count_modal_${mid}` && i.user.id === message.author.id, time: 60000 });
-        } catch {
-          await prompt.edit({ embeds: [new EmbedBuilder().setDescription('> ⏰ انتهى الوقت.').setColor('#e74c3c')], components: [] });
-          return;
-        }
-        await modalSubmit.deferUpdate();
-        const val = parseInt(modalSubmit.fields.getTextInputValue('custom_count').trim(), 10);
-        if (isNaN(val) || val <= 0) {
-          await prompt.edit({ embeds: [new EmbedBuilder().setDescription('> ❌ أدخل رقماً صحيحاً أكبر من 0.').setColor('#e74c3c')], components: [] });
-          return;
-        }
-        if (bots.length === 0) {
-          await prompt.edit({ embeds: [new EmbedBuilder().setDescription('> ❌ لا توجد بوتات متاحة.').setColor('#e74c3c')], components: [] });
-          return;
-        }
-        if (val > bots.length) {
-          await prompt.edit({ embeds: [new EmbedBuilder().setDescription(`> ❌ المخزون لا يكفي، المتاح \`${bots.length}\`.`).setColor('#e74c3c')], components: [] });
-          return;
-        }
-        selectedCount = val;
-      } else {
-        await i1.deferUpdate();
-        selectedCount = parseInt(i1.customId.split('_')[1], 10);
-      }
-    } catch {
-      await prompt.edit({ embeds: [new EmbedBuilder().setDescription('> ⏰ انتهى الوقت.').setColor('#e74c3c')], components: [] });
-      return;
-    }
-
-    // ════════════════════════════════════════════════════════════
-    // المرحلة 2 — اختيار المدة
-    // ════════════════════════════════════════════════════════════
-    const timeOptions = [
-      { label: 'يوم', value: '1d', emoji: '📅' },
-      { label: 'أسبوع', value: '7d', emoji: '🗓️' },
-      { label: 'شهر', value: '30d', emoji: '📆' },
-      { label: '3 أشهر', value: '90d', emoji: '🗃️' },
-    ];
-
-    const timeRow1 = new ActionRowBuilder();
-    timeOptions.forEach(opt => {
-      timeRow1.addComponents(
-        new ButtonBuilder()
-          .setCustomId(`time_${opt.value}_${mid}`)
-          .setLabel(opt.label)
-          .setEmoji(opt.emoji)
-          .setStyle(ButtonStyle.Secondary)
-      );
-    });
-    const timeRow2 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`time_custom_${mid}`).setLabel('مخصص').setEmoji('✏️').setStyle(ButtonStyle.Primary),
-      cancelBtn()
-    );
-
-    await prompt.edit({
-      embeds: [
-        baseEmbed()
+        if (countRow1.components.length > 0) components.push(countRow1);
+        components.push(countRow2);
+      } else if (state === 'TIME') {
+        const embed = baseEmbed()
           .setTitle('➕ إضافة اشتراك — مدة الاشتراك')
           .setDescription('> اختر مدة الاشتراك.')
           .addFields(
-            { name: '👤 المستخدم', value: `<@${userId}>`, inline: true },
             { name: '🤖 البوتات', value: `\`${selectedCount}\``, inline: true }
-          )
-      ],
-      components: [timeRow1, timeRow2]
-    });
+          );
+        embeds.push(embed);
 
-    let selectedDuration = null;
-    let selectedDurationLabel = null;
-
-    try {
-      const i2 = await prompt.awaitMessageComponent({ filter: btnFilter, time: 60000 });
-
-      if (i2.customId === `cancel_${mid}`) {
-        await i2.update({ embeds: [new EmbedBuilder().setDescription('> ✖️ تم الإلغاء.').setColor('#e74c3c')], components: [] });
-        return;
-      }
-
-      if (i2.customId === `time_custom_${mid}`) {
-        const modal = new ModalBuilder().setCustomId(`time_modal_${mid}`).setTitle('المدة المخصصة');
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId('custom_time')
-              .setLabel('مدة الاشتراك')
-              .setPlaceholder('أمثلة: 30d  |  2w  |  12h  |  60m')
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-              .setMaxLength(10)
-          )
+        const timeRow1 = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`st_time_1d_${mid}`).setLabel('يوم').setEmoji('📅').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`st_time_7d_${mid}`).setLabel('أسبوع').setEmoji('🗓️').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`st_time_30d_${mid}`).setLabel('شهر').setEmoji('📆').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`st_time_90d_${mid}`).setLabel('3 أشهر').setEmoji('🗃️').setStyle(ButtonStyle.Secondary)
         );
-        await i2.showModal(modal);
-        let modalSubmit;
-        try {
-          modalSubmit = await i2.awaitModalSubmit({ filter: i => i.customId === `time_modal_${mid}` && i.user.id === message.author.id, time: 60000 });
-        } catch {
-          await prompt.edit({ embeds: [new EmbedBuilder().setDescription('> ⏰ انتهى الوقت.').setColor('#e74c3c')], components: [] });
-          return;
-        }
-        await modalSubmit.deferUpdate();
-        const raw = modalSubmit.fields.getTextInputValue('custom_time').trim();
-        const dur = ms(raw);
-        if (!dur || dur <= 0) {
-          await prompt.edit({ embeds: [new EmbedBuilder().setDescription('> ❌ صيغة المدة غير صحيحة.\nأمثلة: `30d` · `2w` · `12h` · `60m`').setColor('#e74c3c')], components: [] });
-          return;
-        }
-        selectedDuration = dur;
-        selectedDurationLabel = raw;
-      } else {
-        await i2.deferUpdate();
-        const rawVal = i2.customId.split('_')[1] + 'd';
-        // استخراج القيمة الصحيحة من اسم الزر
-        const parts = i2.customId.split('_');
-        const val = parts[1]; // e.g. "1d", "7d", "30d", "90d"
-        selectedDuration = ms(val);
-        selectedDurationLabel = val;
-      }
-    } catch {
-      await prompt.edit({ embeds: [new EmbedBuilder().setDescription('> ⏰ انتهى الوقت.').setColor('#e74c3c')], components: [] });
-      return;
-    }
-
-    // ════════════════════════════════════════════════════════════
-    // المرحلة 3 — مودل ايدي السيرفر
-    // ════════════════════════════════════════════════════════════
-    const serverModalBtn = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`open_server_${mid}`).setLabel('أدخل ايدي السيرفر').setEmoji('🖥️').setStyle(ButtonStyle.Primary),
-      cancelBtn()
-    );
-
-    const formattedDuration = formatDuration(selectedDuration);
-
-    await prompt.edit({
-      embeds: [
-        baseEmbed()
+        const timeRow2 = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`st_time_custom_${mid}`).setLabel('مخصص').setEmoji('✏️').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId(`st_back_COUNT_${mid}`).setLabel('رجوع').setEmoji('⬅️').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`st_cancel_${mid}`).setLabel('إلغاء').setEmoji('✖️').setStyle(ButtonStyle.Danger)
+        );
+        components.push(timeRow1, timeRow2);
+      } else if (state === 'SERVER') {
+        const formattedDuration = formatDuration(selectedDuration);
+        const embed = baseEmbed()
           .setTitle('➕ إضافة اشتراك — ايدي السيرفر')
           .setDescription('> اضغط الزر لإدخال ايدي السيرفر.')
           .addFields(
-            { name: '👤 المستخدم', value: `<@${userId}>`, inline: true },
             { name: '🤖 البوتات', value: `\`${selectedCount}\``, inline: true },
             { name: '⏳ المدة', value: `\`${formattedDuration}\``, inline: true }
-          )
-      ],
-      components: [serverModalBtn]
-    });
+          );
+        embeds.push(embed);
 
-    let serverId = null;
-
-    try {
-      const i3 = await prompt.awaitMessageComponent({ filter: btnFilter, time: 60000 });
-
-      if (i3.customId === `cancel_${mid}`) {
-        await i3.update({ embeds: [new EmbedBuilder().setDescription('> ✖️ تم الإلغاء.').setColor('#e74c3c')], components: [] });
-        return;
+        const serverRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`st_server_modal_${mid}`).setLabel('أدخل ايدي السيرفر').setEmoji('🖥️').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId(`st_back_TIME_${mid}`).setLabel('رجوع').setEmoji('⬅️').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`st_cancel_${mid}`).setLabel('إلغاء').setEmoji('✖️').setStyle(ButtonStyle.Danger)
+        );
+        components.push(serverRow);
       }
 
-      const modal = new ModalBuilder().setCustomId(`server_modal_${mid}`).setTitle('ايدي السيرفر');
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId('server_id')
-            .setLabel('ايدي السيرفر')
-            .setPlaceholder('مثال: 123456789012345678')
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true)
-            .setMinLength(17)
-            .setMaxLength(20)
-        )
-      );
-      await i3.showModal(modal);
+      return { embeds, components };
+    };
 
-      let modalSubmit;
+    const prompt = await message.channel.send(generateContent());
+    const collector = prompt.createMessageComponentCollector({ filter: i => i.user.id === message.author.id, time: 300000 });
+
+    collector.on('collect', async i => {
+      const cid = i.customId;
+
+      if (cid === `st_cancel_${mid}`) {
+        await i.update({ embeds: [new EmbedBuilder().setDescription('> ✖️ تم الإلغاء.').setColor('#e74c3c')], components: [] });
+        return collector.stop();
+      }
+
+      if (cid.startsWith(`st_back_`)) {
+        state = cid.split('_')[2];
+        return i.update(generateContent());
+      }
+
+      if (state === 'COUNT') {
+        if (cid.startsWith(`st_count_`)) {
+          if (cid === `st_count_custom_${mid}`) {
+            const bots = getBots();
+            const modal = new ModalBuilder().setCustomId(`st_modal_count_${mid}`).setTitle('عدد البوتات المخصص');
+            modal.addComponents(new ActionRowBuilder().addComponents(
+              new TextInputBuilder().setCustomId('val').setLabel(`العدد (المتاح: ${bots.length})`).setPlaceholder(`1-${bots.length}`).setStyle(TextInputStyle.Short).setRequired(true)
+            ));
+            await i.showModal(modal);
+            try {
+              const mSubmit = await i.awaitModalSubmit({ filter: mi => mi.customId === `st_modal_count_${mid}`, time: 60000 });
+              const val = parseInt(mSubmit.fields.getTextInputValue('val').trim(), 10);
+              if (isNaN(val) || val <= 0 || val > bots.length) {
+                return mSubmit.reply({ content: `❌ عدد غير صحيح. المتاح: ${bots.length}`, ephemeral: true });
+              }
+              selectedCount = val;
+              state = 'TIME';
+              await mSubmit.deferUpdate();
+              await prompt.edit(generateContent());
+            } catch { /* ignore timeout */ }
+          } else {
+            selectedCount = parseInt(cid.split('_')[2], 10);
+            state = 'TIME';
+            return i.update(generateContent());
+          }
+        }
+      } else if (state === 'TIME') {
+        if (cid.startsWith(`st_time_`)) {
+          if (cid === `st_time_custom_${mid}`) {
+            const modal = new ModalBuilder().setCustomId(`st_modal_time_${mid}`).setTitle('المدة المخصصة');
+            modal.addComponents(new ActionRowBuilder().addComponents(
+              new TextInputBuilder().setCustomId('val').setLabel('المدة').setPlaceholder('مثال: 30d, 1h').setStyle(TextInputStyle.Short).setRequired(true)
+            ));
+            await i.showModal(modal);
+            try {
+              const mSubmit = await i.awaitModalSubmit({ filter: mi => mi.customId === `st_modal_time_${mid}`, time: 60000 });
+              const raw = mSubmit.fields.getTextInputValue('val').trim();
+              const dur = ms(raw);
+              if (!dur || dur <= 0) return mSubmit.reply({ content: '❌ صيغة مدة غير صحيحة.', ephemeral: true });
+              selectedDuration = dur;
+              selectedDurationLabel = raw;
+              state = 'SERVER';
+              await mSubmit.deferUpdate();
+              await prompt.edit(generateContent());
+            } catch { /* ignore timeout */ }
+          } else {
+            const val = cid.split('_')[2];
+            selectedDuration = ms(val);
+            selectedDurationLabel = val;
+            state = 'SERVER';
+            return i.update(generateContent());
+          }
+        }
+      } else if (state === 'SERVER') {
+        if (cid === `st_server_modal_${mid}`) {
+          const modal = new ModalBuilder().setCustomId(`st_modal_server_${mid}`).setTitle('ايدي السيرفر');
+          modal.addComponents(new ActionRowBuilder().addComponents(
+            new TextInputBuilder().setCustomId('val').setLabel('ايدي السيرفر').setPlaceholder('17-20 خانة').setStyle(TextInputStyle.Short).setRequired(true).setMinLength(17).setMaxLength(20)
+          ));
+          await i.showModal(modal);
+          try {
+            const mSubmit = await i.awaitModalSubmit({ filter: mi => mi.customId === `st_modal_server_${mid}`, time: 60000 });
+            const val = mSubmit.fields.getTextInputValue('val').trim();
+            if (!/^\d{17,20}$/.test(val)) return mSubmit.reply({ content: '❌ ايدي غير صحيح.', ephemeral: true });
+            serverId = val;
+            await mSubmit.deferUpdate();
+            collector.stop('FINISH');
+          } catch { /* ignore timeout */ }
+        }
+      }
+    });
+
+    collector.on('end', async (collected, reason) => {
+      if (reason !== 'FINISH') return;
+
+      const bots = getBots();
+      if (bots.length < selectedCount) {
+        return prompt.edit({ embeds: [new EmbedBuilder().setDescription('> ❌ عذراً، لم يعد هناك بوتات كافية.').setColor('#e74c3c')], components: [] });
+      }
+
+      const randomCode = generateRandomCode(5);
+      const expirationTime = Date.now() + selectedDuration;
+
+      // Update time.json
       try {
-        modalSubmit = await i3.awaitModalSubmit({ filter: i => i.customId === `server_modal_${mid}` && i.user.id === message.author.id, time: 60000 });
-      } catch {
-        await prompt.edit({ embeds: [new EmbedBuilder().setDescription('> ⏰ انتهى الوقت.').setColor('#e74c3c')], components: [] });
-        return;
+        const timeArray = JSON.parse(fs.readFileSync('./settings/time.json', 'utf8'));
+        timeArray.push({ user: userId, server: serverId, botsCount: selectedCount, subscriptionTime: selectedDurationLabel, expirationTime, code: `#${randomCode}` });
+        fs.writeFileSync('./settings/time.json', JSON.stringify(timeArray, null, 2));
+      } catch (e) { console.error('time.json err:', e); }
+
+      // Update tokens and bots
+      const givenTokens = bots.splice(0, selectedCount);
+      try {
+        let tokens = JSON.parse(fs.readFileSync('./settings/tokens.json', 'utf8'));
+        givenTokens.forEach(t => tokens.push({ token: t.token, Server: serverId, channel: null, chat: null, status: null, client: userId, code: `#${randomCode}` }));
+        fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2));
+        fs.writeFileSync('./settings/bots.json', JSON.stringify(bots, null, 2));
+      } catch (e) { console.error('tokens.json err:', e); }
+
+      const formattedDuration = formatDuration(selectedDuration);
+
+      // DM
+      mention.send({
+        content: '```الشراء ناجح. اشتراكك مفعل الآن.```',
+        embeds: [new EmbedBuilder().setTitle('🎵 تم تفعيل اشتراكك!').addFields({ name: '🤖 البوتات', value: `\`${selectedCount}\` بوت`, inline: true }, { name: '⏳ المدة', value: `\`${formattedDuration}\``, inline: true }, { name: '🔖 رقم الاشتراك', value: `\`SuID #${randomCode}\``, inline: true }).setColor(Colors).setFooter({ text: `${message.guild.name} | Timer`, iconURL: message.guild.iconURL({ dynamic: true }) })]
+      }).catch(() => {});
+
+      // Log
+      const logChannel = client.channels.cache.get(logChannelId);
+      if (logChannel) {
+        logChannel.send({
+          embeds: [new EmbedBuilder().setTitle('إضافة اشتراك! ✅').addFields({ name: '👤 المستخدم', value: `<@${userId}>`, inline: true }, { name: '🖥️ السيرفر', value: `\`${serverId}\``, inline: true }, { name: '🤖 البوتات', value: `\`${selectedCount}\``, inline: true }, { name: '⏳ المدة', value: `\`${formattedDuration}\``, inline: true }, { name: '🔖 SuID', value: `\`#${randomCode}\``, inline: true }, { name: '🛠️ بواسطة', value: `<@${message.author.id}>`, inline: true }).setColor(Colors).setFooter({ text: `${message.guild.name} | Timer`, iconURL: message.guild.iconURL({ dynamic: true }) })]
+        });
       }
-      await modalSubmit.deferUpdate();
 
-      serverId = modalSubmit.fields.getTextInputValue('server_id').trim();
-      if (!/^\d{17,20}$/.test(serverId)) {
-        await prompt.edit({ embeds: [new EmbedBuilder().setDescription('> ❌ ايدي السيرفر غير صحيح، يجب أن يكون رقماً 17-20 خانة.').setColor('#e74c3c')], components: [] });
-        return;
-      }
-    } catch {
-      await prompt.edit({ embeds: [new EmbedBuilder().setDescription('> ⏰ انتهى الوقت.').setColor('#e74c3c')], components: [] });
-      return;
-    }
-
-    // ════════════════════════════════════════════════════════════
-    // تنفيذ الإضافة
-    // ════════════════════════════════════════════════════════════
-    const randomCode = generateRandomCode(5);
-    const expirationTime = Date.now() + selectedDuration;
-
-    try {
-      const time = fs.readFileSync('./settings/time.json', 'utf8');
-      const timeArray = JSON.parse(time);
-      timeArray.push({ user: userId, server: serverId, botsCount: selectedCount, subscriptionTime: selectedDurationLabel, expirationTime, code: `#${randomCode}` });
-      fs.writeFileSync('./settings/time.json', JSON.stringify(timeArray, null, 2));
-    } catch (e) { console.error('❌> time.json:', e); }
-
-    const givenTokens = bots.splice(0, selectedCount);
-    let tokens = [];
-    try {
-      tokens = JSON.parse(fs.readFileSync('./settings/tokens.json', 'utf8'));
-      if (!Array.isArray(tokens)) tokens = [];
-    } catch { tokens = []; }
-
-    givenTokens.forEach(t => {
-      tokens.push({ token: t.token, Server: serverId, channel: null, chat: null, status: null, client: userId, code: `#${randomCode}` });
-    });
-
-    fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2));
-    fs.writeFileSync('./settings/bots.json', JSON.stringify(bots, null, 2));
-
-    // DM
-    mention.send({
-      content: '```الشراء ناجح. اشتراكك مفعل الآن.```',
-      embeds: [
-        new EmbedBuilder()
-          .setAuthor({ name: mention.user.username, iconURL: mention.user.displayAvatarURL({ dynamic: true, size: 1024 }) })
-          .setTitle('🎵 تم تفعيل اشتراكك!')
-          .addFields(
-            { name: '🤖 البوتات', value: `\`${selectedCount}\` بوت`, inline: true },
-            { name: '⏳ المدة', value: `\`${formattedDuration}\``, inline: true },
-            { name: '🔖 رقم الاشتراك', value: `\`SuID #${randomCode}\``, inline: true }
-          )
-          .setFooter({ text: `${message.guild.name} | Timer`, iconURL: message.guild.iconURL({ dynamic: true }) })
-          .setColor(Colors)
-      ]
-    }).catch(() => {});
-
-    // لوق
-    const logChannel = client.channels.cache.get(logChannelId);
-    if (logChannel) {
-      logChannel.send({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle('إضافة اشتراك! ✅')
-            .setThumbnail('https://cdn.discordapp.com/attachments/1091536665912299530/1316233635464220803/512-512-max.png?ex=675a4d99&is=6758fc19&hm=352d005827ec0252e09be31a939f3c2f1abb3c8a0d660f20012ac80a2bc62b12&')
-            .addFields(
-              { name: '👤 المستخدم', value: `<@${userId}>`, inline: true },
-              { name: '🖥️ السيرفر', value: `\`${serverId}\``, inline: true },
-              { name: '🤖 البوتات', value: `\`${selectedCount}\``, inline: true },
-              { name: '⏳ المدة', value: `\`${formattedDuration}\``, inline: true },
-              { name: '🔖 SuID', value: `\`#${randomCode}\``, inline: true },
-              { name: '🛠️ بواسطة', value: `<@${message.author.id}>`, inline: true }
-            )
-            .setFooter({ text: `${message.guild.name} | Timer`, iconURL: message.guild.iconURL({ dynamic: true }) })
-            .setColor(Colors)
-        ]
+      // Success
+      await prompt.edit({
+        embeds: [new EmbedBuilder().setTitle('✅ تمت إضافة الاشتراك بنجاح!').addFields({ name: '👤 المستخدم', value: `<@${userId}>`, inline: true }, { name: '🖥️ السيرفر', value: `\`${serverId}\``, inline: true }, { name: '🤖 البوتات', value: `\`${selectedCount}\``, inline: true }, { name: '⏳ المدة', value: `\`${formattedDuration}\``, inline: true }, { name: '🔖 SuID', value: `\`#${randomCode}\``, inline: true }).setColor('#2ecc71').setFooter({ text: `${message.guild.name} | Timer`, iconURL: message.guild.iconURL({ dynamic: true }) })],
+        components: []
       });
-    }
-
-    // نتيجة نهائية
-    await prompt.edit({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle('✅ تمت إضافة الاشتراك بنجاح!')
-          .setThumbnail(mention.user.displayAvatarURL({ dynamic: true, size: 512 }))
-          .addFields(
-            { name: '👤 المستخدم', value: `<@${userId}>`, inline: true },
-            { name: '🖥️ السيرفر', value: `\`${serverId}\``, inline: true },
-            { name: '🤖 البوتات', value: `\`${selectedCount}\``, inline: true },
-            { name: '⏳ المدة', value: `\`${formattedDuration}\``, inline: true },
-            { name: '🔖 SuID', value: `\`#${randomCode}\``, inline: true }
-          )
-          .setFooter({ text: `${message.guild.name} | Timer`, iconURL: message.guild.iconURL({ dynamic: true }) })
-          .setColor('#2ecc71')
-      ],
-      components: []
     });
   }
 };
