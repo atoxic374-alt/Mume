@@ -534,48 +534,11 @@ module.exports = {
                     return;
                 }
 
-                // ── روابط الكل ─────────────────────────────────────────────
-                if (i.customId === `stg_vs_${mid}_links_all`) {
-                    await i.deferReply({ ephemeral: true });
-                    const chunks = [];
-                    let chunk = `🔗 روابط كل بوتات الاشتراك \`${selectedCode}\`:\n`;
-                    subTokens.forEach((t, idx) => {
-                        const clientId = getClientId(t.token);
-                        const line = `**#${idx + 1}** https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot\n`;
-                        if ((chunk + line).length > 1900) { chunks.push(chunk); chunk = ''; }
-                        chunk += line;
-                    });
-                    if (chunk) chunks.push(chunk);
-
-                    for (const c of chunks) {
-                        await message.author.send({ content: c }).catch(() => {});
-                    }
-                    return i.editReply({ content: `✅ تم إرسال روابط **${subTokens.length}** بوت في الخاص.` });
-                }
-
-                // ── روابط خارج السيرفر ────────────────────────────────────
-                if (i.customId === `stg_vs_${mid}_links_out`) {
-                    await i.deferReply({ ephemeral: true });
-                    const outsideBots = subTokens.filter(t => !getBotVoiceInfo(t).inServer);
-
-                    if (outsideBots.length === 0) {
-                        return i.editReply({ content: '✅ جميع البوتات موجودة في السيرفر.' });
-                    }
-
-                    const chunks = [];
-                    let chunk = `🌐 روابط البوتات خارج السيرفر (اشتراك \`${selectedCode}\`):\n`;
-                    outsideBots.forEach((t, idx) => {
-                        const clientId = getClientId(t.token);
-                        const line = `**#${idx + 1}** https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot\n`;
-                        if ((chunk + line).length > 1900) { chunks.push(chunk); chunk = ''; }
-                        chunk += line;
-                    });
-                    if (chunk) chunks.push(chunk);
-
-                    for (const c of chunks) {
-                        await message.author.send({ content: c }).catch(() => {});
-                    }
-                    return i.editReply({ content: `✅ تم إرسال روابط **${outsideBots.length}** بوت خارج السيرفر في الخاص.` });
+                // ── لوحة الروابط (الكل أو خارج السيرفر) ──────────────────
+                if (i.customId === `stg_vs_${mid}_links_all` || i.customId === `stg_vs_${mid}_links_out`) {
+                    const initFilter = i.customId === `stg_vs_${mid}_links_out` ? 'outside' : 'all';
+                    vsCollector.stop('open_links');
+                    return showLinksPanel(i, subTokens, selectedCode, initFilter);
                 }
 
                 // ── إدخال الخاملين إلى روم ───────────────────────────────
@@ -635,6 +598,155 @@ module.exports = {
                     content: `✅ تم تحديث روم **${success}** بوت خامل.${failed ? ` (${failed} فشلت)` : ''}\nسيدخل البوتات عند إعادة الاتصال.`
                 });
                 setTimeout(() => updatePanel(), 3000);
+            });
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        //  showLinksPanel — لوحة روابط البوتات بإيمبد + فلتر + صفحات
+        // ════════════════════════════════════════════════════════════════
+        async function showLinksPanel(triggerInteraction, allBots, code, initFilter = 'all') {
+            let lpPage   = 0;
+            let lpFilter = initFilter;   // 'all' | 'in_room' | 'idle' | 'outside' | 'offline'
+
+            const PAGE_SIZE = 10;
+
+            // تسميات الفلاتر
+            const FILTER_LABELS = {
+                all:     '📋 الكل',
+                in_room: '🔊 بالرومات',
+                idle:    '💤 خاملة (بالسيرفر)',
+                outside: '🌐 خارج السيرفر',
+                offline: '🚫 غير متصلة',
+            };
+
+            // فلترة البوتات حسب الاختيار
+            function applyFilter(bots, filter) {
+                return bots.filter((t, globalIdx) => {
+                    const info = getBotVoiceInfo(t);
+                    if (filter === 'all')     return true;
+                    if (filter === 'in_room') return info.inRoom;
+                    if (filter === 'idle')    return info.inServer && !info.inRoom;
+                    if (filter === 'outside') return !info.inServer && info.bot;
+                    if (filter === 'offline') return !info.bot;
+                    return true;
+                });
+            }
+
+            function buildEmbed(filtered) {
+                const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+                const start = lpPage * PAGE_SIZE;
+                const end   = Math.min(start + PAGE_SIZE, filtered.length);
+                const slice = filtered.slice(start, end);
+
+                // نرسم كل بوت: رقمه الأصلي | منشن | حالة | رابط
+                const lines = slice.map(({ t, globalIdx }) => {
+                    const info     = getBotVoiceInfo(t);
+                    const clientId = getClientId(t.token);
+                    const mention  = info.bot ? `<@${info.bot.user.id}>` : '`—`';
+                    const link     = clientId
+                        ? `[دعوة](https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot)`
+                        : '`لا يوجد ID`';
+
+                    // مؤشر السيرفر
+                    const serverBadge = info.inServer
+                        ? '`✅ سيرفر`'
+                        : (info.bot ? '`🌐 خارج`' : '`🚫 أوفلاين`');
+
+                    const num = String(globalIdx + 1).padStart(3, ' ');
+                    return `\`${num}\` ${mention}  ${info.statusText}  ${serverBadge}  ${link}`;
+                });
+
+                const embed = new EmbedBuilder()
+                    .setTitle(`🔗 روابط البوتات — ${code}`)
+                    .setDescription(
+                        `> **الفلتر:** ${FILTER_LABELS[lpFilter]}  |  **النتائج:** ${filtered.length} بوت\n` +
+                        `\u200b\n` +
+                        (lines.length ? lines.join('\n') : '*لا توجد بوتات في هذه الفئة.*')
+                    )
+                    .setColor(Colors)
+                    .setFooter({ text: `صفحة ${lpPage + 1} / ${totalPages}  •  ${code}` });
+
+                return { embed, totalPages, start, end };
+            }
+
+            function buildComponents(filtered, totalPages) {
+                const end = Math.min((lpPage + 1) * PAGE_SIZE, filtered.length);
+
+                const row1 = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(`lp_${mid}_prev`)
+                        .setLabel('◀️')
+                        .setStyle(ButtonStyle.Secondary)
+                        .setDisabled(lpPage === 0),
+                    new ButtonBuilder()
+                        .setCustomId(`lp_${mid}_next`)
+                        .setLabel('▶️')
+                        .setStyle(ButtonStyle.Secondary)
+                        .setDisabled(end >= filtered.length),
+                    new ButtonBuilder()
+                        .setCustomId(`lp_${mid}_back`)
+                        .setLabel('⬅️ رجوع')
+                        .setStyle(ButtonStyle.Secondary)
+                );
+
+                const row2 = new ActionRowBuilder().addComponents(
+                    new StringSelectMenuBuilder()
+                        .setCustomId(`lp_${mid}_filter`)
+                        .setPlaceholder('🔽 فلتر البوتات')
+                        .addOptions(
+                            Object.entries(FILTER_LABELS).map(([val, lbl]) => ({
+                                label: lbl,
+                                value: val,
+                                default: val === lpFilter
+                            }))
+                        )
+                );
+
+                return [row1, row2];
+            }
+
+            async function renderLinks(i = null) {
+                // أعد فلترة وحساب الصفحة في كل رسم
+                const filtered = applyFilter(allBots, lpFilter)
+                    .map((t) => ({ t, globalIdx: allBots.indexOf(t) }));
+
+                const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+                // تصحيح الصفحة إذا خرجت عن الحدود
+                if (lpPage >= totalPages) lpPage = totalPages - 1;
+                if (lpPage < 0) lpPage = 0;
+
+                const { embed } = buildEmbed(filtered);
+                const components = buildComponents(filtered, totalPages);
+
+                const payload = { embeds: [embed], components, content: '' };
+                if (i) await i.update(payload);
+                else    await mainMsg.edit(payload);
+            }
+
+            // أول عرض
+            await renderLinks(triggerInteraction);
+
+            const lpCollector = mainMsg.createMessageComponentCollector({
+                filter: i => i.user.id === userId && i.customId.startsWith(`lp_${mid}_`),
+                time: 180000
+            });
+
+            lpCollector.on('collect', async i => {
+                if (i.customId === `lp_${mid}_prev`) { lpPage--; return renderLinks(i); }
+                if (i.customId === `lp_${mid}_next`) { lpPage++; return renderLinks(i); }
+                if (i.customId === `lp_${mid}_back`) {
+                    lpCollector.stop();
+                    return handleVoiceStatus(i);
+                }
+                if (i.customId === `lp_${mid}_filter`) {
+                    lpFilter = i.values[0];
+                    lpPage   = 0;
+                    return renderLinks(i);
+                }
+            });
+
+            lpCollector.on('end', (_, reason) => {
+                if (reason === 'time') mainMsg.edit({ components: [] }).catch(() => {});
             });
         }
     }
