@@ -12,12 +12,12 @@ const {
 } = require('discord.js');
 
 const fs = require('fs');
-const {
-    prefix,
-    Colors,
-    Token,
-    logChannelId
-} = require(`${process.cwd()}/settings/config`);
+const config = require(`${process.cwd()}/settings/config`);
+
+const prefix      = process.env.PREFIX       || config.prefix;
+const Colors      = process.env.COLORS       || config.Colors;
+const Token       = process.env.Token        || config.Token;
+const logChannelId = process.env.LOG_CHANNEL || config.logChannelId;
 
 const client = new Client({
     intents: [

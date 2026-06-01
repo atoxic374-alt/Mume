@@ -36,6 +36,15 @@ module.exports = {
         try {
             const data = fs.readFileSync('./settings/host.json', 'utf8');
             hostConfig = JSON.parse(data);
+            if (process.env.LAVALINK_HOST) {
+                hostConfig = [{
+                    name: 'main',
+                    host: process.env.LAVALINK_HOST,
+                    port: parseInt(process.env.LAVALINK_PORT || '2333'),
+                    secure: process.env.LAVALINK_SECURE === 'true',
+                    password: process.env.LAVALINK_PASS || 'youshallnotpass',
+                }];
+            }
         } catch (error) {
             return;
         }

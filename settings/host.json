@@ -1,10 +1,9 @@
 [
   {
     "name": "main",
-    "host": "de2.kerit.cloud",
-    "port": 9367,
+    "host": "lavalink.jirayu.net",
+    "port": 13592,
     "secure": false,
-    "password": "Ahmed150?",
-    "resumeKey": "Aaa"
+    "password": "youshallnotpass"
   }
 ]
