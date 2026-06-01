@@ -40,7 +40,6 @@ const client = new Client({
     sweepers: {
       ...Options.DefaultSweeperSettings,
       messages: { interval: 120, lifetime: 300 },
-      guildMembers: { interval: 600, filter: Options.filterByLifetime({ lifetime: 600 }) },
     },
     ws: { compress: true },
     rest: { timeout: 15000, retries: 2 },

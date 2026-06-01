@@ -76,8 +76,6 @@ module.exports = {
             sweepers: {
                 ...Options.DefaultSweeperSettings,
                 messages: { interval: 60, lifetime: 120 },
-                guildMembers: { interval: 300, filter: Options.filterByLifetime({ lifetime: 300, requirePresence: false }) },
-                users: { interval: 3600, filter: Options.filterByLifetime({ lifetime: 3600 }) },
             },
             ws: { compress: true },
             rest: { timeout: 15000, retries: 2 },
