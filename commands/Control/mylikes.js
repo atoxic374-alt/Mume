@@ -5,7 +5,7 @@ const {
     ButtonStyle,
     StringSelectMenuBuilder,
 } = require('discord.js');
-const { Colors, prefix } = require('../../settings/config');
+const { Colors, prefix } = require('../../config');
 const { getLikes, getAllLikes } = require('../../utils/likes');
 const { check } = require('../../utils/rateLimit');
 

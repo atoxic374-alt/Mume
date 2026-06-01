@@ -1,5 +1,5 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const { Colors, owners, prefix } = require('../../settings/config');
+const { Colors, owners, prefix } = require('../../config');
 const store = require('../../utils/store');
 
 // أوامر التشغيل الأساسية — تظهر لكل المستخدمين

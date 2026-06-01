@@ -1,5 +1,5 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
-const { Colors } = require('./settings/config');
+const { Colors } = require('./config');
 const store = require('./utils/store');
 
 async function validateToken(token) {

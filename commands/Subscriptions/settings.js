@@ -10,7 +10,7 @@ const {
     TextInputBuilder,
     TextInputStyle
 } = require('discord.js');
-const { owners, Colors } = require('../../settings/config');
+const { owners, Colors } = require('../../config');
 const { runningBots } = require('../../music');
 const { getDisplay, setDisplay } = require('../../utils/display');
 const store = require('../../utils/store');

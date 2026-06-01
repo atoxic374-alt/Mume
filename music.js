@@ -17,7 +17,7 @@ const {
 const fs = require('fs');
 const { Poru } = require('poru');
 
-const { Colors, owners, TwitchUrl, statuses } = require(`${process.cwd()}/settings/config`);
+const { Colors, owners, TwitchUrl, statuses } = require(`${process.cwd()}/config`);
 const { getVoiceConnection } = require('@discordjs/voice');
 const duratiform = require('duratiform');
 

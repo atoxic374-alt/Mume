@@ -1,5 +1,4 @@
-const file = require('./config.json');
-
+const file = require('./settings/config.json');
 const cfg = {
     Token:        process.env.Token        || file.Token        || '',
     prefix:       process.env.PREFIX       || file.prefix       || '!',

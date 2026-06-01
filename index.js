@@ -18,7 +18,7 @@ const {
 
 const fs = require('fs');
 const store = require('./utils/store');
-const config = require(`${process.cwd()}/settings/config`);
+const config = require(`${process.cwd()}/config`);
 
 const { prefix, Colors, Token, logChannelId } = config;
 
