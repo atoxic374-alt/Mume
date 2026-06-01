@@ -55,6 +55,21 @@ class Store {
     return next;
   }
 
+  // =============================================================
+  // دالات نودز لافالينك المفقودة (تمت إضافتها لتعمل مع music.js)
+  // =============================================================
+  getNodes() {
+    // نُرجع بيانات host كـ Map لتتوافق مع دالة .get(name) المستدعاة في الكراش
+    return new Map(Object.entries(this.get('host') || {}));
+  }
+
+  setNode(name, data) {
+    const hosts = this.get('host') || {};
+    hosts[name] = { ...(hosts[name] || {}), ...data };
+    this.set('host', hosts);
+  }
+  // =============================================================
+
   _flush(key) {
     if (!this._dirty.has(key)) return;
     const file = FILES[key];

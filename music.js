@@ -106,7 +106,7 @@ module.exports = {
             const name = node.options.name || node.options.host;
             const prev = store.getNodes().get(name) || {};
             store.setNode(name, {
-                status: 'online',
+                status: 'live',
                 connectedAt: Date.now(),
                 reconnects: prev.reconnects ?? 0,
             });
@@ -230,12 +230,12 @@ module.exports = {
   TrueMusic.user.setPresence({
     activities: [
       {
-        name: String(newStatus || "Sway Music"),
+        name: String(newStatus || "Ens Music"),
         type: ActivityType.Streaming,
         url: Array.isArray(TwitchUrl) ? TwitchUrl[0] : TwitchUrl,
       },
     ],
-    status: 'online',
+    status: 'live',
   });
 }
 
@@ -270,7 +270,7 @@ module.exports = {
                         const button1 = new ButtonBuilder()
                             .setLabel('Support Server')
                             .setStyle('Link')
-                            .setURL('discord.gg/QLY');
+                            .setURL('discord.gg/ens');
 
                         const row1 = new ActionRowBuilder().addComponents(button1);
                         const helpEmbed = new EmbedBuilder()
@@ -331,7 +331,7 @@ module.exports = {
                                 .setColor(Colors)
                                 .setDescription(`> **تم إرسال الاوامر في الخاص.**`)
                                 .setFooter({
-                                    text: '𝐐𝐮𝐞𝐥𝐲 𝐒𝐭𝐨𝐫𝐞',
+                                    text: 'Ens 𝐒𝐭𝐨𝐫𝐞',
                                     iconURL: 'https://cdn.discordapp.com/attachments/1091536665912299530/1264377247117082624/emo2.png?ex=669da692&is=669c5512&hm=6d7ce09b35345cdfa38f5aefa67c4031c4158b9b8ef95c83ea1336e979fbc9a1&' // رابط أيقونة البوت
                                 });
                             message.reply({ embeds: [helpdma] }).catch(() => 0);
