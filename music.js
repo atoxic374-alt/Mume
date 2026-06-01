@@ -601,8 +601,150 @@ module.exports = {
 
 
 
-    TrueMusic.poru.on('trackStart', (player, track) => {
-      player.data.lastTrack = track;
+    // ── Helper: apply audio filter preset ──────────────────────────────
+    async function applyFilter(player, name) {
+        await player.filters.clearFilters();
+        if (name === 'clear') return;
+        const f = player.filters;
+        switch (name) {
+            case 'bassboost':
+                await f.setEqualizer([
+                    { band: 0, gain: 0.3 }, { band: 1, gain: 0.25 }, { band: 2, gain: 0.2 },
+                    { band: 3, gain: 0.15 }, { band: 4, gain: 0.1 }, { band: 5, gain: 0.05 }
+                ]); break;
+            case 'nightcore':
+                await f.setTimescale({ speed: 1.2, pitch: 1.2, rate: 1.0 }); break;
+            case '8d':
+                await f.setRotation({ rotationHz: 0.2 }); break;
+            case 'vaporwave':
+                await f.setTimescale({ speed: 0.85, pitch: 0.85, rate: 1.0 }); break;
+            case 'karaoke':
+                await f.setKaraoke({ level: 1.0, monoLevel: 1.0, filterBand: 220.0, filterWidth: 100.0 }); break;
+            case 'tremolo':
+                await f.setTremolo({ frequency: 4.0, depth: 0.7 }); break;
+            case 'vibrato':
+                await f.setVibrato({ frequency: 6.0, depth: 0.5 }); break;
+            case 'distortion':
+                await f.setDistortion({ sinOffset: 0, sinScale: 1, cosOffset: 1, cosScale: 0.5, tanOffset: 0, tanScale: 1, offset: 0, scale: 1.2 }); break;
+            case 'lowpass':
+                await f.setLowPass({ smoothing: 20 }); break;
+            case 'channelmix':
+                await f.setChannelMix({ leftToLeft: 0.5, leftToRight: 0.5, rightToLeft: 0.5, rightToRight: 0.5 }); break;
+        }
+    }
+
+    // ── Helper: show artist top songs + filters menus ───────────────────
+    async function showPlayMenus(channel, requester, artistTracks, player, currentTrack) {
+        const filterNames = {
+            clear: 'بدون فلتر', bassboost: 'Bass Boost', nightcore: 'Nightcore',
+            '8d': '8D Audio', vaporwave: 'Vaporwave', karaoke: 'Karaoke',
+            tremolo: 'Tremolo', vibrato: 'Vibrato', distortion: 'Distortion',
+            lowpass: 'Low Pass', channelmix: 'Channel Mix'
+        };
+        const rows = [];
+
+        // Row 1: top songs by same artist
+        if (artistTracks.length > 0) {
+            const artistLabel = (currentTrack.info.author || '').slice(0, 40);
+            const artistMenu = new StringSelectMenuBuilder()
+                .setCustomId(`art_${requester.id}`)
+                .setPlaceholder(`🎵 أشهر أغاني ${artistLabel} — اضغط لتشغيل`)
+                .addOptions(artistTracks.slice(0, 5).map((t, i) => {
+                    const dur = t.info.length || 0;
+                    const min = Math.floor(dur / 60000);
+                    const sec = Math.floor((dur % 60000) / 1000).toString().padStart(2, '0');
+                    const lbl = (t.info.title || 'Unknown');
+                    return {
+                        label: lbl.length > 99 ? lbl.slice(0, 96) + '...' : lbl,
+                        value: i.toString(),
+                        description: `${min}:${sec} · ${(t.info.author || '').slice(0, 50)}`.slice(0, 99),
+                        emoji: ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'][i]
+                    };
+                }));
+            rows.push(new ActionRowBuilder().addComponents(artistMenu));
+        }
+
+        // Row 2: filters
+        const filtersMenu = new StringSelectMenuBuilder()
+            .setCustomId(`flt_${requester.id}`)
+            .setPlaceholder('🎛️ الفلاتر الصوتية — اختر فلتراً')
+            .addOptions([
+                { label: 'إيقاف الفلاتر',  value: 'clear',      description: 'إزالة جميع الفلاتر',           emoji: '⬛' },
+                { label: 'Bass Boost',       value: 'bassboost',  description: 'تضخيم الجهير',                  emoji: '🔊' },
+                { label: 'Nightcore',        value: 'nightcore',  description: 'سرعة + نبرة أعلى',              emoji: '🌙' },
+                { label: '8D Audio',         value: '8d',         description: 'صوت دائري ثلاثي الأبعاد',       emoji: '🌀' },
+                { label: 'Vaporwave',        value: 'vaporwave',  description: 'سرعة أبطأ + نبرة أخفض',         emoji: '🌊' },
+                { label: 'Karaoke',          value: 'karaoke',    description: 'إزالة الصوت البشري',             emoji: '🎤' },
+                { label: 'Tremolo',          value: 'tremolo',    description: 'اهتزاز في مستوى الصوت',          emoji: '〰️' },
+                { label: 'Vibrato',          value: 'vibrato',    description: 'اهتزاز في نبرة الصوت',           emoji: '📳' },
+                { label: 'Distortion',       value: 'distortion', description: 'تشويه صوتي',                    emoji: '💥' },
+                { label: 'Low Pass',         value: 'lowpass',    description: 'فلتر الترددات المنخفضة',         emoji: '🔉' },
+                { label: 'Channel Mix',      value: 'channelmix', description: 'مزج القنوات اليسرى/اليمنى',     emoji: '🔀' },
+            ]);
+        rows.push(new ActionRowBuilder().addComponents(filtersMenu));
+
+        const msg = await channel.send({ components: rows }).catch(() => null);
+        if (!msg) return;
+
+        const guildId = player.guildId;
+        const collector = msg.createMessageComponentCollector({ time: 90000 });
+
+        collector.on('collect', async i => {
+            if (i.user.id !== requester.id) {
+                return i.reply({ content: 'هذه القائمة ليست لك.', ephemeral: true }).catch(() => {});
+            }
+            await i.deferUpdate().catch(() => {});
+            const guildPlayer = TrueMusic.poru.players.get(guildId);
+
+            if (i.customId.startsWith('art_')) {
+                if (!guildPlayer) return;
+                const t = artistTracks[parseInt(i.values[0])];
+                if (!t) return;
+                t.info.requester = i.user;
+                guildPlayer.queue.add(t);
+                if (!guildPlayer.isPlaying && !guildPlayer.isPaused) guildPlayer.play();
+                channel.send({ content: `▶️ **${t.info.title}** — أُضيفت للقائمة` })
+                    .then(m => setTimeout(() => m.delete().catch(() => {}), 5000)).catch(() => {});
+            } else if (i.customId.startsWith('flt_')) {
+                if (!guildPlayer) return;
+                await applyFilter(guildPlayer, i.values[0]).catch(() => {});
+                channel.send({ content: `✅ تم تطبيق **${filterNames[i.values[0]] || i.values[0]}**` })
+                    .then(m => setTimeout(() => m.delete().catch(() => {}), 4000)).catch(() => {});
+            }
+        });
+
+        collector.on('end', () => msg.delete().catch(() => {}));
+    }
+
+    // ── trackStart: fetch artist top songs + show menus ─────────────────
+    TrueMusic.poru.on('trackStart', async (player, track) => {
+        player.data.lastTrack = track;
+
+        const requester = track.info?.requester;
+        if (!requester) return;
+        const artistName = track.info?.author;
+        if (!artistName) return;
+
+        // Resolve text channel
+        const tc = player.textChannel;
+        let channel;
+        if (typeof tc === 'string') {
+            channel = TrueMusic.channels.cache.get(tc);
+        } else if (tc && typeof tc === 'object') {
+            channel = TrueMusic.channels.cache.get(tc.id) || tc;
+        }
+        if (!channel) return;
+
+        // Fetch top songs by same artist (non-blocking)
+        try {
+            const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
+            const source = tokenObj2?.source || 'ytsearch';
+            const res = await TrueMusic.poru.resolve({ query: artistName, source });
+            const artistTracks = (res?.tracks || [])
+                .filter(t => t.info.uri !== track.info.uri)
+                .slice(0, 5);
+            await showPlayMenus(channel, requester, artistTracks, player, track);
+        } catch { /* silently skip if Lavalink unreachable */ }
     });
 
 
@@ -1224,8 +1366,12 @@ module.exports = {
                     .setCustomId('select_source')
                     .setPlaceholder('Choose a platform to search')
                     .addOptions([
-                        { label: 'YouTube', value: 'ytsearch', emoji: '🎥' },
-                        { label: 'SoundCloud', value: 'scsearch', emoji: '🎧' }
+                        { label: 'YouTube',      value: 'ytsearch',  emoji: '🎥' },
+                        { label: 'YouTube Music',value: 'ytmsearch', emoji: '🎵' },
+                        { label: 'SoundCloud',   value: 'scsearch',  emoji: '🔊' },
+                        { label: 'Spotify',      value: 'spsearch',  emoji: '🟢' },
+                        { label: 'Apple Music',  value: 'amsearch',  emoji: '🍎' },
+                        { label: 'Deezer',       value: 'dzsearch',  emoji: '🎧' },
                     ]);
 
                 const row = new ActionRowBuilder().addComponents(selectSource);

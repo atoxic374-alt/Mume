@@ -142,14 +142,19 @@ module.exports = {
                         .setColor(Colors);
                     embeds.push(embed);
 
+                    const platBtn = (id, lbl) => new ButtonBuilder()
+                        .setCustomId(`stg_${mid}_plat_${id}`)
+                        .setLabel(lbl)
+                        .setStyle(display.platform === id ? ButtonStyle.Primary : ButtonStyle.Secondary);
                     const row1 = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`stg_${mid}_plat_ytsearch`).setLabel('YouTube').setStyle(display.platform === 'ytsearch' ? ButtonStyle.Primary : ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_plat_ytmsearch`).setLabel('YT Music').setStyle(display.platform === 'ytmsearch' ? ButtonStyle.Primary : ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_plat_scsearch`).setLabel('SoundCloud').setStyle(display.platform === 'scsearch' ? ButtonStyle.Primary : ButtonStyle.Secondary)
+                        platBtn('ytsearch',  'YouTube'),
+                        platBtn('ytmsearch', 'YT Music'),
+                        platBtn('scsearch',  'SoundCloud')
                     );
                     const row2 = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`stg_${mid}_plat_spsearch`).setLabel('Spotify*').setStyle(display.platform === 'spsearch' ? ButtonStyle.Primary : ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_plat_dzsearch`).setLabel('Deezer*').setStyle(display.platform === 'dzsearch' ? ButtonStyle.Primary : ButtonStyle.Secondary),
+                        platBtn('spsearch',  'Spotify'),
+                        platBtn('amsearch',  'Apple Music'),
+                        platBtn('dzsearch',  'Deezer'),
                         new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('رجوع').setEmoji('⬅️').setStyle(ButtonStyle.Secondary)
                     );
                     components.push(row1, row2);

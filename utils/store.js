@@ -9,6 +9,7 @@ const FILES = {
   host:    './settings/host.json',
   display: './settings/display.json',
   emojis:  './settings/emojis.json',
+  history: './settings/history.json',
 };
 
 class Store {
