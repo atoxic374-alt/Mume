@@ -1,6 +1,7 @@
-const fs = require('fs');
 const { owners, prefix, Colors } = require(`${process.cwd()}/settings/config`);
-const { Client, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, EmbedBuilder, ComponentType } = require('discord.js');
+const { EmbedBuilder } = require('discord.js');
+const store = require('../../utils/store');
+const { check } = require('../../utils/rateLimit');
 
 module.exports = {
   name: 'mysub',
@@ -16,9 +17,10 @@ module.exports = {
       userId = message.author.id;
     }
 
+    if (!check(message.author.id, 'mysub')) return;
+
     try {
-      const logs = fs.readFileSync('./settings/time.json', 'utf8');
-      const logsArray = JSON.parse(logs);
+      const logsArray = store.get('time') || [];
 
       const userSubscriptions = logsArray.filter(entry => entry.user === userId);
 

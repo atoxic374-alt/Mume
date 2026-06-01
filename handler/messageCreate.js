@@ -1,32 +1,35 @@
 // messageCreate.js
 const client = require('../index');
 const { prefix } = require('../settings/config');
+const { check } = require('../utils/rateLimit');
 
 
 client.on("messageCreate", async (message) => {
     if (message.author.bot || !message.guild) return;
 
-    let usedPrefix = prefix;
-    const mentionPrefix = `<@${client.user.id}>`;
-    const mentionPrefixNickname = `<@!${client.user.id}>`;
+    let content = message.content;
+    const botMention1 = `<@${client.user?.id}>`;
+    const botMention2 = `<@!${client.user?.id}>`;
 
-    if (message.content.startsWith(mentionPrefix)) {
-        usedPrefix = mentionPrefix;
-    } else if (message.content.startsWith(mentionPrefixNickname)) {
-        usedPrefix = mentionPrefixNickname;
-    } else if (!message.content.toLowerCase().startsWith(prefix.toLowerCase())) {
-        return;
-    }
+    if (content.startsWith(botMention1))      content = content.slice(botMention1.length).trimStart();
+    else if (content.startsWith(botMention2)) content = content.slice(botMention2.length).trimStart();
+    else if (content.toLowerCase().startsWith(prefix.toLowerCase())) content = content.slice(prefix.length);
+    else return;
 
-    const [cmd, ...args] = message.content
-        .slice(usedPrefix.length)
-        .trim()
-        .split(/ +/g);
+    if (!content.trim()) return;
 
-    if (!cmd) return;
-
-    const command = client.commands.get(cmd.toLowerCase()) || client.commands.find(c => c.aliases?.includes(cmd.toLowerCase()));
+    const [cmd, ...args] = content.trim().split(/ +/g);
+    const command = client.commands.get(cmd.toLowerCase())
+                 || client.commands.find(c => c.aliases?.includes(cmd.toLowerCase()));
 
     if (!command) return;
-    await command.execute(client, message, args);
+
+    // Rate limit: 1.5s per user per command
+    if (!check(message.author.id, cmd.toLowerCase())) return;
+
+    try {
+        await command.execute(client, message, args);
+    } catch (e) {
+        console.error(`[cmd:${cmd}]`, e.message);
+    }
 });

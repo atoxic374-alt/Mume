@@ -13,6 +13,8 @@ const {
 const { owners, Colors } = require('../../settings/config');
 const { runningBots } = require('../../music');
 const { getDisplay, setDisplay } = require('../../utils/display');
+const store = require('../../utils/store');
+const { check } = require('../../utils/rateLimit');
 
 module.exports = {
     name: 'settings',
@@ -22,13 +24,10 @@ module.exports = {
         const isAdmin = owners.includes(userId);
         const mid = message.id;
 
+        if (!check(userId, 'settings')) return;
+
         // 1. Find user's subscriptions
-        let tokens = [];
-        try {
-            tokens = JSON.parse(fs.readFileSync('./settings/tokens.json', 'utf8'));
-        } catch (err) {
-            return message.reply('❌ فشل قراءة ملف التوكنات.');
-        }
+        let tokens = store.get('tokens') || [];
 
         // Get unique subscription codes owned by user (or all if admin)
         const mySubs = tokens.filter(t => isAdmin || t.client === userId);
@@ -70,10 +69,7 @@ module.exports = {
                 } 
                 else if (currentPanel === 'MAIN') {
                     const subTokens = tokens.filter(t => t.code === selectedCode);
-                    let timeData = [];
-                    try {
-                        timeData = JSON.parse(fs.readFileSync('./settings/time.json', 'utf8'));
-                    } catch {}
+                    const timeData = store.get('time') || [];
                     const subInfo = timeData.find(t => t.code === selectedCode);
 
                     const embed = new EmbedBuilder()
@@ -320,7 +316,7 @@ module.exports = {
                 
                 // Update tokens.json
                 tokens.forEach(t => { if (t.code === selectedCode) t.status = text; });
-                fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2));
+                store.set('tokens', tokens);
 
                 const results = await Promise.allSettled(subTokens.map(async t => {
                     const bot = runningBots.get(t.token);
@@ -401,7 +397,7 @@ module.exports = {
                         }
                     }
 
-                    fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2));
+                    store.set('tokens', tokens);
                     await mainMsg.edit({ content: `✅ تم توزيع ${subTokens.length} بوت على ${targetChannels.length} روم.` });
                 } catch (e) {
                     await mainMsg.edit({ content: `❌ خطأ: ${e.message}` });

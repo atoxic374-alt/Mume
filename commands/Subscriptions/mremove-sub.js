@@ -1,7 +1,8 @@
-const fs = require('fs');
 const path = require('path');
 const { owners, Colors, logChannelId, Botsname } = require(`${process.cwd()}/settings/config`);
 const { EmbedBuilder, Client, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const store = require('../../utils/store');
+const { check } = require('../../utils/rateLimit');
 
 module.exports = {
   name: 'musicremovesub',
@@ -9,12 +10,10 @@ module.exports = {
   async execute(client, message, args) {
     if (!owners.includes(message.author.id)) return;
     if (message.author.bot) return;
+    if (!check(message.author.id, 'musicremovesub')) return;
 
     const mid = message.id;
-    let timeData = [];
-    try {
-      timeData = JSON.parse(fs.readFileSync('./settings/time.json', 'utf8'));
-    } catch { timeData = []; }
+    let timeData = store.get('time') || [];
 
     let selectedCode = args[0];
 
@@ -91,22 +90,22 @@ module.exports = {
 
 async function executeRemoval(code, message, client) {
   try {
-    let timeArray = JSON.parse(fs.readFileSync('./settings/time.json', 'utf8'));
+    let timeArray = store.get('time') || [];
     const subIdx = timeArray.findIndex(e => e.code === code);
     if (subIdx === -1) return message.reply("خطأ: لم يتم العثور على الاشتراك.");
     const sub = timeArray[subIdx];
     const userId = sub.user;
     timeArray.splice(subIdx, 1);
-    fs.writeFileSync('./settings/time.json', JSON.stringify(timeArray, null, 2));
+    store.set('time', timeArray);
 
-    let tokensArray = JSON.parse(fs.readFileSync('./settings/tokens.json', 'utf8'));
+    let tokensArray = store.get('tokens') || [];
     const tokensToRemove = tokensArray.filter(t => t.code === code);
     tokensArray = tokensArray.filter(t => t.code !== code);
-    fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokensArray, null, 2));
+    store.set('tokens', tokensArray);
 
-    let botsArray = JSON.parse(fs.readFileSync('./settings/bots.json', 'utf8'));
+    let botsArray = store.get('bots') || [];
     tokensToRemove.forEach(t => botsArray.push({ token: t.token }));
-    fs.writeFileSync('./settings/bots.json', JSON.stringify(botsArray, null, 2));
+    store.set('bots', botsArray);
 
     message.channel.send(`✅ تم حذف الاشتراك \`${code}\` بنجاح. سيتم تنظيف البوتات الآن.`);
 

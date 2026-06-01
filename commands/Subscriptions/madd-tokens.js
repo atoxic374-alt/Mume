@@ -1,4 +1,5 @@
 const fs = require('fs');
+const store = require('../../utils/store');
 const path = require('path');
 const axios = require('axios');
 
@@ -46,16 +47,7 @@ module.exports = {
     }
 
     if (validTokens.length > 0) {
-      let bots = [];
-      try {
-        const data = fs.readFileSync('./settings/bots.json', 'utf8');
-        bots = JSON.parse(data);
-        if (!Array.isArray(bots)) {
-          bots = [];
-        }
-      } catch (error) {
-        console.error('❌>', error);
-      }
+      let bots = [...(store.get('bots') || [])];
 
       for (const tokenValue of validTokens) {
         const tokenExists = bots.some(bot => bot.token === tokenValue);
@@ -63,7 +55,7 @@ module.exports = {
           bots.push({ token: tokenValue });
         }
       }
-      fs.writeFileSync('./settings/bots.json', JSON.stringify(bots, null, 2));
+      store.set('bots', bots);
 
       function generateRandomNumber() {
         return Math.floor(1000 + Math.random() * 9000); 

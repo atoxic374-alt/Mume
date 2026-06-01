@@ -1,4 +1,5 @@
 const fs = require('fs');
+const store = require('../../utils/store');
 const { Client, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, EmbedBuilder, ComponentType } = require('discord.js');
 const { owners, prefix, Colors } = require(`${process.cwd()}/settings/config`);
 const axios = require("axios");
@@ -22,13 +23,7 @@ module.exports = {
             targetUser = message.author;
         }
 
-        let subscriptions = [];
-        try {
-            const data = fs.readFileSync('./settings/time.json', 'utf8');
-            subscriptions = JSON.parse(data);
-        } catch (error) {
-            return;
-        }
+        const subscriptions = store.get('time') || [];
         const userId = targetUser.id;
         const userSubscriptions = subscriptions.filter(sub => sub.user === targetUser.id);
 
@@ -36,7 +31,7 @@ module.exports = {
             return;
         }
 
-        const emojiData = JSON.parse(fs.readFileSync('./settings/emojis.json', 'utf8'));
+        const emojiData = store.get('emojis') || { emojis: [] };
         const emojis = emojiData.emojis;
 
         const selectMenu = new Discord.StringSelectMenuBuilder()
@@ -92,18 +87,7 @@ module.exports = {
             const selectedSubscriptions = userSubscriptions.filter(sub => selectedCodes.includes(sub.code));
 
             if (selectedSubscriptions.length > 0) {
-                if (!fs.existsSync('./settings/tokens.json')) {
-                    return;
-                }
-
-                let tokens = [];
-                try {
-                    const tokensData = fs.readFileSync('./settings/tokens.json', 'utf8');
-                    tokens = JSON.parse(tokensData);
-                } catch (error) {
-                    console.error('حدث خطأ أثناء قراءة الملف tokens.json:', error);
-                    return;
-                }
+                const tokens = store.get('tokens') || [];
 
                 const userTokens = tokens.filter(token => selectedCodes.includes(token.code) && token.client === targetUser.id);
 
@@ -535,7 +519,7 @@ module.exports = {
                                 });
 
                                 try {
-                                    fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2), 'utf8');
+                                    store.set('tokens', tokens);
                                     const botCount = currentTokenData.length;
                                     db.set(`editbuttons_${message.author.id}`, currentTime);
                                     await interaction.followUp({ content: `تم ${newButtonState === 'on' ? 'تفعيل' : 'إيقاف'} جميع الازرار لبوتات الميوزك بنجاح، البوتات المتأثرة : **${botCount}**` });
@@ -820,7 +804,7 @@ module.exports = {
                                 msgCollector.on('collect', async (msg) => {
                                     const status = msg.content.trim();
                                     userTokens.forEach(t => t.status = status);
-                                    fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2));
+                                    store.set('tokens', tokens);
                                     db.set(`statustime_${userId}`, now);
                                     msgCollector.stop();
                                     await sentMsg.edit({ content: `تم تغيير الحالة لـ **${userTokens.length}** بوت.` });
@@ -960,7 +944,7 @@ module.exports = {
                                 tokenData.channel = voiceId;
                                 transferredBotCount++;
                             }
-                            fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2));
+                            store.set('tokens', tokens);
 
                             db.set(`installBottime_${message.author.id}`, currentTime);
                             await interaction.editReply({ content: `تم تحديث قناة الصوت لِـ **${transferredBotCount}** بوت بنجاح.`, components: [] });
@@ -1038,7 +1022,7 @@ module.exports = {
                             for (const token of userTokens) {
                                 token.Server = newServerId;
                             }
-                            fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2));
+                            store.set('tokens', tokens);
 
                             let botInfoPromises = [];
                             for (let [index, token] of userTokens.entries()) {
@@ -1115,8 +1099,7 @@ module.exports = {
                         }
 
                         try {
-                            const logs = fs.readFileSync('./settings/time.json', 'utf8');
-                            const logsArray = JSON.parse(logs);
+                            const logsArray = store.get('time') || [];
 
                             const userSubscriptions = logsArray.filter(entry => entry.user === userId);
 
@@ -1193,8 +1176,7 @@ module.exports = {
 
                         let transferredBotsCount = 0;
                         try {
-                            const data = fs.readFileSync('./settings/time.json', 'utf8');
-                            let subscriptions = JSON.parse(data);
+                            let subscriptions = [...(store.get('time') || [])];
 
                             subscriptions.forEach(sub => {
                                 if (selectedCodes.includes(sub.code)) {
@@ -1203,7 +1185,7 @@ module.exports = {
                                 }
                             });
 
-                            fs.writeFileSync('./settings/time.json', JSON.stringify(subscriptions, null, 2));
+                            store.set('time', subscriptions);
 
                             await interaction.editReply({
                                 content: `تم نقل ملكية جميع البوتات بنجاح، البوتات المتأثرة: **${transferredBotsCount}**`,
@@ -1213,8 +1195,7 @@ module.exports = {
                             await response.first().delete();
 
                             try {
-                                const tokensData = fs.readFileSync('./settings/tokens.json', 'utf8');
-                                let tokens = JSON.parse(tokensData);
+                                let tokens = store.get('tokens') || [];
 
                                 tokens.forEach(token => {
                                     if (selectedCodes.includes(token.code)) {
@@ -1222,7 +1203,7 @@ module.exports = {
                                     }
                                 });
 
-                                fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2));
+                                store.set('tokens', tokens);
                             } catch (error) {
                                 return;
                             }
@@ -1256,7 +1237,7 @@ module.exports = {
 
 
                         const userId = message.author.id;
-                        let tokens = JSON.parse(fs.readFileSync('./settings/tokens.json', 'utf8'));
+                        let tokens = store.get('tokens') || [];
 
                         const userTokens = tokens.filter(token => token.client === userId);
                         const remainingTokens = tokens.filter(token => token.client !== userId);
@@ -1296,12 +1277,12 @@ module.exports = {
 
                         await interaction.message.edit({ components: disabledComponents });
 
-                        fs.writeFileSync('./settings/tokens.json', JSON.stringify(remainingTokens, null, 2), 'utf8');
+                        store.set('tokens', remainingTokens);
 
                         setTimeout(async () => {
-                            let updatedTokens = JSON.parse(fs.readFileSync('./settings/tokens.json', 'utf8'));
+                            let updatedTokens = store.get('tokens') || [];
                             updatedTokens.push(...userTokens);
-                            fs.writeFileSync('./settings/tokens.json', JSON.stringify(updatedTokens, null, 2), 'utf8');
+                            store.set('tokens', updatedTokens);
 
 
                             await reply.edit({
@@ -1395,7 +1376,7 @@ module.exports = {
                                 });
 
                                 try {
-                                    fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2), 'utf8');
+                                    store.set('tokens', tokens);
                                     const botCount = currentTokenData.length;
                                     db.set(`YouTubeeditbuttons_${message.author.id}`, currentTime);
                                     await interaction.followUp({ content: `تم تعيين منصة التشغيل الأساسية لجميع البوتات إلى يوتيوب، البوتات المتأثرة : **${botCount}**` });
@@ -1448,7 +1429,7 @@ module.exports = {
                                 });
 
                                 try {
-                                    fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2), 'utf8');
+                                    store.set('tokens', tokens);
                                     const botCount = currentTokenData.length;
                                     db.set(`soundcloudeditbuttons_${message.author.id}`, currentTime);
                                     await interaction.followUp({ content: `تم تعيين منصة التشغيل الأساسية لجميع البوتات إلى ساندكلاود، البوتات المتأثرة : **${botCount}**` });

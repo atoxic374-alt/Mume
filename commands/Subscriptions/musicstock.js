@@ -1,6 +1,7 @@
 const { owners, prefix, Colors } = require(`${process.cwd()}/settings/config`);
-const fs = require('fs');
 const { EmbedBuilder } = require('discord.js');
+const store = require('../../utils/store');
+const { check } = require('../../utils/rateLimit');
 
 module.exports = {
   name: 'musicstock',
@@ -8,30 +9,15 @@ module.exports = {
   async execute(client, message, args) {
 
     if (!owners.includes(message.author.id)) return;
-
     if (message.author.bot) return;
+    if (!check(message.author.id, 'musicstock')) return;
 
-    let bots = [];
-    try {
-      const data = fs.readFileSync('./settings/bots.json', 'utf8');
-      bots = JSON.parse(data);
-    } catch (error) {
-      console.error('حدث خطأ أثناء قراءة الملف bots.json:', error);
-    }
-
+    const bots = store.get('bots') || [];
     const botTokenCount = bots.length;
-    let tokens = [];
-    try {
-      const data = fs.readFileSync('./settings/tokens.json', 'utf8');
-      tokens = JSON.parse(data);
-    } catch (error) {
-      console.error('حدث خطأ أثناء قراءة الملف tokens.json:', error);
-    }
-
+    
+    const tokens = store.get('tokens') || [];
     const userTokenCount = tokens.length;
     
-    const stockColor = userTokenCount === 0 ? 'RED' : 'GREEN';
-
     const embed = new EmbedBuilder()
       .setColor(Colors) 
       .setDescription(`***Tokens Stock,***\n***works:*** ${userTokenCount} \`${userTokenCount === 0 ? '🔴' : '🟢'}\`\n***Available:*** ${botTokenCount} \`🟢\``)

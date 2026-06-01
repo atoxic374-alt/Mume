@@ -1,6 +1,8 @@
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require("discord.js");
 const { owners, Colors } = require(`${process.cwd()}/settings/config`);
 const fs = require('fs');
+const store = require('../../utils/store');
+const { check } = require('../../utils/rateLimit');
 
 module.exports = {
   name: "automatic",
@@ -8,10 +10,11 @@ module.exports = {
   description: "لوحة الشراء التلقائي",
   async execute(client, message, args) {
     if (!owners.includes(message.author.id)) return;
+    if (!check(message.author.id, 'automatic')) return;
 
     try {
-      const botsStock = JSON.parse(fs.readFileSync(`${process.cwd()}/settings/bots.json`, 'utf8'));
-      const activeSubs = JSON.parse(fs.readFileSync(`${process.cwd()}/settings/tokens.json`, 'utf8'));
+      const botsStock = store.get('bots') || [];
+      const activeSubs = store.get('tokens') || [];
 
       const embed = new EmbedBuilder()
         .setTitle("نظام الموسيقى - Mume")

@@ -1,7 +1,8 @@
-const fs = require('fs');
 const { owners, Colors, logChannelId } = require(`${process.cwd()}/settings/config`);
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const ms = require('ms');
+const store = require('../../utils/store');
+const { check } = require('../../utils/rateLimit');
 
 function formatDuration(msValue) {
   const d = Math.floor(msValue / 86400000);
@@ -16,11 +17,9 @@ module.exports = {
   aliases: ["madd-time"],
   async execute(client, message, args) {
     if (!owners.includes(message.author.id)) return;
+    if (!check(message.author.id, 'musicaddtime')) return;
 
-    let timeData = [];
-    try {
-      timeData = JSON.parse(fs.readFileSync('./settings/time.json', 'utf8'));
-    } catch { timeData = []; }
+    let timeData = store.get('time') || [];
 
     const mid = message.id;
     let selectedCode = args[0];
@@ -107,13 +106,13 @@ module.exports = {
 
 async function executeAddTime(code, durationMs, durationStr, message, client, prompt) {
   try {
-    let timeArray = JSON.parse(fs.readFileSync('./settings/time.json', 'utf8'));
+    let timeArray = store.get('time') || [];
     const entry = timeArray.find(e => e.code === code);
     if (!entry) return;
 
     const oldExpiry = entry.expirationTime;
     entry.expirationTime += durationMs;
-    fs.writeFileSync('./settings/time.json', JSON.stringify(timeArray, null, 2));
+    store.set('time', timeArray);
 
     const embed = new EmbedBuilder()
       .setTitle('✅ تم إضافة الوقت')

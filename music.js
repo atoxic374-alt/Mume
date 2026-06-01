@@ -10,7 +10,8 @@ const {
     ButtonBuilder,
     ButtonStyle,
     StringSelectMenuBuilder,
-    ActivityType
+    ActivityType,
+    Options
 } = require('discord.js');
 
 const fs = require('fs');
@@ -20,9 +21,10 @@ const { Colors, owners, TwitchUrl, statuses } = require(`${process.cwd()}/settin
 const { getVoiceConnection } = require('@discordjs/voice');
 const duratiform = require('duratiform');
 
-const store = require('./statusStore');
+const store = require('./utils/store');
 
 const runningBots = new Collection();
+const botLastActivity = new Map();
 const tempData = new Collection();
 tempData.set("bots", []);
 const collection = new Collection();
@@ -32,21 +34,15 @@ module.exports = {
         if (runningBots.has(token)) {
             return;
         }
-        let hostConfig;
-        try {
-            const data = fs.readFileSync('./settings/host.json', 'utf8');
-            hostConfig = JSON.parse(data);
-            if (process.env.LAVALINK_HOST) {
-                hostConfig = [{
-                    name: 'main',
-                    host: process.env.LAVALINK_HOST,
-                    port: parseInt(process.env.LAVALINK_PORT || '2333'),
-                    secure: process.env.LAVALINK_SECURE === 'true',
-                    password: process.env.LAVALINK_PASS || 'youshallnotpass',
-                }];
-            }
-        } catch (error) {
-            return;
+        let hostConfig = store.get('host');
+        if (process.env.LAVALINK_HOST) {
+            hostConfig = [{
+                name: 'main',
+                host: process.env.LAVALINK_HOST,
+                port: parseInt(process.env.LAVALINK_PORT || '2333'),
+                secure: process.env.LAVALINK_SECURE === 'true',
+                password: process.env.LAVALINK_PASS || 'youshallnotpass',
+            }];
         }
 
         const TrueMusic = new Client({
@@ -61,6 +57,31 @@ module.exports = {
                 GatewayIntentBits.GuildMessages,
                 GatewayIntentBits.GuildVoiceStates,
             ],
+            makeCache: Options.cacheWithLimits({
+                ...Options.DefaultMakeCacheSettings,
+                ReactionManager: 0,
+                GuildMemberManager: { maxSize: 5, keepOverLimit: m => m.id === m.client.user?.id },
+                MessageManager: { maxSize: 8 },
+                PresenceManager: 0,
+                GuildBanManager: 0,
+                GuildInviteManager: 0,
+                GuildScheduledEventManager: 0,
+                GuildStickerManager: 0,
+                StageInstanceManager: 0,
+                ThreadManager: 0,
+                ThreadMemberManager: 0,
+                AutoModerationRuleManager: 0,
+                BaseGuildEmojiManager: 0,
+            }),
+            sweepers: {
+                ...Options.DefaultSweeperSettings,
+                messages: { interval: 60, lifetime: 120 },
+                guildMembers: { interval: 300, filter: Options.filterByLifetime({ lifetime: 300, requirePresence: false }) },
+                users: { interval: 3600, filter: Options.filterByLifetime({ lifetime: 3600 }) },
+            },
+            ws: { compress: true },
+            rest: { timeout: 15000, retries: 2 },
+            failIfNotExists: false,
         });
 
 
@@ -115,13 +136,7 @@ module.exports = {
 
 
         TrueMusic.on('guildCreate', async (guild) => {
-            let dataaa;
-            try {
-                dataaa = fs.readFileSync('./settings/tokens.json', 'utf8');
-                dataaa = JSON.parse(dataaa);
-            } catch (error) {
-                return;
-            }
+            let dataaa = store.get('tokens') || [];
 
             let tokenObj = dataaa.find((tokenBot) => tokenBot.token === TrueMusic.token);
 
@@ -156,13 +171,7 @@ module.exports = {
             let int = setInterval(async () => {
                 if (!TrueMusic.readyAt) return;
 
-                let dataaa;
-                try {
-                    dataaa = fs.readFileSync('./settings/tokens.json', 'utf8');
-                    dataaa = JSON.parse(dataaa);
-                } catch (error) {
-                    return;
-                }
+                let dataaa = store.get('tokens') || [];
 
                 let tokenObj = dataaa.find((tokenBot) => tokenBot.token === token);
 
@@ -245,9 +254,8 @@ module.exports = {
 
         TrueMusic.on('messageCreate', async (message) => {
             if (message.author.bot || !message.guild) return;
-            var data = fs.readFileSync('./settings/tokens.json', 'utf8');
-            if (data == '' || !data) return;
-            data = JSON.parse(data);
+            botLastActivity.set(token, Date.now());
+            var data = store.get('tokens') || [];
             let tokenObj = data.find((t) => t.token == token);
             if (!data || !tokenObj) return;
 
@@ -388,8 +396,7 @@ module.exports = {
                             });
 
                     } else if (args[0] == 'leave' || args[0] == 'اخرج' || args[0] == 'اطلع' || args[0] == 'disablechannel') {
-                        let data = fs.readFileSync('./settings/tokens.json');
-                        data = JSON.parse(data);
+                        let data = store.get('tokens') || [];
                         tokenObj = data.find((tokenBot) => tokenBot.token == token);
                         data = data.map((tokenBot) => {
                             if (tokenBot.token == token) {
@@ -397,9 +404,7 @@ module.exports = {
                             }
                             return tokenBot;
                         });
-                        fs.writeFile('./settings/tokens.json', JSON.stringify(data, null, 2), (err) => {
-                            if (err) throw err;
-                        });
+                        store.set('tokens', data);
                         message.react('✅');
                     }
                     else if (args[0] == 'setup') {
@@ -423,9 +428,7 @@ module.exports = {
                         try {
                             await TrueMusic.user.setUsername(channel.name);
                             TrueMusic.user.lastChangeTime = Date.now();
-                            fs.writeFile('./settings/tokens.json', JSON.stringify(data, null, 2), (err) => {
-                                if (err) throw err;
-                            });
+                            store.set('tokens', data);
                             message.react('✅');
                         } catch (error) {
                             if (error.code === 50035) {
@@ -447,16 +450,13 @@ module.exports = {
                             return tokenBot;
                         });
 
-                        fs.writeFile('./settings/tokens.json', JSON.stringify(data, null, 2), (err) => {
-                            if (err) throw err;
-                        });
+                        store.set('tokens', data);
 
                         message.react('✅');
                     }
 
                     else if (args[0] == 'setchat' || args[0] == 'chat' || args[0] == 'settc' || args[0] == 'اوامر') {
-                        let data = fs.readFileSync('./settings/tokens.json', 'utf8');
-                        let parsedData = JSON.parse(data);
+                        let parsedData = store.get('tokens') || [];
 
                         tokenObj = parsedData.find((tokenBot) => tokenBot.token == token);
 
@@ -473,14 +473,11 @@ module.exports = {
                             return tokenBot;
                         });
 
-                        fs.writeFile('./settings/tokens.json', JSON.stringify(parsedData, null, 2), (err) => {
-                            if (err) throw err;
-                            message.react('✅');
-                        });
+                        store.set('tokens', parsedData);
+                        message.react('✅');
 
                     } else if (args[0] == 'unchat' || args[0] == 'unt' || args[0] == 'الغاء') {
-                        let data = fs.readFileSync('./settings/tokens.json', 'utf8');
-                        let parsedData = JSON.parse(data);
+                        let parsedData = store.get('tokens') || [];
 
                         tokenObj = parsedData.find((tokenBot) => tokenBot.token == token);
 
@@ -496,10 +493,8 @@ module.exports = {
                             return tokenBot;
                         });
 
-                        fs.writeFile('./settings/tokens.json', JSON.stringify(parsedData, null, 2), (err) => {
-                            if (err) throw err;
-                            message.react('✅');
-                        });
+                        store.set('tokens', parsedData);
+                        message.react('✅');
                         loadPrefix();
 
                     } else if (args[0] == 'ping' || args[0] == 'بنج' || args[0] == 'بنغ') {
@@ -521,35 +516,34 @@ module.exports = {
                         });
                         message.react("✅");
 
-                        let tokens = fs.readFileSync('./settings/tokens.json');
-                        tokens = JSON.parse(tokens);
+                        let tokens = store.get('tokens') || [];
                         let tokenObj = tokens.find((tokenBot) => tokenBot.token == token);
-                        tokenObj.status = status;
-                        fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2));
+                        if (tokenObj) {
+                            tokenObj.status = status;
+                            store.set('tokens', tokens);
+                        }
                     } else if (args[0] == 'setprefix') {
                         if (!args[1]) return message.reply("> **Please write the prefix**");
 
                         let newPrefix = args[1];
 
-                        let data = fs.readFileSync('./settings/tokens.json', 'utf8');
-                        let parsedData = JSON.parse(data);
+                        let parsedData = store.get('tokens') || [];
                         let tokenObj = parsedData.find((tokenBot) => tokenBot.token === token);
                         if (tokenObj) {
                             tokenObj.prefix = newPrefix;
                         } else {
                             parsedData.push({ token, prefix: newPrefix });
                         }
-                        fs.writeFileSync('./settings/tokens.json', JSON.stringify(parsedData, null, 2));
+                        store.set('tokens', parsedData);
 
                         message.reply(`> **The prefix has been determined.** \`${newPrefix}\``);
 
                     } else if (args[0] === 'unsetprefix') {
-                        let data = fs.readFileSync('./settings/tokens.json', 'utf8');
-                        let parsedData = JSON.parse(data);
+                        let parsedData = store.get('tokens') || [];
                         let tokenObj = parsedData.find((tokenBot) => tokenBot.token === token);
                         if (tokenObj) {
                             tokenObj.prefix = null;
-                            fs.writeFileSync('./settings/tokens.json', JSON.stringify(parsedData, null, 2));
+                            store.set('tokens', parsedData);
                             message.reply('> **The prefix has been removed.**');
                         }
 
@@ -617,16 +611,9 @@ module.exports = {
             if (message.author.bot || !message.guild) return;
 
             let tokenObj;
-            try {
-                const data = fs.readFileSync('./settings/tokens.json', 'utf8');
-                if (!data.trim()) {
-                    console.warn('Warning: tokens.json is empty');
-                    return;
-                }
-
-                const parsedData = JSON.parse(data);
-                if (!Array.isArray(parsedData)) {
-                    console.warn('Warning: tokens.json is not an array');
+            {
+                const parsedData = store.get('tokens') || [];
+                if (!Array.isArray(parsedData) || parsedData.length === 0) {
                     return;
                 }
                 tokenObj = parsedData.find((tokenBot) => tokenBot.token === token);
@@ -635,9 +622,6 @@ module.exports = {
                     console.warn('Warning: Token not found in tokens.json');
                     return;
                 }
-            } catch (error) {
-                console.error('Error reading or parsing tokens.json:', error.message);
-                return;
             }
 
             let memberVoice = message.member?.voice?.channel;
@@ -1472,3 +1456,4 @@ module.exports = {
     }
 };
 module.exports.runningBots = runningBots;
+module.exports.botLastActivity = botLastActivity;

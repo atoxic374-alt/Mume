@@ -1,4 +1,5 @@
 const fs = require('fs');
+const store = require('../../utils/store');
 const { owners, emco, logChannelId, prefix, Services, price, Botsname } = require(`${process.cwd()}/settings/config`);
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js'); 
 const path = require('path');
@@ -10,8 +11,7 @@ module.exports = {
         if (!owners.includes(message.author.id)) return;
 
         try {
-            const botsData = fs.readFileSync('./settings/bots.json', 'utf8');
-            const botsArray = JSON.parse(botsData);
+            const botsArray = store.get('bots') || [];
 
             let totalBots = botsArray.length;
             let timePerBot = 5000; 

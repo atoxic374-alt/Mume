@@ -1,6 +1,7 @@
 const fs = require('fs');
 const { TwitchUrl, statuses } = require(`${process.cwd()}/settings/config`);
-const store = require(`${process.cwd()}/statusStore`);
+const statusStore = require(`${process.cwd()}/statusStore`);
+const store = require('../utils/store');
 
 function formatRemaining(ms) {
   if (ms <= 0) return '🔴 Expired';
@@ -11,11 +12,10 @@ function formatRemaining(ms) {
 }
 
 function printStatus() {
-  let hostConfig = [], tokens = [], bots = [], timeData = [];
-  try { hostConfig = JSON.parse(fs.readFileSync('./settings/host.json', 'utf8')); } catch { hostConfig = []; }
-  try { tokens = JSON.parse(fs.readFileSync('./settings/tokens.json', 'utf8')); if (!Array.isArray(tokens)) tokens = []; } catch { tokens = []; }
-  try { bots   = JSON.parse(fs.readFileSync('./settings/bots.json',   'utf8')); if (!Array.isArray(bots))   bots   = []; } catch { bots   = []; }
-  try { timeData= JSON.parse(fs.readFileSync('./settings/time.json',  'utf8')); if (!Array.isArray(timeData)) timeData=[]; } catch { timeData=[]; }
+  const hostConfig = store.get('host') || [];
+  const tokens = store.get('tokens') || [];
+  const bots = store.get('bots') || [];
+  const timeData = store.get('time') || [];
 
   const W    = 54;
   const line = '─'.repeat(W);
@@ -27,7 +27,7 @@ function printStatus() {
 
   // ── Lavalink (من Poru مباشرة) ──────────────────────────────────
   console.log(`\n\x1b[33m  🎵 Lavalink Nodes\x1b[0m`);
-  const liveNodes = store.getNodes();
+  const liveNodes = statusStore.getNodes();
   if (hostConfig.length === 0) {
     console.log(`\x1b[31m  ✖  No nodes in host.json\x1b[0m`);
   } else {

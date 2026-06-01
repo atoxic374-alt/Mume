@@ -1,4 +1,3 @@
-const fs = require('fs');
 const { owners, Colors, logChannelId } = require(`${process.cwd()}/settings/config`);
 const {
   EmbedBuilder,
@@ -10,6 +9,8 @@ const {
   TextInputStyle
 } = require('discord.js');
 const ms = require('ms');
+const store = require('../../utils/store');
+const { check } = require('../../utils/rateLimit');
 
 module.exports = {
   name: 'musicaddsub',
@@ -17,6 +18,7 @@ module.exports = {
   async execute(client, message, args) {
     if (!owners.includes(message.author.id)) return;
     if (message.author.bot) return;
+    if (!check(message.author.id, 'musicaddsub')) return;
 
     const mention = message.mentions.members.first();
     if (!mention) {
@@ -42,13 +44,7 @@ module.exports = {
       .setColor(Colors);
 
     const getBots = () => {
-      try {
-        const data = fs.readFileSync('./settings/bots.json', 'utf8');
-        let bots = JSON.parse(data);
-        return Array.isArray(bots) ? bots : [];
-      } catch {
-        return [];
-      }
+      return store.get('bots') || [];
     };
 
     const generateContent = () => {
@@ -222,20 +218,16 @@ module.exports = {
       const expirationTime = Date.now() + selectedDuration;
 
       // Update time.json
-      try {
-        const timeArray = JSON.parse(fs.readFileSync('./settings/time.json', 'utf8'));
-        timeArray.push({ user: userId, server: serverId, botsCount: selectedCount, subscriptionTime: selectedDurationLabel, expirationTime, code: `#${randomCode}` });
-        fs.writeFileSync('./settings/time.json', JSON.stringify(timeArray, null, 2));
-      } catch (e) { console.error('time.json err:', e); }
+      const timeArray = store.get('time') || [];
+      timeArray.push({ user: userId, server: serverId, botsCount: selectedCount, subscriptionTime: selectedDurationLabel, expirationTime, code: `#${randomCode}` });
+      store.set('time', timeArray);
 
       // Update tokens and bots
       const givenTokens = bots.splice(0, selectedCount);
-      try {
-        let tokens = JSON.parse(fs.readFileSync('./settings/tokens.json', 'utf8'));
-        givenTokens.forEach(t => tokens.push({ token: t.token, Server: serverId, channel: null, chat: null, status: null, client: userId, code: `#${randomCode}` }));
-        fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2));
-        fs.writeFileSync('./settings/bots.json', JSON.stringify(bots, null, 2));
-      } catch (e) { console.error('tokens.json err:', e); }
+      let tokens = store.get('tokens') || [];
+      givenTokens.forEach(t => tokens.push({ token: t.token, Server: serverId, channel: null, chat: null, status: null, client: userId, code: `#${randomCode}` }));
+      store.set('tokens', tokens);
+      store.set('bots', bots);
 
       const formattedDuration = formatDuration(selectedDuration);
 

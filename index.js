@@ -9,9 +9,11 @@ const {
     GatewayIntentBits,
     Collection,
     EmbedBuilder,
+    Options
 } = require('discord.js');
 
 const fs = require('fs');
+const store = require('./utils/store');
 const config = require(`${process.cwd()}/settings/config`);
 
 const { prefix, Colors, Token, logChannelId } = config;
@@ -27,7 +29,22 @@ const client = new Client({
     allowedMentions: {
         parse: ['users'],
         repliedUser: true
-    }
+    },
+    makeCache: Options.cacheWithLimits({
+      ...Options.DefaultMakeCacheSettings,
+      ReactionManager: 0,
+      GuildMemberManager: { maxSize: 200 },
+      MessageManager: { maxSize: 20 },
+      PresenceManager: 0,
+    }),
+    sweepers: {
+      ...Options.DefaultSweeperSettings,
+      messages: { interval: 120, lifetime: 300 },
+      guildMembers: { interval: 600, filter: Options.filterByLifetime({ lifetime: 600 }) },
+    },
+    ws: { compress: true },
+    rest: { timeout: 15000, retries: 2 },
+    failIfNotExists: false,
 });
 
 client.prefix = prefix;
@@ -65,9 +82,7 @@ client.once('ready', () => {
     });
     
     function checkSubscriptions() {
-    try {
-      const logs = fs.readFileSync('./settings/time.json', 'utf8');
-      const logsArray = JSON.parse(logs);
+      const logsArray = store.get('time') || [];
     
       const logChannel = client.channels.cache.find(channel => channel.id === logChannelId);
     
@@ -93,20 +108,16 @@ client.once('ready', () => {
             .setDescription(`> الإسم : <@${user.id}>\n> ألاشتراك : \`Music x${log.botsCount}\` \`(SuID ${log.code})\`\n> بدأ فيـ : \`${new Date(log.expirationTime).toLocaleString()}\``)
             .setColor(Colors);
             
-            logChannel.send({ content: "```العملية تمت بنجاح، وتم حذف أشتراك العميل.```", embeds: [embed] });
+            if (logChannel) logChannel.send({ content: "```العملية تمت بنجاح، وتم حذف أشتراك العميل.```", embeds: [embed] });
              
           }
     
           logsArray.splice(index, 1);
-          const tokens = fs.readFileSync('./settings/tokens.json', 'utf8');
-          const tokensArray = JSON.parse(tokens);
+          const tokensArray = store.get('tokens') || [];
     
           const tokensToRemove = tokensArray.filter(tokenEntry => tokenEntry.code === log.code);
     
-          const bots = fs.readFileSync('./settings/bots.json', 'utf8');
-
-
-          const botsArray = JSON.parse(bots);
+          const botsArray = store.get('bots') || [];
     
           tokensToRemove.forEach(tokenEntry => {
             botsArray.push({
@@ -114,16 +125,13 @@ client.once('ready', () => {
             });
           });
     
-          fs.writeFileSync('./settings/bots.json', JSON.stringify(botsArray, null, 2));
+          store.set('bots', botsArray);
     
           const updatedTokensArray = tokensArray.filter(tokenEntry => !tokensToRemove.includes(tokenEntry));
-          fs.writeFileSync('./settings/tokens.json', JSON.stringify(updatedTokensArray, null, 2));
+          store.set('tokens', updatedTokensArray);
         }
       });
-      fs.writeFileSync('./settings/time.json', JSON.stringify(logsArray, null, 2));
-    } catch (error) {
-      console.error('❌>', error);
-    }
+      store.set('time', logsArray);
     }
 
 

@@ -1,15 +1,16 @@
-const fs = require('fs');
 const { owners, Colors } = require(`${process.cwd()}/settings/config`);
 const { ActionRowBuilder, ButtonBuilder, EmbedBuilder, ButtonStyle } = require('discord.js');
+const store = require('../../utils/store');
+const { check } = require('../../utils/rateLimit');
 
 module.exports = {
   name: 'musicallsub',
   async execute(client, message, args) {
     if (!owners.includes(message.author.id)) return;
+    if (!check(message.author.id, 'musicallsub')) return;
 
     try {
-      const logs = fs.readFileSync('./settings/time.json', 'utf8');
-      const logsArray = JSON.parse(logs);
+      const logsArray = store.get('time') || [];
 
       if (logsArray.length === 0) {
         return message.reply('**لا توجد اشتراكات مسجلة حاليًا.**');

@@ -1,6 +1,6 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
-const fs = require('fs');
 const { Colors } = require('./settings/config');
+const store = require('./utils/store');
 
 async function validateToken(token) {
     if (!token) return false;
@@ -27,12 +27,8 @@ async function validateToken(token) {
 
 async function checkAndReplaceTokens(mainClient) {
     try {
-        const tokensPath = './settings/tokens.json';
-        const botsPath = './settings/bots.json';
-
-        if (!fs.existsSync(tokensPath)) return;
-        let tokensArray = JSON.parse(fs.readFileSync(tokensPath, 'utf8'));
-        let botsArray = fs.existsSync(botsPath) ? JSON.parse(fs.readFileSync(botsPath, 'utf8')) : [];
+        let tokensArray = store.get('tokens') || [];
+        let botsArray = store.get('bots') || [];
 
         let changed = false;
         const batchSize = 5;
@@ -75,8 +71,8 @@ async function checkAndReplaceTokens(mainClient) {
         }
 
         if (changed) {
-            fs.writeFileSync(tokensPath, JSON.stringify(tokensArray, null, 2));
-            fs.writeFileSync(botsPath, JSON.stringify(botsArray, null, 2));
+            store.set('tokens', tokensArray);
+            store.set('bots', botsArray);
         }
     } catch (error) {
         console.error('Error in tokenHealthChecker:', error);

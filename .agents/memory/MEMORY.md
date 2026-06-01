@@ -1,0 +1,1 @@
+- [Performance Architecture](perf-arch.md) — store.js singleton replaces all JSON sync I/O; makeCache+sweepers+compress on every Discord client; lazy bot unloading in manager.js.
