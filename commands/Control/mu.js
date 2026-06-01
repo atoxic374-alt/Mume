@@ -3,7 +3,7 @@ const store = require('../../utils/store');
 const { Client, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, EmbedBuilder, ComponentType } = require('discord.js');
 const { owners, prefix, Colors } = require(`${process.cwd()}/settings/config`);
 const axios = require("axios");
-const db = require('pro.db');
+const db = require('../../utils/db');
 const Discord = require('discord.js');
 const path = require('path');
 
@@ -207,20 +207,20 @@ module.exports = {
                             ]
                         });
 
-						const filter = (i) => i.user.id === message.author.id;
-						const collector = replyMessage.createMessageComponentCollector({ filter, time: 60000 });
+                                                const filter = (i) => i.user.id === message.author.id;
+                                                const collector = replyMessage.createMessageComponentCollector({ filter, time: 60000 });
 
-						collector.on('collect', async (interaction) => {
-							// زر الإلغاء
-							if (interaction.isButton() && interaction.customId === 'cancel') {
-								await interaction.deferUpdate().catch(() => {});
-								await interaction.message.delete().catch(() => {});
-								collector.stop('cancel');
-								return;
-							}
+                                                collector.on('collect', async (interaction) => {
+                                                        // زر الإلغاء
+                                                        if (interaction.isButton() && interaction.customId === 'cancel') {
+                                                                await interaction.deferUpdate().catch(() => {});
+                                                                await interaction.message.delete().catch(() => {});
+                                                                collector.stop('cancel');
+                                                                return;
+                                                        }
 
-							if (!interaction.isStringSelectMenu() || interaction.customId !== 'vipOptions') return;
-							const selectedOption = interaction.values[0];
+                                                        if (!interaction.isStringSelectMenu() || interaction.customId !== 'vipOptions') return;
+                                                        const selectedOption = interaction.values[0];
                             if (selectedOption === 'allBotsLinks') {
                                 const lastClaimTime = await db.get(`linktime_${message.author.id}`) || 0;
                                 const currentTime = Date.now();
@@ -459,20 +459,20 @@ module.exports = {
                             ]
                         });
 
-						const filter = (i) => i.user.id === message.author.id;
-						const collector = replyMessage.createMessageComponentCollector({ filter, time: 60000 });
+                                                const filter = (i) => i.user.id === message.author.id;
+                                                const collector = replyMessage.createMessageComponentCollector({ filter, time: 60000 });
 
-						collector.on('collect', async (interaction) => {
-							// زر الإلغاء
-							if (interaction.isButton() && interaction.customId === 'cancel') {
-								await interaction.deferUpdate().catch(() => {});
-								await interaction.message.delete().catch(() => {});
-								collector.stop('cancel');
-								return;
-							}
+                                                collector.on('collect', async (interaction) => {
+                                                        // زر الإلغاء
+                                                        if (interaction.isButton() && interaction.customId === 'cancel') {
+                                                                await interaction.deferUpdate().catch(() => {});
+                                                                await interaction.message.delete().catch(() => {});
+                                                                collector.stop('cancel');
+                                                                return;
+                                                        }
 
-							if (!interaction.isStringSelectMenu() || interaction.customId !== 'vipOptions') return;
-							const selectedOption = interaction.values[0];
+                                                        if (!interaction.isStringSelectMenu() || interaction.customId !== 'vipOptions') return;
+                                                        const selectedOption = interaction.values[0];
 
                             if (selectedOption === 'editbuttons') {
 
@@ -1321,20 +1321,20 @@ module.exports = {
                             ]
                         });
 
-						const filter = (i) => i.user.id === message.author.id;
-						const collector = replyMessage.createMessageComponentCollector({ filter, time: 60000 });
+                                                const filter = (i) => i.user.id === message.author.id;
+                                                const collector = replyMessage.createMessageComponentCollector({ filter, time: 60000 });
 
-						collector.on('collect', async (interaction) => {
-							// زر الإلغاء
-							if (interaction.isButton() && interaction.customId === 'cancel') {
-								await interaction.deferUpdate().catch(() => {});
-								await interaction.message.delete().catch(() => {});
-								collector.stop('cancel');
-								return;
-							}
+                                                collector.on('collect', async (interaction) => {
+                                                        // زر الإلغاء
+                                                        if (interaction.isButton() && interaction.customId === 'cancel') {
+                                                                await interaction.deferUpdate().catch(() => {});
+                                                                await interaction.message.delete().catch(() => {});
+                                                                collector.stop('cancel');
+                                                                return;
+                                                        }
 
-							if (!interaction.isStringSelectMenu() || interaction.customId !== 'vipOptions') return;
-							const selectedOption = interaction.values[0];
+                                                        if (!interaction.isStringSelectMenu() || interaction.customId !== 'vipOptions') return;
+                                                        const selectedOption = interaction.values[0];
                             if (selectedOption === 'YouTube') {
                                 const lastClaimTime = await db.get(`YouTubeeditbuttons_${message.author.id}`) || 0;
                                 const currentTime = Date.now();
