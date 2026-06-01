@@ -1,6 +1,6 @@
 // messageCreate.js
 const client = require('../index');
-const { prefix } = require('../settings/config.json');
+const { prefix } = require('../settings/config');
 
 
 client.on("messageCreate", async (message) => {

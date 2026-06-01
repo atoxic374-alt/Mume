@@ -14,10 +14,7 @@ const {
 const fs = require('fs');
 const config = require(`${process.cwd()}/settings/config`);
 
-const prefix      = process.env.PREFIX       || config.prefix;
-const Colors      = process.env.COLORS       || config.Colors;
-const Token       = process.env.Token        || config.Token;
-const logChannelId = process.env.LOG_CHANNEL || config.logChannelId;
+const { prefix, Colors, Token, logChannelId } = config;
 
 const client = new Client({
     intents: [
