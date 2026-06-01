@@ -448,23 +448,27 @@ module.exports = {
             }
 
             async function renderVoicePanel(i = null) {
-                const start = page * 5;
-                const end = Math.min(start + 5, subTokens.length);
+                const start = page * 10;
+                const end = Math.min(start + 10, subTokens.length);
                 const slice = subTokens.slice(start, end);
+
+                const lines = slice.map((t, idx) => {
+                    const { bot, statusText } = getBotVoiceInfo(t);
+                    const mention = bot ? `<@${bot.user.id}>` : '`غير معروف`';
+                    const num = String(start + idx + 1).padStart(3, ' ');
+                    return `\`${num}\` ${mention}  ${statusText}`;
+                });
 
                 const embed = new EmbedBuilder()
                     .setTitle(`📊 حالة الصوت — ${selectedCode}`)
                     .setDescription(
-                        `البوتات **${start + 1}–${end}** من أصل **${subTokens.length}**\n` +
-                        `🔊 بروم | 💤 بدون روم | 🌐 خارج سيرفر | 🚫 غير متصل`
+                        `> البوتات **${start + 1}–${end}** من أصل **${subTokens.length}**\n` +
+                        `> 🔊 بروم  |  💤 بدون روم  |  🌐 خارج سيرفر  |  🚫 غير متصل\n` +
+                        `\u200b\n` +
+                        lines.join('\n')
                     )
-                    .setColor(Colors);
-
-                slice.forEach((t, idx) => {
-                    const { bot, statusText } = getBotVoiceInfo(t);
-                    const mention = bot ? `<@${bot.user.id}>` : '`غير معروف`';
-                    embed.addFields({ name: `#${start + idx + 1}`, value: `${mention}\n${statusText}`, inline: true });
-                });
+                    .setColor(Colors)
+                    .setFooter({ text: `صفحة ${page + 1} / ${Math.ceil(subTokens.length / 10)}` });
 
                 const row1 = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId(`stg_vs_${mid}_prev`).setLabel('◀️').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
