@@ -22,6 +22,7 @@ const { getVoiceConnection } = require('@discordjs/voice');
 const duratiform = require('duratiform');
 
 const store = require('./utils/store');
+const likes = require('./utils/likes');
 
 const runningBots = new Collection();
 const botLastActivity = new Map();
@@ -778,8 +779,8 @@ module.exports = {
             const args = message.content.slice(prefix.length).trim().split(/ +/);
             const command = args.shift().toLowerCase();
 
-            function createMusicControlButtons() {
-                const row = new ActionRowBuilder()
+            function createMusicControlButtons(liked = false) {
+                const row1 = new ActionRowBuilder()
                     .addComponents(
                         new ButtonBuilder()
                             .setCustomId('loop')
@@ -801,10 +802,15 @@ module.exports = {
                             .setCustomId('skip')
                             .setEmoji('1222069661965877329')
                             .setStyle(ButtonStyle.Secondary),
-
-
                     );
-                return row;
+                const row2 = new ActionRowBuilder()
+                    .addComponents(
+                        new ButtonBuilder()
+                            .setCustomId('like')
+                            .setLabel(liked ? '💔 إلغاء اللايك' : '❤️ لايك')
+                            .setStyle(liked ? ButtonStyle.Danger : ButtonStyle.Secondary),
+                    );
+                return [row1, row2];
             }
 
 
@@ -955,7 +961,8 @@ module.exports = {
                         };
 
                         if (tokenObj.buttons === 'on') {
-                            replyData.components = [createMusicControlButtons()];
+                            const alreadyLiked = await likes.isLiked(message.author.id, track.info?.uri).catch(() => false);
+                            replyData.components = createMusicControlButtons(alreadyLiked);
                         }
 
                         message.reply(replyData);
@@ -1448,7 +1455,7 @@ module.exports = {
                                 player.play();
                                 message.reply({
                                     content: `_Now playing:_ **${selectedTrack.info.title}** _By:_ **${message.author.displayName}**`,
-                                    components: tokenObj.buttons === 'on' ? [createMusicControlButtons()] : []
+                                    components: tokenObj.buttons === 'on' ? createMusicControlButtons(false) : []
                                 });
                             }
 
@@ -1574,6 +1581,27 @@ module.exports = {
                     const skippedTrack = player.currentTrack;
                     await player.skip();
                     responseMessage = `*Skipped:* **${skippedTrack.info.title}**`;
+                }
+            }
+
+            // Like / Unlike
+            if (interaction.customId === 'like') {
+                const currentTrack = player.currentTrack;
+                if (!currentTrack) {
+                    responseMessage = '*No song is currently playing.*';
+                } else {
+                    try {
+                        const { liked } = await likes.toggle(interaction.user.id, currentTrack);
+                        responseMessage = liked
+                            ? `❤️ تم حفظ **${currentTrack.info.title}** في لايكاتك`
+                            : `💔 تم إزالة **${currentTrack.info.title}** من لايكاتك`;
+
+                        // Update the button label on the original message
+                        const newRows = createMusicControlButtons(liked);
+                        interaction.message?.edit({ components: newRows }).catch(() => {});
+                    } catch (e) {
+                        responseMessage = '❌ حدث خطأ أثناء حفظ اللايك.';
+                    }
                 }
             }
 
