@@ -1,3 +1,7 @@
+// ── Boot Migration: must run before any other require ────────────────────────
+require('./bootMigration');
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Import necessary modules
 
 // const { EventEmitter } = require('events');

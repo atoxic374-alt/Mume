@@ -1,0 +1,9 @@
+[
+  {
+    "name": "main",
+    "host": "",
+    "port": 2333,
+    "secure": false,
+    "password": ""
+  }
+]

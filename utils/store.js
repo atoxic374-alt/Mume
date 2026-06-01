@@ -3,13 +3,14 @@ const fs = require('fs');
 const path = require('path');
 
 const FILES = {
-  tokens:  './settings/tokens.json',
-  bots:    './settings/bots.json',
-  time:    './settings/time.json',
-  host:    './settings/host.json',
-  display: './settings/display.json',
-  emojis:  './settings/emojis.json',
-  history: './settings/history.json',
+  tokens:   './settings/tokens.json',
+  bots:     './settings/bots.json',
+  time:     './settings/time.json',
+  host:     './settings/host.json',
+  display:  './settings/display.json',
+  emojis:   './settings/emojis.json',
+  history:  './settings/history.json',
+  database: './settings/database.json',
 };
 
 class Store {
@@ -23,10 +24,14 @@ class Store {
         if (fs.existsSync(file)) {
           this._mem[key] = JSON.parse(fs.readFileSync(file, 'utf8'));
         } else {
-          this._mem[key] = key === 'host' ? [] : (key === 'display' ? {} : []);
+          const OBJ_KEYS = ['host', 'display', 'database'];
+          this._mem[key] = OBJ_KEYS.includes(key) ? {} : [];
         }
       }
-      catch { this._mem[key] = key === 'host' ? [] : (key === 'display' ? {} : []); }
+      catch {
+        const OBJ_KEYS = ['host', 'display', 'database'];
+        this._mem[key] = OBJ_KEYS.includes(key) ? {} : [];
+      }
     }
     // Flush dirty files every 2s (safety net in addition to debounce)
     setInterval(() => this._flushAll(), 2000).unref();
