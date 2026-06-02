@@ -82,9 +82,13 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
     ctx.clearRect(0, 0, width, height);
 
     if (variant === 'discordCompact') {
-        const labelGap = currentLabel ? 72 : 0;
-        const railX = currentLabel ? labelGap : 4;
-        const railW = width - railX - 10;
+        ctx.font = '600 18px sans-serif';
+        ctx.textBaseline = 'middle';
+
+        const currentW = currentLabel ? Math.ceil(ctx.measureText(currentLabel).width) + 16 : 4;
+        const durationW = durationLabel ? Math.ceil(ctx.measureText(durationLabel).width) + 14 : 10;
+        const railX = currentW;
+        const railW = Math.max(40, width - railX - durationW);
         const railH = 6;
         const railY = Math.round((height - railH) / 2);
         const radius = railH / 2;
@@ -94,29 +98,39 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         const knobY = railY + railH / 2;
 
         if (currentLabel) {
-            ctx.font = '600 18px sans-serif';
-            ctx.textBaseline = 'middle';
-            ctx.fillStyle = 'rgba(181,186,193,0.98)';
+            ctx.fillStyle = 'rgba(159,159,167,0.98)';
             ctx.textAlign = 'left';
             ctx.fillText(currentLabel, 0, height / 2);
         }
 
-        ctx.fillStyle = 'rgba(58,60,64,0.86)';
+        ctx.fillStyle = 'rgba(49,50,54,0.96)';
         fillRoundedRect(ctx, railX, railY, railW, railH, radius);
 
         if (fillW > 0.5) {
-            ctx.fillStyle = 'rgba(181,186,193,0.96)';
+            ctx.fillStyle = 'rgba(160,155,205,0.98)';
             fillRoundedRect(ctx, railX, railY, fillW, railH, radius);
         }
 
         ctx.save();
         ctx.shadowColor = 'rgba(0,0,0,0.28)';
         ctx.shadowBlur = 2;
-        ctx.fillStyle = 'rgba(243,244,248,0.98)';
+        ctx.fillStyle = 'rgba(254,255,253,0.99)';
         ctx.beginPath();
         ctx.arc(knobX, knobY, knobRadius, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
+
+        ctx.strokeStyle = 'rgba(194,191,224,0.78)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(knobX, knobY, knobRadius - 0.5, 0, Math.PI * 2);
+        ctx.stroke();
+
+        if (durationLabel) {
+            ctx.fillStyle = 'rgba(159,159,167,0.98)';
+            ctx.textAlign = 'right';
+            ctx.fillText(durationLabel, width, height / 2);
+        }
 
         const bucket = durationMs > 0 ? Math.round(ratio * 1000) : 0;
         return {

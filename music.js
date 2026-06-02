@@ -491,7 +491,8 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
             duration: totalTime,
             color: '#b5bac1',
             currentLabel: shortDuration(currentTime),
-            width: 640,
+            durationLabel: shortDuration(totalTime),
+            width: 680,
             height: 32,
             variant: 'discordCompact',
         });
@@ -504,9 +505,6 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
                         .setURL(`attachment://${progress.name}`)
                         .setDescription('Playback progress'),
                 ),
-            )
-            .addTextDisplayComponents(
-                new TextDisplayBuilder().setContent(shortDuration(totalTime)),
             );
 
         if (interactiveRows.length) {
