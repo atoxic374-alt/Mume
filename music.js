@@ -395,8 +395,13 @@ function buildInlineProgressBar(position, duration, length = 22) {
     const current = Math.max(0, Number(position || 0));
     const ratio = total > 0 ? Math.min(1, current / total) : 0;
     const filled = Math.floor(ratio * length);
-    const bar = '─'.repeat(filled) + '●' + '─'.repeat(Math.max(0, length - filled));
-    return `\`${shortDuration(current)}\` ${bar} \`${shortDuration(total)}\``;
+    const filledBar = '─'.repeat(filled);
+    const emptyBar  = '─'.repeat(Math.max(0, length - filled));
+    const timeNow   = shortDuration(current);
+    const timeTotal = shortDuration(total);
+    // ANSI \u001b[37m ≈ #bfbfc7 (extracted from target image), \u001b[2;30m = dark empty bar
+    const line = `\u001b[37m${timeNow}  ${filledBar}\u001b[0m\u001b[1;37m●\u001b[0m\u001b[2;30m${emptyBar}\u001b[0m\u001b[37m  ${timeTotal}\u001b[0m`;
+    return `\`\`\`ansi\n${line}\n\`\`\``;
 }
 
 function buildNowPlayingFallbackPayload(tokenObj, player, requester) {

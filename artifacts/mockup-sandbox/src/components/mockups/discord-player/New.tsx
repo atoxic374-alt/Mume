@@ -20,8 +20,14 @@ export function New() {
   function buildBar(pos: number, dur: number, len = 22) {
     const ratio = dur > 0 ? Math.min(1, pos / dur) : 0;
     const filled = Math.floor(ratio * len);
-    return "─".repeat(filled) + "●" + "─".repeat(Math.max(0, len - filled));
+    return { filled: "─".repeat(filled), empty: "─".repeat(Math.max(0, len - filled)) };
   }
+
+  const { filled, empty } = buildBar(position, total);
+  // Extracted color from target screenshot: #bfbfc7
+  const BAR_COLOR = "#bfbfc7";
+  const EMPTY_COLOR = "#3a3c40";
+  const KNOB_COLOR = "#e3e5e8";
 
   return (
     <div className="min-h-screen flex items-center justify-center p-6" style={{ background: "#1e1f22" }}>
@@ -43,23 +49,25 @@ export function New() {
               width: 90, height: 90, borderRadius: 6, marginLeft: 14, flexShrink: 0,
               background: "linear-gradient(135deg, #2d0e5c, #8c1a1a)",
               display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 36, overflow: "hidden"
+              fontSize: 36,
             }}>🎵</div>
           </div>
 
-          {/* Inline progress bar — text dashes */}
-          <div style={{ padding: "0 16px 4px" }}>
-            <div style={{
-              fontFamily: "monospace", fontSize: 13, color: "#b5bac1",
-              display: "flex", alignItems: "center", gap: 6, whiteSpace: "pre"
-            }}>
-              <span style={{ color: "#e3e5e8" }}>`{fmt(position)}`</span>
-              <span style={{ color: "#b5bac1", letterSpacing: -1 }}>{buildBar(position, total)}</span>
-              <span style={{ color: "#e3e5e8" }}>`{fmt(total)}`</span>
-            </div>
+          {/* ANSI-style progress bar — exact color #bfbfc7 extracted from screenshot */}
+          <div style={{
+            margin: "0 16px 6px",
+            background: "#1e1f22", borderRadius: 4,
+            padding: "8px 12px",
+            fontFamily: "monospace", fontSize: 13, letterSpacing: 0,
+            display: "flex", alignItems: "center", gap: 0,
+          }}>
+            <span style={{ color: BAR_COLOR, whiteSpace: "pre" }}>{fmt(position)}  {filled}</span>
+            <span style={{ color: KNOB_COLOR, fontWeight: 700 }}>●</span>
+            <span style={{ color: EMPTY_COLOR, whiteSpace: "pre" }}>{empty}</span>
+            <span style={{ color: BAR_COLOR, whiteSpace: "pre" }}>  {fmt(total)}</span>
           </div>
 
-          {/* Info line: Loop / Vol / Requester */}
+          {/* Info line */}
           <div style={{ padding: "2px 16px 10px" }}>
             <div style={{ fontFamily: "monospace", fontSize: 11, color: "#949ba4", display: "flex", gap: 10 }}>
               <span>`🔁 OFF`</span>
@@ -78,8 +86,7 @@ export function New() {
               color: "#949ba4", fontSize: 13, display: "flex", justifyContent: "space-between",
               alignItems: "center", border: "1px solid #3a3c40"
             }}>
-              <span>أفضل 5 أغاني لنفس الفنان</span>
-              <span style={{ fontSize: 10 }}>▼</span>
+              <span>أفضل 5 أغاني لنفس الفنان</span><span style={{ fontSize: 10 }}>▼</span>
             </div>
           </div>
 
@@ -90,8 +97,7 @@ export function New() {
               color: "#949ba4", fontSize: 13, display: "flex", justifyContent: "space-between",
               alignItems: "center", border: "1px solid #3a3c40"
             }}>
-              <span>الفلاتر الصوتية • الحالي: بدون فلتر</span>
-              <span style={{ fontSize: 10 }}>▼</span>
+              <span>الفلاتر الصوتية • الحالي: بدون فلتر</span><span style={{ fontSize: 10 }}>▼</span>
             </div>
           </div>
 
@@ -105,10 +111,9 @@ export function New() {
             ].map((btn, i) => (
               <div key={i} style={{
                 flex: 1, height: 40,
-                background: btn.red ? "#ed4245" : "#4e5058",
-                borderRadius: 4,
+                background: btn.red ? "#ed4245" : "#4e5058", borderRadius: 4,
                 display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 18, cursor: "pointer"
+                fontSize: 18,
               }}>{btn.emoji}</div>
             ))}
           </div>
@@ -119,23 +124,19 @@ export function New() {
               <div key={i} style={{
                 flex: 1, height: 40, background: "#4e5058", borderRadius: 4,
                 display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 18, cursor: "pointer"
+                fontSize: 18,
               }}>{emoji}</div>
             ))}
           </div>
         </div>
 
-        {/* Diff notes */}
+        {/* Color note */}
         <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
-          {[
-            { c: "#57f287", t: "✅ الوقت الكامل في نهاية البار (نفس السطر)" },
-            { c: "#57f287", t: "✅ الأزرار 4+5 (row2 فيها ❤️ زيادة)" },
-            { c: "#57f287", t: "✅ Loop/Vol/Requester سطر واحد مدمج" },
-            { c: "#57f287", t: "✅ البار نصي — يتحدث كل 15 ثانية" },
-            { c: "#949ba4", t: "◦ عندنا select menus زيادة (طلبتها)" },
-          ].map((item, i) => (
-            <div key={i} style={{ color: item.c, fontSize: 11 }}>{item.t}</div>
-          ))}
+          <div style={{ color: "#57f287", fontSize: 11 }}>
+            ✅ لون البار: <span style={{ color: BAR_COLOR, fontFamily: "monospace" }}>#bfbfc7</span> — مستخرج بدقة من الصورة
+          </div>
+          <div style={{ color: "#57f287", fontSize: 11 }}>✅ البار يتحدث كل 15 ثانية تلقائياً</div>
+          <div style={{ color: "#949ba4", fontSize: 11 }}>◦ عندنا select menus + ❤️ زيادة (طلبتها)</div>
         </div>
       </div>
     </div>
