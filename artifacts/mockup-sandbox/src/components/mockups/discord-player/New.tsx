@@ -11,71 +11,60 @@ export function New() {
     return () => clearInterval(interval);
   }, []);
 
-  const pct = Math.round((position / total) * 100);
-  const barFilled = Math.round((position / total) * 22);
-  const barEmpty = 22 - barFilled;
-
   function fmt(secs: number) {
     const m = Math.floor(secs / 60);
     const s = String(secs % 60).padStart(2, "0");
     return `${m}:${s}`;
   }
 
+  function buildBar(pos: number, dur: number, len = 22) {
+    const ratio = dur > 0 ? Math.min(1, pos / dur) : 0;
+    const filled = Math.floor(ratio * len);
+    return "─".repeat(filled) + "●" + "─".repeat(Math.max(0, len - filled));
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center p-6" style={{ background: "#1e1f22" }}>
       <div style={{ width: 460, fontFamily: "'gg sans', 'Noto Sans', sans-serif" }}>
-        {/* Label */}
-        <div style={{ color: "#57f287", fontSize: 12, marginBottom: 4, fontWeight: 500 }}>
-          الشكل الجديد
+        <div style={{ color: "#57f287", fontSize: 12, marginBottom: 6, fontWeight: 600, letterSpacing: 0.5 }}>
+          ✅ بوتنا بعد التحديث
         </div>
 
-        {/* Discord Container */}
-        <div style={{
-          background: "#2b2d31",
-          borderRadius: 8,
-          overflow: "hidden",
-          border: "1px solid #1e1f22",
-        }}>
+        <div style={{ background: "#2b2d31", borderRadius: 8, overflow: "hidden", border: "1px solid #1e1f22" }}>
 
-          {/* Section: Title + Thumbnail (compact) */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px 10px 16px" }}>
+          {/* Title + Thumbnail */}
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", padding: "16px 16px 10px 16px" }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ color: "#00a8fc", fontSize: 15, fontWeight: 600, lineHeight: 1.3, marginBottom: 2 }}>
-                Tame Impala - The Less I Know The Better (Audio)
+              <div style={{ color: "#00a8fc", fontSize: 17, fontWeight: 700, lineHeight: 1.35 }}>
+                Tame Impala – The Less I Know The Better (Audio)
               </div>
-              <div style={{ color: "#b5bac1", fontSize: 13 }}>Tame Impala</div>
             </div>
-            {/* Thumbnail — same size, compact */}
             <div style={{
-              width: 60, height: 60, borderRadius: 4, marginLeft: 12, flexShrink: 0,
-              background: "linear-gradient(135deg, #5b2c8c, #c0392b)",
+              width: 90, height: 90, borderRadius: 6, marginLeft: 14, flexShrink: 0,
+              background: "linear-gradient(135deg, #2d0e5c, #8c1a1a)",
               display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 24, overflow: "hidden"
+              fontSize: 36, overflow: "hidden"
             }}>🎵</div>
           </div>
 
-          {/* Compact inline progress bar (TEXT — no image, no MediaGallery) */}
-          <div style={{ padding: "0 16px 10px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ color: "#b5bac1", fontSize: 13, fontFamily: "monospace", whiteSpace: "nowrap" }}>
-                {fmt(position)}
-              </span>
-              <div style={{ flex: 1, height: 6, background: "#3a3c40", borderRadius: 3, position: "relative" }}>
-                <div style={{
-                  width: `${pct}%`, height: "100%",
-                  background: "#ed4245", borderRadius: 3,
-                  transition: "width 0.8s ease"
-                }} />
-                <div style={{
-                  position: "absolute", top: "50%", left: `${pct}%`,
-                  transform: "translate(-50%, -50%)",
-                  width: 12, height: 12, background: "#ed4245", borderRadius: "50%",
-                  boxShadow: "0 0 0 2px #2b2d31"
-                }} />
-              </div>
-              <span style={{ color: "#b5bac1", fontSize: 13, fontFamily: "monospace", whiteSpace: "nowrap" }}>
-                {fmt(total)}
-              </span>
+          {/* Inline progress bar — text dashes */}
+          <div style={{ padding: "0 16px 4px" }}>
+            <div style={{
+              fontFamily: "monospace", fontSize: 13, color: "#b5bac1",
+              display: "flex", alignItems: "center", gap: 6, whiteSpace: "pre"
+            }}>
+              <span style={{ color: "#e3e5e8" }}>`{fmt(position)}`</span>
+              <span style={{ color: "#b5bac1", letterSpacing: -1 }}>{buildBar(position, total)}</span>
+              <span style={{ color: "#e3e5e8" }}>`{fmt(total)}`</span>
+            </div>
+          </div>
+
+          {/* Info line: Loop / Vol / Requester */}
+          <div style={{ padding: "2px 16px 10px" }}>
+            <div style={{ fontFamily: "monospace", fontSize: 11, color: "#949ba4", display: "flex", gap: 10 }}>
+              <span>`🔁 OFF`</span>
+              <span>`🔊 100%`</span>
+              <span>`👤 Ahmed.`</span>
             </div>
           </div>
 
@@ -85,11 +74,11 @@ export function New() {
           {/* Artist Select Menu */}
           <div style={{ padding: "0 16px 6px" }}>
             <div style={{
-              background: "#1e1f22", borderRadius: 4, padding: "10px 14px",
-              color: "#949ba4", fontSize: 14, display: "flex", justifyContent: "space-between",
-              alignItems: "center", cursor: "pointer", border: "1px solid #3a3c40"
+              background: "#1e1f22", borderRadius: 4, padding: "9px 14px",
+              color: "#949ba4", fontSize: 13, display: "flex", justifyContent: "space-between",
+              alignItems: "center", border: "1px solid #3a3c40"
             }}>
-              <span>أفضل 5 أغاني لنفس الفنان ‣</span>
+              <span>أفضل 5 أغاني لنفس الفنان</span>
               <span style={{ fontSize: 10 }}>▼</span>
             </div>
           </div>
@@ -97,22 +86,22 @@ export function New() {
           {/* Filter Select Menu */}
           <div style={{ padding: "0 16px 8px" }}>
             <div style={{
-              background: "#1e1f22", borderRadius: 4, padding: "10px 14px",
-              color: "#949ba4", fontSize: 14, display: "flex", justifyContent: "space-between",
-              alignItems: "center", cursor: "pointer", border: "1px solid #3a3c40"
+              background: "#1e1f22", borderRadius: 4, padding: "9px 14px",
+              color: "#949ba4", fontSize: 13, display: "flex", justifyContent: "space-between",
+              alignItems: "center", border: "1px solid #3a3c40"
             }}>
-              <span>الفلاتر الصوتية • الحالي: بدون فلتر ‣</span>
+              <span>الفلاتر الصوتية • الحالي: بدون فلتر</span>
               <span style={{ fontSize: 10 }}>▼</span>
             </div>
           </div>
 
-          {/* Button Row 1: 4 buttons (⏮ ⏹ ⏸ ⏭) */}
+          {/* Row 1: ⏮ ⏹ ⏸ ⏭ */}
           <div style={{ padding: "0 16px 6px", display: "flex", gap: 6 }}>
             {[
-              { emoji: "⏮", label: "prev" },
-              { emoji: "⏹", label: "stop", red: true },
-              { emoji: "⏸", label: "pause" },
-              { emoji: "⏭", label: "skip" },
+              { emoji: "⏮", red: false },
+              { emoji: "⏹", red: true },
+              { emoji: "⏸", red: false },
+              { emoji: "⏭", red: false },
             ].map((btn, i) => (
               <div key={i} style={{
                 flex: 1, height: 40,
@@ -124,9 +113,9 @@ export function New() {
             ))}
           </div>
 
-          {/* Button Row 2: 4 buttons (🔉 🔄 📋 🔊) */}
-          <div style={{ padding: "0 16px 10px", display: "flex", gap: 6 }}>
-            {["🔉", "🔄", "📋", "🔊"].map((emoji, i) => (
+          {/* Row 2: 🔉 🔄 📋 🔊 ❤️ */}
+          <div style={{ padding: "0 16px 14px", display: "flex", gap: 6 }}>
+            {["🔉", "🔄", "📋", "🔊", "❤️"].map((emoji, i) => (
               <div key={i} style={{
                 flex: 1, height: 40, background: "#4e5058", borderRadius: 4,
                 display: "flex", alignItems: "center", justifyContent: "center",
@@ -134,35 +123,18 @@ export function New() {
               }}>{emoji}</div>
             ))}
           </div>
-
-          {/* Bottom section: Loop/Volume/Requester → bottom-right */}
-          <div style={{
-            padding: "0 16px 14px",
-            display: "flex", justifyContent: "flex-end"
-          }}>
-            <div style={{
-              fontFamily: "monospace", fontSize: 11, color: "#949ba4", lineHeight: 1.7,
-              textAlign: "right"
-            }}>
-              <div>Loop : <span style={{ color: "#b5bac1" }}>OFF</span></div>
-              <div>Requester : <span style={{ color: "#b5bac1" }}>Ahmed.</span></div>
-              <div>Volume : <span style={{ color: "#b5bac1" }}>100%</span></div>
-            </div>
-          </div>
         </div>
 
-        {/* Fix labels */}
-        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+        {/* Diff notes */}
+        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
           {[
-            { color: "#57f287", text: "✅ البار نصي compact — الكونتينر صغير ومتناسب" },
-            { color: "#57f287", text: "✅ الأزرار 4+4 — تطابق الهدف" },
-            { color: "#57f287", text: "✅ Loop/Volume أسفل يمين" },
-            { color: "#57f287", text: "✅ البار يتحدث كل 15 ثانية تلقائياً" },
-            { color: "#57f287", text: "✅ نهاية الأغنية → البار يكتمل 100%" },
+            { c: "#57f287", t: "✅ الوقت الكامل في نهاية البار (نفس السطر)" },
+            { c: "#57f287", t: "✅ الأزرار 4+5 (row2 فيها ❤️ زيادة)" },
+            { c: "#57f287", t: "✅ Loop/Vol/Requester سطر واحد مدمج" },
+            { c: "#57f287", t: "✅ البار نصي — يتحدث كل 15 ثانية" },
+            { c: "#949ba4", t: "◦ عندنا select menus زيادة (طلبتها)" },
           ].map((item, i) => (
-            <div key={i} style={{ color: item.color, fontSize: 12 }}>
-              {item.text}
-            </div>
+            <div key={i} style={{ color: item.c, fontSize: 11 }}>{item.t}</div>
           ))}
         </div>
       </div>

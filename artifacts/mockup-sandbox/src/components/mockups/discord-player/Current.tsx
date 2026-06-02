@@ -2,129 +2,86 @@ export function Current() {
   return (
     <div className="min-h-screen flex items-center justify-center p-6" style={{ background: "#1e1f22" }}>
       <div style={{ width: 460, fontFamily: "'gg sans', 'Noto Sans', sans-serif" }}>
-        {/* Label */}
-        <div style={{ color: "#949ba4", fontSize: 12, marginBottom: 4, fontWeight: 500 }}>
-          الشكل الحالي (aaa)
+        <div style={{ color: "#faa61a", fontSize: 12, marginBottom: 6, fontWeight: 600, letterSpacing: 0.5 }}>
+          🎯 الهدف (الصورة)
         </div>
 
-        {/* Discord Container */}
-        <div style={{
-          background: "#2b2d31",
-          borderRadius: 8,
-          overflow: "hidden",
-          border: "1px solid #1e1f22",
-        }}>
-          {/* Section: Title + Thumbnail */}
-          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", padding: "16px 16px 8px 16px" }}>
+        <div style={{ background: "#2b2d31", borderRadius: 8, overflow: "hidden", border: "1px solid #1e1f22" }}>
+
+          {/* Title + Large Thumbnail */}
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", padding: "16px 16px 12px 16px" }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ color: "#00a8fc", fontSize: 16, fontWeight: 600, lineHeight: 1.3, marginBottom: 4 }}>
-                ### Ayed - Lammah \(Official Lyric Video\)
-              </div>
-              <div style={{ color: "#b5bac1", fontSize: 14, fontWeight: 500 }}>
-                Luxury KSA and Sony Music Middle East
+              <div style={{ color: "#00a8fc", fontSize: 17, fontWeight: 700, lineHeight: 1.35 }}>
+                Tame Impala – The Less I Know The Better (Audio)
               </div>
             </div>
-            {/* Thumbnail */}
             <div style={{
-              width: 72, height: 72, borderRadius: 4, marginLeft: 12, flexShrink: 0,
-              background: "linear-gradient(135deg, #1a3a5c, #2d6a4f)",
+              width: 90, height: 90, borderRadius: 6, marginLeft: 14, flexShrink: 0,
+              background: "linear-gradient(135deg, #2d0e5c, #8c1a1a)",
               display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 28
+              fontSize: 36, overflow: "hidden"
             }}>🎵</div>
           </div>
 
-          {/* Progress Bar Image (full width - canvas generated) */}
-          <div style={{ padding: "0 16px 8px" }}>
-            <div style={{
-              height: 48, background: "#1e1f22", borderRadius: 6,
-              display: "flex", alignItems: "center", padding: "0 12px", gap: 8,
-              border: "1px solid #3a3c40"
-            }}>
-              <div style={{ color: "#949ba4", fontSize: 12, whiteSpace: "nowrap" }}>1:02</div>
-              <div style={{ flex: 1, height: 8, background: "#3a3c40", borderRadius: 4, position: "relative" }}>
-                <div style={{ width: "30%", height: "100%", background: "#ed4245", borderRadius: 4 }} />
+          {/* Progress: 0:10 [bar] */}
+          <div style={{ padding: "0 16px 4px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ color: "#b5bac1", fontSize: 14, fontFamily: "monospace", whiteSpace: "nowrap" }}>0:10</span>
+              <div style={{ flex: 1, height: 6, background: "#3a3c40", borderRadius: 3, position: "relative" }}>
+                <div style={{ width: "5%", height: "100%", background: "#b5bac1", borderRadius: 3 }} />
                 <div style={{
-                  position: "absolute", top: "50%", left: "30%", transform: "translate(-50%, -50%)",
-                  width: 14, height: 14, background: "#ed4245", borderRadius: "50%",
-                  boxShadow: "0 0 0 3px #2b2d31"
+                  position: "absolute", top: "50%", left: "5%",
+                  transform: "translate(-50%, -50%)",
+                  width: 13, height: 13, background: "#e3e5e8", borderRadius: "50%",
+                  boxShadow: "0 0 0 2px #2b2d31"
                 }} />
               </div>
-              <div style={{ color: "#949ba4", fontSize: 12, whiteSpace: "nowrap" }}>4:28</div>
             </div>
           </div>
 
-          {/* Loop / Requester / Volume text block */}
-          <div style={{ padding: "0 16px 12px" }}>
-            <div style={{
-              fontFamily: "monospace", fontSize: 13, color: "#b5bac1", lineHeight: 1.8,
-              background: "#1e1f22", borderRadius: 4, padding: "8px 12px",
-              border: "1px solid #3a3c40"
-            }}>
-              <div><span style={{ color: "#949ba4" }}>Loop      : </span><span style={{ color: "#fff" }}>OFF</span></div>
-              <div><span style={{ color: "#949ba4" }}>Requester : </span><span style={{ color: "#fff" }}>Ahmed.</span></div>
-              <div><span style={{ color: "#949ba4" }}>Volume    : </span><span style={{ color: "#fff" }}>100%</span></div>
-            </div>
+          {/* Total time BELOW bar (as in screenshot) */}
+          <div style={{ padding: "2px 16px 12px" }}>
+            <span style={{ color: "#b5bac1", fontSize: 14, fontFamily: "monospace" }}>3:38</span>
           </div>
 
-          {/* Separator */}
-          <div style={{ height: 1, background: "#1e1f22", margin: "0 16px" }} />
-
-          {/* Artist Select Menu */}
-          <div style={{ padding: "10px 16px 6px" }}>
-            <div style={{
-              background: "#1e1f22", borderRadius: 4, padding: "10px 14px",
-              color: "#949ba4", fontSize: 14, display: "flex", justifyContent: "space-between",
-              alignItems: "center", cursor: "pointer", border: "1px solid #3a3c40"
-            }}>
-              <span>أفضل 5 أغاني لنفس الفنان ‣</span>
-              <span style={{ fontSize: 10 }}>▼</span>
-            </div>
-          </div>
-
-          {/* Filter Select Menu */}
-          <div style={{ padding: "0 16px 10px" }}>
-            <div style={{
-              background: "#1e1f22", borderRadius: 4, padding: "10px 14px",
-              color: "#949ba4", fontSize: 14, display: "flex", justifyContent: "space-between",
-              alignItems: "center", cursor: "pointer", border: "1px solid #3a3c40"
-            }}>
-              <span>الفلاتر الصوتية • الحالي: بدون فلتر ‣</span>
-              <span style={{ fontSize: 10 }}>▼</span>
-            </div>
-          </div>
-
-          {/* Button Row 1: 5 buttons */}
-          <div style={{ padding: "0 16px 8px", display: "flex", gap: 6 }}>
-            {["🔉", "🔄", "⏸", "⏭", "🔊"].map((emoji, i) => (
+          {/* Row 1: 4 buttons */}
+          <div style={{ padding: "0 16px 6px", display: "flex", gap: 8 }}>
+            {[
+              { emoji: "⏮", label: "prev" },
+              { emoji: "⏹", label: "stop" },
+              { emoji: "⏸", label: "pause" },
+              { emoji: "⏭", label: "skip" },
+            ].map((btn, i) => (
               <div key={i} style={{
-                flex: 1, height: 40, background: "#4e5058", borderRadius: 4,
+                flex: 1, height: 44,
+                background: "#3a3c40", borderRadius: 6,
                 display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 18, cursor: "pointer"
-              }}>{emoji}</div>
+                fontSize: 20, cursor: "pointer"
+              }}>{btn.emoji}</div>
             ))}
           </div>
 
-          {/* Button Row 2: Red stop button */}
-          <div style={{ padding: "0 16px 16px", display: "flex", gap: 6 }}>
-            <div style={{
-              width: 64, height: 40, background: "#ed4245", borderRadius: 4,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 18, cursor: "pointer"
-            }}>⏹</div>
+          {/* Row 2: 4 buttons */}
+          <div style={{ padding: "0 16px 16px", display: "flex", gap: 8 }}>
+            {["🔉", "🔄", "📋", "🔊"].map((emoji, i) => (
+              <div key={i} style={{
+                flex: 1, height: 44, background: "#3a3c40", borderRadius: 6,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 20, cursor: "pointer"
+              }}>{emoji}</div>
+            ))}
           </div>
         </div>
 
-        {/* Problem labels */}
-        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+        {/* Legend */}
+        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
           {[
-            { color: "#ed4245", text: "❌ البار صورة كاملة — يكبّر الكونتينر بشكل مبالغ" },
-            { color: "#ed4245", text: "❌ الأزرار 5+1 — غير متطابق مع الهدف" },
-            { color: "#ed4245", text: "❌ Loop/Volume في المنتصف كتلة نصية" },
-            { color: "#ed4245", text: "❌ البار ثابت — لا يتحدث تلقائياً" },
-          ].map((item, i) => (
-            <div key={i} style={{ color: item.color, fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
-              <span>{item.text}</span>
-            </div>
+            "الوقت الكامل (3:38) تحت البار — سطر منفصل",
+            "Row 2 فيها 4 أزرار فقط (بدون ❤️)",
+            "بدون select menus",
+            "بدون سطر Loop/Vol",
+          ].map((t, i) => (
+            <div key={i} style={{ color: "#faa61a", fontSize: 11 }}>• {t}</div>
           ))}
         </div>
       </div>
