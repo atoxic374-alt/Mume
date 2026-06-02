@@ -6,15 +6,19 @@ const {
     ButtonBuilder,
     ButtonStyle,
     StringSelectMenuBuilder,
+    ChannelSelectMenuBuilder,
     ModalBuilder,
     TextInputBuilder,
-    TextInputStyle
+    TextInputStyle,
+    ChannelType
 } = require('discord.js');
-const { owners, Colors } = require('../../config');
+const { owners } = require('../../config');
 const { runningBots } = require('../../music');
 const { getDisplay, setDisplay } = require('../../utils/display');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
+const MUSIC_EMOJIS = require('../../utils/musicEmojis');
+const { getEmbedColor } = require('../../utils/embedColor');
 
 module.exports = {
     name: 'set',
@@ -22,13 +26,18 @@ module.exports = {
     async execute(client, message, args) {
         const userId = message.author.id;
         const isAdmin = owners.includes(userId);
+        const isGuildOwner = message.guild?.ownerId === userId;
         const mid = message.id;
 
         // 1. Find user's subscriptions
         let tokens = store.get('tokens') || [];
 
         // Get unique subscription codes owned by user (or all if admin)
-        const mySubs = tokens.filter(t => isAdmin || t.client === userId);
+        const mySubs = tokens.filter(t =>
+            isAdmin ||
+            t.client === userId ||
+            (isGuildOwner && t.Server === message.guild.id)
+        );
         const uniqueCodes = [...new Set(mySubs.map(t => t.code))];
 
         if (uniqueCodes.length === 0) {
@@ -47,6 +56,471 @@ module.exports = {
         // Current panel state
         let currentPanel = 'SELECT'; 
         if (selectedCode) currentPanel = 'MAIN';
+        let activeDistributionCollector = null;
+
+        function getClientId(token) {
+            try { return Buffer.from(token.split('.')[0], 'base64').toString('utf8'); } catch { return ''; }
+        }
+
+	        function getBotVoiceInfo(t) {
+	            const bot = runningBots.get(t.token);
+	            if (!bot) return { bot: null, statusText: '🚫 غير متصل', inRoom: false, inServer: false };
+	            const guild = bot.guilds.cache.get(t.Server);
+	            if (!guild) return { bot, statusText: '🌐 خارج السيرفر', inRoom: false, inServer: false };
+	            const vc = guild.members.me?.voice?.channel;
+            return {
+                bot,
+                statusText: vc ? `🔊 <#${vc.id}>` : '💤 بدون روم',
+                inRoom: !!vc,
+                channelId: vc?.id || null,
+                channelName: vc?.name || null,
+	                inServer: true
+            };
+	        }
+
+	        function getSelectedTokens() {
+	            tokens = store.get('tokens') || [];
+	            return tokens.filter(t => t.code === selectedCode);
+	        }
+
+	        function isVoiceChannel(channel) {
+	            return channel?.type === ChannelType.GuildVoice || channel?.type === 2;
+	        }
+
+	        function chatSummary(selectedTokens = getSelectedTokens()) {
+	            const configured = selectedTokens.map(t => t.chat).filter(Boolean);
+	            const unique = [...new Set(configured)];
+	            if (unique.length === 0) {
+	                return {
+	                    label: '`غير محدد`',
+	                    details: 'الأوامر تعمل في كل الشاتات المسموحة حالياً.',
+	                };
+	            }
+	            if (unique.length === 1) {
+	                return {
+	                    label: `<#${unique[0]}>`,
+	                    details: `مطبق على **${configured.length}/${selectedTokens.length}** بوت.`,
+	                };
+	            }
+	            return {
+	                label: '`إعدادات مختلفة`',
+	                details: `يوجد **${unique.length}** شات مختلف داخل نفس الاشتراك.`,
+	            };
+	        }
+
+	        async function showMoveIdleModal(interaction) {
+	            const idleBots = getSelectedTokens().filter(t => {
+	                const info = getBotVoiceInfo(t);
+	                return info.inServer && !info.inRoom;
+	            });
+
+	            if (idleBots.length === 0) {
+	                return interaction.reply({ content: '✅ لا يوجد بوتات خاملة — كلها في رومات.', ephemeral: true });
+	            }
+
+	            const modal = new ModalBuilder()
+	                .setCustomId(`stg_mod_${mid}_moveidle`)
+	                .setTitle(`إدخال ${idleBots.length} بوت خامل`);
+	            modal.addComponents(
+	                new ActionRowBuilder().addComponents(
+	                    new TextInputBuilder()
+	                        .setCustomId('channelId')
+	                        .setLabel('Voice channel ID')
+	                        .setPlaceholder('Example: 111 or 111,222,333')
+	                        .setRequired(true)
+	                        .setStyle(TextInputStyle.Short)
+	                )
+	            );
+	            return interaction.showModal(modal);
+	        }
+
+	        function distributionBuckets() {
+	            const selectedTokens = getSelectedTokens();
+	            const available = [];
+	            const idle = [];
+	            const inRoom = [];
+	            const groupedRoomIds = new Set();
+	            const roomMap = new Map();
+
+	            selectedTokens.forEach(t => {
+	                const info = getBotVoiceInfo(t);
+	                if (!info.bot || !info.inServer) return;
+
+	                const entry = { token: t, info };
+	                available.push(entry);
+
+	                if (info.inRoom && info.channelId) {
+	                    inRoom.push(entry);
+	                    const group = roomMap.get(info.channelId) || [];
+	                    group.push(entry);
+	                    roomMap.set(info.channelId, group);
+	                } else {
+	                    idle.push(entry);
+	                }
+	            });
+
+	            roomMap.forEach((group, channelId) => {
+	                if (group.length > 1) groupedRoomIds.add(channelId);
+	            });
+
+	            const grouped = inRoom.filter(entry => groupedRoomIds.has(entry.info.channelId));
+	            return { available, idle, inRoom, grouped };
+	        }
+
+	        function distributionTargets(scope) {
+	            const buckets = distributionBuckets();
+	            if (scope === 'idle') return buckets.idle.map(entry => entry.token);
+	            if (scope === 'grouped') return buckets.grouped.map(entry => entry.token);
+	            if (scope === 'all') return buckets.available.map(entry => entry.token);
+	            return [];
+	        }
+
+	        function buildDistributionEmbed(title, description, fields = []) {
+	            const embed = new EmbedBuilder()
+	                .setTitle(title)
+	                .setDescription(description)
+	                .setColor(getEmbedColor(client));
+	            if (fields.length) embed.addFields(fields);
+	            return embed;
+	        }
+
+	        async function getDistributionChannels(firstId, lastId) {
+	            const channels = await message.guild.channels.fetch();
+	            const voiceChannels = channels
+	                .filter(c => isVoiceChannel(c))
+	                .sort((a, b) => a.position - b.position)
+	                .toJSON();
+
+	            const firstChan = voiceChannels.find(c => c.id === firstId);
+	            const lastChan = voiceChannels.find(c => c.id === lastId);
+	            if (!firstChan || !lastChan) throw new Error('تعذر العثور على الرومات المحددة.');
+
+	            const minPosition = Math.min(firstChan.position, lastChan.position);
+	            const maxPosition = Math.max(firstChan.position, lastChan.position);
+	            const targetChannels = voiceChannels.filter(c => c.position >= minPosition && c.position <= maxPosition);
+	            if (targetChannels.length === 0) throw new Error('لا توجد رومات صوتية في المدى المحدد.');
+
+	            return targetChannels;
+	        }
+
+	        async function executeSmartDistribution(interaction, state) {
+	            const targets = distributionTargets(state.scope);
+	            if (targets.length === 0) {
+	                return interaction.update({
+	                    content: '',
+	                    embeds: [buildDistributionEmbed('Smart Distribution', 'لا توجد بوتات مناسبة لهذا الخيار حالياً.')],
+	                    components: [new ActionRowBuilder().addComponents(
+	                        new ButtonBuilder().setCustomId(`stg_dist_${mid}_back_rooms`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+	                    )],
+	                });
+	            }
+
+	            await interaction.update({
+	                content: '',
+	                embeds: [buildDistributionEmbed(
+	                    'Smart Distribution',
+	                    `سيتم توزيع **${targets.length}** بوت واحداً تلو الآخر.`
+	                )],
+	                components: [],
+	            });
+
+	            let success = 0;
+	            let failed = 0;
+
+	            try {
+	                const targetChannels = await getDistributionChannels(state.firstChannelId, state.lastChannelId);
+
+	                for (let idx = 0; idx < targets.length; idx++) {
+	                    const t = targets[idx];
+	                    const bot = runningBots.get(t.token);
+	                    if (!bot?.poru) {
+	                        failed++;
+	                        continue;
+	                    }
+
+	                    const guild = bot.guilds.cache.get(t.Server);
+	                    if (!guild) {
+	                        failed++;
+	                        continue;
+	                    }
+
+	                    const chan = targetChannels[idx % targetChannels.length];
+	                    const targetChannel = guild.channels.cache.get(chan.id)
+	                        || await guild.channels.fetch(chan.id).catch(() => null);
+
+	                    if (!isVoiceChannel(targetChannel)) {
+	                        failed++;
+	                        continue;
+	                    }
+
+	                    t.channel = targetChannel.id;
+
+	                    if (state.mode === 'names') {
+	                        await bot.user.setUsername(targetChannel.name).catch(() => {});
+	                    } else if (state.mode === 'numbers') {
+	                        await bot.user.setUsername(`${targetChannel.name} ${idx + 1}`).catch(() => {});
+	                    }
+
+	                    const existing = bot.poru.players.get(guild.id);
+	                    if (existing) existing.destroy();
+
+	                    await bot.poru.createConnection({
+	                        guildId: guild.id,
+	                        voiceChannel: targetChannel.id,
+	                        textChannel: t.chat || targetChannel.id,
+	                        deaf: true,
+	                        group: t.token,
+	                    });
+	                    success++;
+	                }
+
+	                store.set('tokens', tokens);
+	                const scopeLabels = {
+	                    idle: 'الخاملين',
+	                    grouped: 'المتجمعين بفويس واحد',
+	                    all: 'الكل',
+	                };
+	                const modeLabels = {
+	                    names: 'أسماء الرومات',
+	                    numbers: 'ترقيم البوتات',
+	                };
+
+	                await mainMsg.edit({
+	                    content: '',
+	                    embeds: [buildDistributionEmbed(
+	                        'Distribution Complete',
+	                        [
+	                            `**النطاق:** ${scopeLabels[state.scope] || state.scope}`,
+	                            `**الرومات:** <#${state.firstChannelId}> → <#${state.lastChannelId}>`,
+	                            `**الوضع:** ${modeLabels[state.mode] || state.mode}`,
+	                            `**نجح:** ${success}`,
+	                            failed ? `**فشل:** ${failed}` : null,
+	                        ].filter(Boolean).join('\n')
+	                    )],
+	                    components: [],
+	                });
+	            } catch (e) {
+	                await mainMsg.edit({
+	                    content: '',
+	                    embeds: [buildDistributionEmbed('Distribution Failed', e.message)],
+	                    components: [],
+	                });
+	            }
+
+	            setTimeout(() => updatePanel(), 5000);
+	        }
+
+	        async function startSmartDistribution(interaction) {
+	            const subTokens = getSelectedTokens();
+	            const serverId = subTokens[0]?.Server;
+	            if (serverId && message.guild.id !== serverId) {
+	                return interaction.reply({
+	                    content: '⚠️ استخدم التوزيع الذكي داخل سيرفر الاشتراك حتى تظهر الرومات في منيو البحث.',
+	                    ephemeral: true,
+	                });
+	            }
+
+	            if (activeDistributionCollector) activeDistributionCollector.stop('restart');
+
+	            const state = {
+	                scope: null,
+	                firstChannelId: null,
+	                lastChannelId: null,
+	                mode: null,
+	            };
+
+	            const renderScope = async (i = interaction) => {
+	                const buckets = distributionBuckets();
+	                const embed = buildDistributionEmbed(
+	                    `Smart Distribution — ${selectedCode}`,
+	                    'اختر نوع البوتات التي تريد توزيعها أولاً.',
+	                    [
+	                        { name: 'Idle Bots', value: `\`${buckets.idle.length}\``, inline: true },
+	                        { name: 'Grouped Bots', value: `\`${buckets.grouped.length}\``, inline: true },
+	                        { name: 'Available Bots', value: `\`${buckets.available.length}\``, inline: true },
+	                    ]
+	                );
+
+	                const select = new StringSelectMenuBuilder()
+	                    .setCustomId(`stg_dist_${mid}_scope`)
+	                    .setPlaceholder('Select distribution scope')
+	                    .addOptions([
+	                        { label: 'Idle Only', value: 'idle', description: 'البوتات الموجودة بالسيرفر وليست داخل فويس' },
+	                        { label: 'Grouped In One Voice', value: 'grouped', description: 'البوتات الموجودة مع بوتات أخرى في نفس الفويس' },
+	                        { label: 'All Available', value: 'all', description: 'إعادة توزيع كل البوتات المتاحة داخل السيرفر' },
+	                    ]);
+
+	                const rows = [
+	                    new ActionRowBuilder().addComponents(select),
+	                    new ActionRowBuilder().addComponents(
+	                        new ButtonBuilder().setCustomId(`stg_dist_${mid}_back_rooms`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+	                    ),
+	                ];
+
+	                return i.update({ content: '', embeds: [embed], components: rows });
+	            };
+
+	            const renderNoIdleWarning = async (i) => {
+	                const row = new ActionRowBuilder().addComponents(
+	                    new ButtonBuilder().setCustomId(`stg_dist_${mid}_redistribute_all`).setLabel('Redistribute All').setStyle(ButtonStyle.Danger),
+	                    new ButtonBuilder().setCustomId(`stg_dist_${mid}_scope_back`).setLabel('Choose Again').setStyle(ButtonStyle.Secondary),
+	                    new ButtonBuilder().setCustomId(`stg_dist_${mid}_back_rooms`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+	                );
+
+	                return i.update({
+	                    content: '',
+	                    embeds: [buildDistributionEmbed(
+	                        'No Idle Bots',
+	                        'كل البوتات المتاحة موجودة داخل رومات. هل تريد إعادة توزيعهم كلهم؟\n\n**تنبيه:** هذا سينقل البوتات من روماتها الحالية.'
+	                    )],
+	                    components: [row],
+	                });
+	            };
+
+	            const renderFirstChannel = async (i) => {
+	                const select = new ChannelSelectMenuBuilder()
+	                    .setCustomId(`stg_dist_${mid}_first`)
+	                    .setPlaceholder('Search and select first voice room')
+	                    .setChannelTypes(ChannelType.GuildVoice);
+	                const row = new ActionRowBuilder().addComponents(select);
+	                const back = new ActionRowBuilder().addComponents(
+	                    new ButtonBuilder().setCustomId(`stg_dist_${mid}_scope_back`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+	                );
+
+	                return i.update({
+	                    content: '',
+	                    embeds: [buildDistributionEmbed('Smart Distribution', 'اختر **أول روم** من منيو البحث.')],
+	                    components: [row, back],
+	                });
+	            };
+
+	            const renderLastChannel = async (i) => {
+	                const select = new ChannelSelectMenuBuilder()
+	                    .setCustomId(`stg_dist_${mid}_last`)
+	                    .setPlaceholder('Search and select last voice room')
+	                    .setChannelTypes(ChannelType.GuildVoice);
+	                const row = new ActionRowBuilder().addComponents(select);
+	                const back = new ActionRowBuilder().addComponents(
+	                    new ButtonBuilder().setCustomId(`stg_dist_${mid}_first_back`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+	                );
+
+	                return i.update({
+	                    content: '',
+	                    embeds: [buildDistributionEmbed(
+	                        'Smart Distribution',
+	                        `أول روم: <#${state.firstChannelId}>\nاختر **آخر روم** من منيو البحث.`
+	                    )],
+	                    components: [row, back],
+	                });
+	            };
+
+	            const renderMode = async (i) => {
+	                const select = new StringSelectMenuBuilder()
+	                    .setCustomId(`stg_dist_${mid}_mode`)
+	                    .setPlaceholder('Select naming mode')
+	                    .addOptions([
+	                        { label: 'Room Names', value: 'names', description: 'يسمي كل بوت باسم الروم الذي يدخلها' },
+	                        { label: 'Numbered Names', value: 'numbers', description: 'يسمي كل بوت باسم الروم مع رقم ترتيبه' },
+	                    ]);
+	                const row = new ActionRowBuilder().addComponents(select);
+	                const back = new ActionRowBuilder().addComponents(
+	                    new ButtonBuilder().setCustomId(`stg_dist_${mid}_last_back`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+	                );
+
+	                return i.update({
+	                    content: '',
+	                    embeds: [buildDistributionEmbed(
+	                        'Smart Distribution',
+	                        [
+	                            `النطاق: **${state.scope === 'idle' ? 'الخاملين' : state.scope === 'grouped' ? 'المتجمعين' : 'الكل'}**`,
+	                            `الرومات: <#${state.firstChannelId}> → <#${state.lastChannelId}>`,
+	                            'اختر وضع التسمية، وبعدها سيبدأ التوزيع مباشرة.',
+	                        ].join('\n')
+	                    )],
+	                    components: [row, back],
+	                });
+	            };
+
+	            await renderScope();
+
+	            const distCollector = mainMsg.createMessageComponentCollector({
+	                filter: i => i.user.id === userId && i.customId.startsWith(`stg_dist_${mid}_`),
+	                time: 180000,
+	            });
+	            activeDistributionCollector = distCollector;
+
+	            distCollector.on('collect', async i => {
+	                if (i.customId === `stg_dist_${mid}_back_rooms`) {
+	                    distCollector.stop('back');
+	                    currentPanel = 'ROOMS';
+	                    return updatePanel(i);
+	                }
+
+	                if (i.customId === `stg_dist_${mid}_scope_back`) {
+	                    state.scope = null;
+	                    return renderScope(i);
+	                }
+
+	                if (i.customId === `stg_dist_${mid}_first_back`) {
+	                    state.firstChannelId = null;
+	                    return renderFirstChannel(i);
+	                }
+
+	                if (i.customId === `stg_dist_${mid}_last_back`) {
+	                    state.lastChannelId = null;
+	                    return renderLastChannel(i);
+	                }
+
+	                if (i.customId === `stg_dist_${mid}_redistribute_all`) {
+	                    state.scope = 'all';
+	                    return renderFirstChannel(i);
+	                }
+
+	                if (i.customId === `stg_dist_${mid}_scope`) {
+	                    state.scope = i.values[0];
+	                    const buckets = distributionBuckets();
+	                    const targets = distributionTargets(state.scope);
+
+	                    if (state.scope === 'idle' && targets.length === 0 && buckets.available.length > 0 && buckets.available.length === buckets.inRoom.length) {
+	                        return renderNoIdleWarning(i);
+	                    }
+
+	                    if (targets.length === 0) {
+	                        return i.update({
+	                            content: '',
+	                            embeds: [buildDistributionEmbed('Smart Distribution', 'لا توجد بوتات مناسبة لهذا الخيار حالياً.')],
+	                            components: [new ActionRowBuilder().addComponents(
+	                                new ButtonBuilder().setCustomId(`stg_dist_${mid}_scope_back`).setLabel('Choose Again').setStyle(ButtonStyle.Secondary),
+	                                new ButtonBuilder().setCustomId(`stg_dist_${mid}_back_rooms`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+	                            )],
+	                        });
+	                    }
+
+	                    return renderFirstChannel(i);
+	                }
+
+	                if (i.customId === `stg_dist_${mid}_first`) {
+	                    state.firstChannelId = i.values[0];
+	                    return renderLastChannel(i);
+	                }
+
+	                if (i.customId === `stg_dist_${mid}_last`) {
+	                    state.lastChannelId = i.values[0];
+	                    return renderMode(i);
+	                }
+
+	                if (i.customId === `stg_dist_${mid}_mode`) {
+	                    state.mode = i.values[0];
+	                    distCollector.stop('execute');
+	                    return executeSmartDistribution(i, state);
+	                }
+	            });
+
+	            distCollector.on('end', (_, reason) => {
+	                if (activeDistributionCollector === distCollector) activeDistributionCollector = null;
+	                if (reason === 'time') mainMsg.edit({ components: [] }).catch(() => {});
+	            });
+	        }
 
         async function updatePanel(interaction = null) {
             try {
@@ -55,12 +529,12 @@ module.exports = {
                 let content = '';
 
                 if (currentPanel === 'SELECT') {
-                    content = '📋 اختر الاشتراك الذي تريد التحكم به:';
+                    content = '**Select Subscription**\nاختر الاشتراك الذي تريد التحكم به:';
                     const selectMenu = new StringSelectMenuBuilder()
                         .setCustomId(`stg_${mid}_select_sub`)
-                        .setPlaceholder('اختر اشتراكاً...')
+                        .setPlaceholder('Select subscription')
                         .addOptions(uniqueCodes.map(code => ({
-                            label: `اشتراك ${code}`,
+                            label: `Subscription ${code}`,
                             value: code
                         })));
                     components.push(new ActionRowBuilder().addComponents(selectMenu));
@@ -69,80 +543,96 @@ module.exports = {
                     const subTokens = tokens.filter(t => t.code === selectedCode);
                     const timeData = store.get('time') || [];
                     const subInfo = timeData.find(t => t.code === selectedCode);
+                    const display = getDisplay(selectedCode);
+                    const chat = chatSummary(subTokens);
+                    const voiceStats = subTokens.reduce((acc, t) => {
+                        const info = getBotVoiceInfo(t);
+                        if (!info.bot) acc.offline++;
+                        else if (!info.inServer) acc.outside++;
+                        else if (info.inRoom) acc.inRoom++;
+                        else acc.idle++;
+                        return acc;
+                    }, { inRoom: 0, idle: 0, outside: 0, offline: 0 });
 
                     const embed = new EmbedBuilder()
-                        .setTitle(`إعدادات الاشتراك — ${selectedCode}`)
+                        .setTitle(`Subscription Settings — ${selectedCode}`)
+                        .setDescription('تحكم سريع ومنظم في البوتات، العرض، الغرف، والمنصة.')
                         .addFields(
-                            { name: '👤 المالك', value: `<@${subInfo?.user || subTokens[0]?.client}>`, inline: true },
-                            { name: '🤖 عدد البوتات', value: `\`${subTokens.length}\``, inline: true },
-                            { name: '🖥️ السيرفر', value: `\`${subTokens[0]?.Server || 'غير محدد'}\``, inline: true },
-                            { name: '⏳ ينتهي في', value: subInfo?.expirationTime ? `<t:${Math.floor(subInfo.expirationTime / 1000)}:R>` : 'غير معروف', inline: true }
+                            { name: 'Owner', value: `<@${subInfo?.user || subTokens[0]?.client}>`, inline: true },
+                            { name: 'Bots', value: `\`${subTokens.length}\``, inline: true },
+                            { name: 'Server', value: `\`${subTokens[0]?.Server || 'غير محدد'}\``, inline: true },
+                            { name: 'Expires', value: subInfo?.expirationTime ? `<t:${Math.floor(subInfo.expirationTime / 1000)}:R>` : 'غير معروف', inline: true },
+                            { name: 'Display', value: `الأزرار: **${display.buttons ? 'مفعلة' : 'معطلة'}**\nالإيمبد: **${display.embeds ? 'مفعل' : 'معطل'}**`, inline: true },
+                            { name: 'Platform', value: `\`${display.platform}\``, inline: true },
+                            { name: 'Command Chat', value: `${chat.label}\n${chat.details}`, inline: false },
+                            { name: 'Voice Status', value: `بروم: **${voiceStats.inRoom}**\nخامل: **${voiceStats.idle}**\nخارج السيرفر: **${voiceStats.outside}**\nغير متصل: **${voiceStats.offline}**`, inline: false }
                         )
-                        .setColor(Colors);
+                        .setColor(getEmbedColor(client));
                     
                     embeds.push(embed);
 
                     const row1 = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_appearance`).setLabel('المظهر').setEmoji('🖼️').setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_rooms`).setLabel('الغرف').setEmoji('🔊').setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_display`).setLabel('العرض').setEmoji('📋').setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_platform`).setLabel('المنصة').setEmoji('🎵').setStyle(ButtonStyle.Secondary)
+                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_appearance`).setLabel('Appearance').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_rooms`).setLabel('Rooms').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_display`).setLabel('Display').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_platform`).setLabel('Platform').setStyle(ButtonStyle.Secondary)
                     );
                     const row2 = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`stg_${mid}_close`).setLabel('إغلاق').setStyle(ButtonStyle.Danger)
+                        new ButtonBuilder().setCustomId(`stg_${mid}_close`).setLabel('Close').setStyle(ButtonStyle.Danger)
                     );
                     if (uniqueCodes.length > 1) {
-                        row2.addComponents(new ButtonBuilder().setCustomId(`stg_${mid}_back_to_select`).setLabel('تغيير الاشتراك').setStyle(ButtonStyle.Secondary));
+                        row2.addComponents(new ButtonBuilder().setCustomId(`stg_${mid}_back_to_select`).setLabel('Change Subscription').setStyle(ButtonStyle.Secondary));
                     }
                     components.push(row1, row2);
                 }
                 else if (currentPanel === 'APPEARANCE') {
                     const embed = new EmbedBuilder()
-                        .setTitle(`إعدادات المظهر — ${selectedCode}`)
+                        .setTitle(`Appearance Settings — ${selectedCode}`)
                         .setDescription('تحكم في مظهر جميع بوتات هذا الاشتراك.')
-                        .setColor(Colors);
+                        .setColor(getEmbedColor(client));
                     embeds.push(embed);
 
                     const row = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`stg_${mid}_set_avatar`).setLabel('تغيير الصورة').setEmoji('🖼️').setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_set_banner`).setLabel('تغيير البانر').setEmoji('🎨').setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_set_status`).setLabel('تغيير الحالة').setEmoji('🏷️').setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('رجوع').setEmoji('⬅️').setStyle(ButtonStyle.Secondary)
+                        new ButtonBuilder().setCustomId(`stg_${mid}_set_avatar`).setLabel('Avatar').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`stg_${mid}_set_banner`).setLabel('Banner').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`stg_${mid}_set_status`).setLabel('Status').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
                     );
                     components.push(row);
                 }
-                else if (currentPanel === 'DISPLAY') {
-                    const display = getDisplay(selectedCode);
-                    const embed = new EmbedBuilder()
-                        .setTitle(`إعدادات العرض — ${selectedCode}`)
-                        .setDescription('تحكم في ظهور الأزرار والرسائل (Embeds) لبوتات هذا الاشتراك.')
-                        .setColor(Colors);
+	                else if (currentPanel === 'DISPLAY') {
+	                    const display = getDisplay(selectedCode);
+	                    const embed = new EmbedBuilder()
+	                        .setTitle(`Display Settings — ${selectedCode}`)
+	                        .setDescription('فعّل أو عطّل عناصر التشغيل التي تظهر للمستخدمين.')
+	                        .setColor(getEmbedColor(client));
                     embeds.push(embed);
 
                     const row = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder()
-                            .setCustomId(`stg_${mid}_toggle_buttons`)
-                            .setLabel(`الأزرار: ${display.buttons ? 'ON' : 'OFF'}`)
-                            .setStyle(display.buttons ? ButtonStyle.Success : ButtonStyle.Danger),
-                        new ButtonBuilder()
-                            .setCustomId(`stg_${mid}_toggle_embeds`)
-                            .setLabel(`الرسائل: ${display.embeds ? 'ON' : 'OFF'}`)
-                            .setStyle(display.embeds ? ButtonStyle.Success : ButtonStyle.Danger),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('رجوع').setEmoji('⬅️').setStyle(ButtonStyle.Secondary)
+	                        new ButtonBuilder()
+	                            .setCustomId(`stg_${mid}_toggle_buttons`)
+	                            .setLabel(`Buttons: ${display.buttons ? 'ON' : 'OFF'}`)
+	                            .setStyle(display.buttons ? ButtonStyle.Success : ButtonStyle.Danger),
+	                        new ButtonBuilder()
+	                            .setCustomId(`stg_${mid}_toggle_embeds`)
+	                            .setLabel(`Embeds: ${display.embeds ? 'ON' : 'OFF'}`)
+	                            .setStyle(display.embeds ? ButtonStyle.Success : ButtonStyle.Danger),
+                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
                     );
                     components.push(row);
                 }
                 else if (currentPanel === 'PLATFORM') {
                     const display = getDisplay(selectedCode);
                     const embed = new EmbedBuilder()
-                        .setTitle(`إعدادات المنصة — ${selectedCode}`)
+                        .setTitle(`Platform Settings — ${selectedCode}`)
                         .setDescription(`المنصة الحالية: \`${display.platform}\``)
-                        .setColor(Colors);
+                        .setColor(getEmbedColor(client));
                     embeds.push(embed);
 
                     const platBtn = (id, lbl) => new ButtonBuilder()
                         .setCustomId(`stg_${mid}_plat_${id}`)
                         .setLabel(lbl)
+                        .setEmoji(MUSIC_EMOJIS.platforms[id])
                         .setStyle(display.platform === id ? ButtonStyle.Primary : ButtonStyle.Secondary);
                     const row1 = new ActionRowBuilder().addComponents(
                         platBtn('ytsearch',  'YouTube'),
@@ -153,24 +643,53 @@ module.exports = {
                         platBtn('spsearch',  'Spotify'),
                         platBtn('amsearch',  'Apple Music'),
                         platBtn('dzsearch',  'Deezer'),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('رجوع').setEmoji('⬅️').setStyle(ButtonStyle.Secondary)
+                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
                     );
                     components.push(row1, row2);
                 }
-                else if (currentPanel === 'ROOMS') {
-                    const embed = new EmbedBuilder()
-                        .setTitle(`إعدادات الغرف — ${selectedCode}`)
-                        .setDescription('تحكم في توزيع البوتات وحالتها الصوتية.')
-                        .setColor(Colors);
+	                else if (currentPanel === 'ROOMS') {
+	                    const chat = chatSummary();
+	                    const embed = new EmbedBuilder()
+	                        .setTitle(`Room Settings — ${selectedCode}`)
+	                        .setDescription(`راقب البوتات، وزّعها، وحدد شات استقبال الأوامر.\n\n**شات الأوامر:** ${chat.label}\n${chat.details}`)
+	                        .setColor(getEmbedColor(client));
                     embeds.push(embed);
 
-                    const row = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`stg_${mid}_voice_status`).setLabel('حالة الصوت').setEmoji('📊').setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_distribute`).setLabel('توزيع تلقائي').setEmoji('🔀').setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('رجوع').setEmoji('⬅️').setStyle(ButtonStyle.Secondary)
-                    );
-                    components.push(row);
-                }
+	                    const row1 = new ActionRowBuilder().addComponents(
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_voice_status`).setLabel('Voice Status').setStyle(ButtonStyle.Secondary),
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_distribute`).setLabel('Smart Distribution').setStyle(ButtonStyle.Secondary),
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_moveidle`).setLabel('Move Idle').setStyle(ButtonStyle.Secondary)
+	                    );
+	                    const row2 = new ActionRowBuilder().addComponents(
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_chat`).setLabel('Command Chat').setStyle(ButtonStyle.Secondary),
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_links_all`).setLabel('All Links').setStyle(ButtonStyle.Secondary),
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_links_out`).setLabel('Outside Server').setStyle(ButtonStyle.Secondary),
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+	                    );
+	                    components.push(row1, row2);
+	                }
+	                else if (currentPanel === 'CHAT') {
+	                    const chat = chatSummary();
+	                    const embed = new EmbedBuilder()
+	                        .setTitle(`Command Chat — ${selectedCode}`)
+	                        .setDescription(
+	                            `**الحالي:** ${chat.label}\n${chat.details}\n\n` +
+	                            'عند تحديد شات استقبال، أوامر كل البوتات تعمل فقط في شات الاستقبال أو شات الفويس الخاص بكل بوت.'
+	                        )
+	                        .setColor(getEmbedColor(client));
+	                    embeds.push(embed);
+
+	                    const select = new ChannelSelectMenuBuilder()
+	                        .setCustomId(`stg_${mid}_chat_select_all`)
+	                        .setPlaceholder('Select command chat')
+	                        .setChannelTypes(ChannelType.GuildText);
+	                    const row1 = new ActionRowBuilder().addComponents(select);
+	                    const row2 = new ActionRowBuilder().addComponents(
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_chat_clear_all`).setLabel('Clear Command Chat').setStyle(ButtonStyle.Danger),
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_rooms`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+	                    );
+	                    components.push(row1, row2);
+	                }
 
                 const options = { content, embeds, components };
                 if (interaction && !interaction.replied && !interaction.deferred) {
@@ -227,6 +746,11 @@ module.exports = {
                 return updatePanel(i);
             }
 
+            if (i.customId === `stg_${mid}_panel_chat`) {
+                currentPanel = 'CHAT';
+                return updatePanel(i);
+            }
+
             // Toggles
             if (i.customId === `stg_${mid}_toggle_buttons`) {
                 const cur = getDisplay(selectedCode);
@@ -270,46 +794,91 @@ module.exports = {
 
             // Modals: Avatar, Banner, Status, Distribute
             if (i.customId === `stg_${mid}_set_avatar`) {
-                const modal = new ModalBuilder().setCustomId(`stg_mod_${mid}_avatar`).setTitle('تغيير صورة البوتات');
-                modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('url').setLabel('رابط الصورة').setRequired(true).setStyle(TextInputStyle.Short)));
+                const modal = new ModalBuilder().setCustomId(`stg_mod_${mid}_avatar`).setTitle('Change Bot Avatars');
+                modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('url').setLabel('Image URL').setRequired(true).setStyle(TextInputStyle.Short)));
                 await i.showModal(modal);
             }
 
             if (i.customId === `stg_${mid}_set_status`) {
-                const modal = new ModalBuilder().setCustomId(`stg_mod_${mid}_status`).setTitle('تغيير حالة البوتات');
-                modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('text').setLabel('نص الحالة').setRequired(true).setStyle(TextInputStyle.Short)));
+                const modal = new ModalBuilder().setCustomId(`stg_mod_${mid}_status`).setTitle('Change Bot Status');
+                modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('text').setLabel('Status Text').setRequired(true).setStyle(TextInputStyle.Short)));
                 await i.showModal(modal);
             }
             
             if (i.customId === `stg_${mid}_set_banner`) {
-                const modal = new ModalBuilder().setCustomId(`stg_mod_${mid}_banner`).setTitle('تغيير بانر البوتات');
-                modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('url').setLabel('رابط الصورة').setRequired(true).setStyle(TextInputStyle.Short)));
+                const modal = new ModalBuilder().setCustomId(`stg_mod_${mid}_banner`).setTitle('Change Bot Banners');
+                modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('url').setLabel('Image URL').setRequired(true).setStyle(TextInputStyle.Short)));
                 await i.showModal(modal);
             }
 
             if (i.customId === `stg_${mid}_distribute`) {
-                const modal = new ModalBuilder().setCustomId(`stg_mod_${mid}_dist`).setTitle('توزيع البوتات على الرومات');
-                modal.addComponents(
-                    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('first').setLabel('ايدي أول روم صوتي').setRequired(true).setStyle(TextInputStyle.Short)),
-                    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('last').setLabel('ايدي آخر روم صوتي').setRequired(true).setStyle(TextInputStyle.Short)),
-                    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('mode').setLabel('الوضع (N للترقيم / S لاسم البوت)').setMaxLength(1).setRequired(true).setStyle(TextInputStyle.Short))
-                );
-                await i.showModal(modal);
+                return startSmartDistribution(i);
             }
 
-            if (i.customId === `stg_${mid}_voice_status`) {
-                // Voice status sub-panel logic
-                await handleVoiceStatus(i);
+            if (i.customId === `stg_${mid}_chat_select_all`) {
+                const channelId = i.values[0];
+                tokens = store.get('tokens') || [];
+                tokens.forEach(t => {
+                    if (t.code === selectedCode) t.chat = channelId;
+                });
+                store.set('tokens', tokens);
+
+                await i.update({
+                    content: '',
+                    embeds: [new EmbedBuilder()
+                        .setTitle('Command Chat Updated')
+                        .setDescription(`تم تحديد شات استقبال الأوامر لكل بوتات الاشتراك: <#${channelId}>`)
+                        .setColor(getEmbedColor(client))],
+                    components: [],
+                });
+                setTimeout(() => updatePanel(), 2500);
+                return;
             }
-        });
 
-        // Handle Modal Submits
-        client.on('interactionCreate', async (interaction) => {
-            if (!interaction.isModalSubmit()) return;
-            if (!interaction.customId.startsWith(`stg_mod_${mid}_`)) return;
+            if (i.customId === `stg_${mid}_chat_clear_all`) {
+                tokens = store.get('tokens') || [];
+                tokens.forEach(t => {
+                    if (t.code === selectedCode) delete t.chat;
+                });
+                store.set('tokens', tokens);
 
-            const subTokens = tokens.filter(t => t.code === selectedCode);
-            await interaction.deferUpdate();
+                await i.update({
+                    content: '',
+                    embeds: [new EmbedBuilder()
+                        .setTitle('Command Chat Cleared')
+                        .setDescription('تم إلغاء شات استقبال الأوامر لكل بوتات الاشتراك.')
+                        .setColor(getEmbedColor(client))],
+                    components: [],
+                });
+                setTimeout(() => updatePanel(), 2500);
+                return;
+            }
+
+	            if (i.customId === `stg_${mid}_voice_status`) {
+	                // Voice status sub-panel logic
+	                await handleVoiceStatus(i);
+	            }
+
+	            if (i.customId === `stg_${mid}_links_all`) {
+	                return showLinksPanel(i, getSelectedTokens(), selectedCode, 'all');
+	            }
+
+	            if (i.customId === `stg_${mid}_links_out`) {
+	                return showLinksPanel(i, getSelectedTokens(), selectedCode, 'outside');
+	            }
+
+	            if (i.customId === `stg_${mid}_moveidle`) {
+	                return showMoveIdleModal(i);
+	            }
+	        });
+
+	        // Handle Modal Submits
+	        const modalHandler = async (interaction) => {
+	            if (!interaction.isModalSubmit()) return;
+	            if (!interaction.customId.startsWith(`stg_mod_${mid}_`)) return;
+
+	            const subTokens = getSelectedTokens();
+	            await interaction.deferUpdate();
 
             if (interaction.customId === `stg_mod_${mid}_avatar`) {
                 const url = interaction.fields.getTextInputValue('url');
@@ -370,80 +939,70 @@ module.exports = {
                 setTimeout(() => updatePanel(), 3000);
             }
 
-            if (interaction.customId === `stg_mod_${mid}_dist`) {
-                const firstId = interaction.fields.getTextInputValue('first');
-                const lastId = interaction.fields.getTextInputValue('last');
-                const mode = interaction.fields.getTextInputValue('mode').toUpperCase();
+	            if (interaction.customId === `stg_mod_${mid}_moveidle`) {
+	                const input = interaction.fields.getTextInputValue('channelId');
+	                const channelIds = input.split(',').map(s => s.trim()).filter(Boolean);
 
-                await mainMsg.edit({ content: '⏳ جاري توزيع البوتات...', embeds: [], components: [] });
+	                if (channelIds.length === 0 || channelIds.some(id => !/^\d{17,20}$/.test(id))) {
+	                    await mainMsg.edit({ content: '❌ ايدي الروم غير صحيح.', embeds: [], components: [] });
+	                    setTimeout(() => updatePanel(), 3000);
+	                    return;
+	                }
 
-                try {
-                    const sampleBot = runningBots.get(subTokens[0].token);
-                    if (!sampleBot) throw new Error('لا يوجد بوتات نشطة حالياً لتنفيذ العملية.');
+	                const idleBots = getSelectedTokens().filter(t => {
+	                    const info = getBotVoiceInfo(t);
+	                    return info.inServer && !info.inRoom;
+	                });
 
-                    const guild = sampleBot.guilds.cache.get(subTokens[0].Server);
-                    if (!guild) throw new Error('تعذر الوصول للسيرفر.');
+	                await mainMsg.edit({ content: `⏳ جاري إدخال **${idleBots.length}** بوت خامل...`, embeds: [], components: [] });
 
-                    const channels = await guild.channels.fetch();
-                    const voiceChannels = channels
-                        .filter(c => c.type === 2) // GuildVoice
-                        .sort((a, b) => a.position - b.position);
+	                let success = 0;
+	                const results = await Promise.allSettled(idleBots.map(async (t, idx) => {
+	                    const bot = runningBots.get(t.token);
+	                    if (!bot?.poru) throw new Error('bot is not running');
 
-                    const firstChan = voiceChannels.get(firstId);
-                    const lastChan = voiceChannels.get(lastId);
+	                    const guild = bot.guilds.cache.get(t.Server);
+	                    if (!guild) throw new Error('bot is outside the server');
 
-                    if (!firstChan || !lastChan) throw new Error('تعذر العثور على الرومات المحددة.');
+	                    const targetChannelId = channelIds[idx % channelIds.length];
+	                    const targetChannel = guild.channels.cache.get(targetChannelId)
+	                        || await guild.channels.fetch(targetChannelId).catch(() => null);
 
-                    const targetChannels = voiceChannels.filter(c => c.position >= firstChan.position && c.position <= lastChan.position).toJSON();
-                    
-                    if (targetChannels.length === 0) throw new Error('لا توجد رومات صوتية في المدى المحدد.');
+	                    if (!isVoiceChannel(targetChannel)) {
+	                        throw new Error(`invalid voice channel: ${targetChannelId}`);
+	                    }
 
-                    for (let i = 0; i < subTokens.length; i++) {
-                        const t = subTokens[i];
-                        const chan = targetChannels[i % targetChannels.length];
-                        t.channel = chan.id;
-                        
-                        // Apply to running bot
-                        const bot = runningBots.get(t.token);
-                        if (bot && mode === 'S') {
-                            await bot.user.setUsername(chan.name).catch(() => {});
-                        } else if (bot && mode === 'N') {
-                            await bot.user.setUsername(`${chan.name} ${i + 1}`).catch(() => {});
-                        }
-                    }
+	                    t.channel = targetChannel.id;
+	                    const existing = bot.poru.players.get(guild.id);
+	                    if (existing) existing.destroy();
 
-                    store.set('tokens', tokens);
-                    await mainMsg.edit({ content: `✅ تم توزيع ${subTokens.length} بوت على ${targetChannels.length} روم.` });
-                } catch (e) {
-                    await mainMsg.edit({ content: `❌ خطأ: ${e.message}` });
-                }
-                setTimeout(() => updatePanel(), 3000);
-            }
-        });
+	                    await bot.poru.createConnection({
+	                        guildId: guild.id,
+	                        voiceChannel: targetChannel.id,
+	                        textChannel: t.chat || targetChannel.id,
+	                        deaf: true,
+	                        group: t.token,
+	                    });
+	                    success++;
+	                }));
 
-        async function handleVoiceStatus(interaction) {
-            let page = 0;
-            const subTokens = tokens.filter(t => t.code === selectedCode);
+	                store.set('tokens', tokens);
 
-            // Helper: decode bot client_id from token
-            function getClientId(token) {
-                try { return Buffer.from(token.split('.')[0], 'base64').toString('utf8'); } catch { return ''; }
-            }
+	                const failed = results.filter(r => r.status === 'rejected').length;
+	                await mainMsg.edit({
+	                    content: `✅ تم إدخال **${success}** بوت خامل.${failed ? ` فشل **${failed}**.` : ''}`
+	                });
+	                setTimeout(() => updatePanel(), 3000);
+	            }
+	        };
+	        client.on('interactionCreate', modalHandler);
+	        collector.on('end', () => {
+	            client.off('interactionCreate', modalHandler);
+	        });
 
-            // Helper: get bot voice state info
-            function getBotVoiceInfo(t) {
-                const bot = runningBots.get(t.token);
-                if (!bot) return { bot: null, statusText: '🚫 غير متصل', inRoom: false, inServer: false };
-                const guild = bot.guilds.cache.get(t.Server);
-                if (!guild) return { bot, statusText: '🌐 خارج السيرفر', inRoom: false, inServer: false };
-                const vc = guild.members.me?.voice?.channel;
-                return {
-                    bot,
-                    statusText: vc ? `🔊 <#${vc.id}>` : '💤 لا يوجد في روم',
-                    inRoom: !!vc,
-                    inServer: true
-                };
-            }
+	        async function handleVoiceStatus(interaction) {
+	            let page = 0;
+	            const subTokens = getSelectedTokens();
 
             async function renderVoicePanel(i = null) {
                 const start = page * 10;
@@ -458,26 +1017,26 @@ module.exports = {
                 });
 
                 const embed = new EmbedBuilder()
-                    .setTitle(`📊 حالة الصوت — ${selectedCode}`)
+                    .setTitle(`Voice Status — ${selectedCode}`)
                     .setDescription(
                         `> البوتات **${start + 1}–${end}** من أصل **${subTokens.length}**\n` +
                         `> 🔊 بروم  |  💤 بدون روم  |  🌐 خارج سيرفر  |  🚫 غير متصل\n` +
                         `\u200b\n` +
                         lines.join('\n')
                     )
-                    .setColor(Colors)
+                    .setColor(getEmbedColor(client))
                     .setFooter({ text: `صفحة ${page + 1} / ${Math.ceil(subTokens.length / 10)}` });
 
                 const row1 = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_prev`).setLabel('◀️').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
-                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_next`).setLabel('▶️').setStyle(ButtonStyle.Secondary).setDisabled(end >= subTokens.length),
-                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_restart`).setLabel('🔄 Restart').setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_moveidle`).setLabel('📥 إدخال الخاملين').setStyle(ButtonStyle.Secondary),
-                    new ButtonBuilder().setCustomId(`stg_${mid}_panel_rooms`).setLabel('⬅️ رجوع').setStyle(ButtonStyle.Secondary)
+                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_prev`).setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_next`).setEmoji(MUSIC_EMOJIS.pageNext).setStyle(ButtonStyle.Secondary).setDisabled(end >= subTokens.length),
+                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_restart`).setLabel('Restart').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_moveidle`).setLabel('Move Idle').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId(`stg_${mid}_panel_rooms`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
                 );
                 const row2 = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_links_all`).setLabel('📤 روابط الكل').setStyle(ButtonStyle.Secondary),
-                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_links_out`).setLabel('🌐 خارج السيرفر').setStyle(ButtonStyle.Secondary)
+                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_links_all`).setLabel('All Links').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId(`stg_vs_${mid}_links_out`).setLabel('Outside Server').setStyle(ButtonStyle.Secondary)
                 );
 
                 const payload = { embeds: [embed], components: [row1, row2], content: '' };
@@ -502,9 +1061,9 @@ module.exports = {
                 // ── Restart → اسأل: الكل أم اللي بالرومات فقط ─────────────
                 if (i.customId === `stg_vs_${mid}_restart`) {
                     const row = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`stg_vsc_${mid}_rst_all`).setLabel('🔄 الكل').setStyle(ButtonStyle.Danger),
-                        new ButtonBuilder().setCustomId(`stg_vsc_${mid}_rst_rooms`).setLabel('🔊 اللي بالرومات فقط').setStyle(ButtonStyle.Primary),
-                        new ButtonBuilder().setCustomId(`stg_vsc_${mid}_rst_cancel`).setLabel('إلغاء').setStyle(ButtonStyle.Secondary)
+                        new ButtonBuilder().setCustomId(`stg_vsc_${mid}_rst_all`).setLabel('All Bots').setStyle(ButtonStyle.Danger),
+                        new ButtonBuilder().setCustomId(`stg_vsc_${mid}_rst_rooms`).setLabel('In Voice Only').setStyle(ButtonStyle.Primary),
+                        new ButtonBuilder().setCustomId(`stg_vsc_${mid}_rst_cancel`).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
                     );
                     return i.update({ content: '⚠️ اختر نوع إعادة التشغيل:', embeds: [], components: [row] });
                 }
@@ -539,65 +1098,12 @@ module.exports = {
                     return showLinksPanel(i, subTokens, selectedCode, initFilter);
                 }
 
-                // ── إدخال الخاملين إلى روم ───────────────────────────────
-                if (i.customId === `stg_vs_${mid}_moveidle`) {
-                    const idleBots = subTokens.filter(t => {
-                        const info = getBotVoiceInfo(t);
-                        return info.inServer && !info.inRoom;
-                    });
-
-                    if (idleBots.length === 0) {
-                        return i.reply({ content: '✅ لا يوجد بوتات خاملة — كلها في رومات.', ephemeral: true });
-                    }
-
-                    const modal = new ModalBuilder()
-                        .setCustomId(`stg_mod_${mid}_moveidle`)
-                        .setTitle(`إدخال ${idleBots.length} بوت خامل`);
-                    modal.addComponents(
-                        new ActionRowBuilder().addComponents(
-                            new TextInputBuilder()
-                                .setCustomId('channelId')
-                                .setLabel('ID الروم الصوتي (أو عدة IDs مفصولة بفاصلة للتوزيع)')
-                                .setPlaceholder('مثال: 123456789  أو  111,222,333')
-                                .setRequired(true)
-                                .setStyle(TextInputStyle.Short)
-                        )
-                    );
-                    return i.showModal(modal);
-                }
-            });
-
-            // Modal: إدخال الخاملين
-            client.on('interactionCreate', async (interaction) => {
-                if (!interaction.isModalSubmit()) return;
-                if (interaction.customId !== `stg_mod_${mid}_moveidle`) return;
-
-                const input = interaction.fields.getTextInputValue('channelId');
-                const channelIds = input.split(',').map(s => s.trim()).filter(Boolean);
-                const idleBots = subTokens.filter(t => {
-                    const info = getBotVoiceInfo(t);
-                    return info.inServer && !info.inRoom;
-                });
-
-                await interaction.deferUpdate();
-                await mainMsg.edit({ content: `⏳ جاري إدخال **${idleBots.length}** بوت خامل...`, embeds: [], components: [] });
-
-                let success = 0;
-                const results = await Promise.allSettled(idleBots.map(async (t, idx) => {
-                    const targetChannelId = channelIds[idx % channelIds.length];
-                    t.channel = targetChannelId;
-                    success++;
-                }));
-
-                store.set('tokens', tokens);
-
-                const failed = results.filter(r => r.status === 'rejected').length;
-                await mainMsg.edit({
-                    content: `✅ تم تحديث روم **${success}** بوت خامل.${failed ? ` (${failed} فشلت)` : ''}\nسيدخل البوتات عند إعادة الاتصال.`
-                });
-                setTimeout(() => updatePanel(), 3000);
-            });
-        }
+	                // ── إدخال الخاملين إلى روم ───────────────────────────────
+	                if (i.customId === `stg_vs_${mid}_moveidle`) {
+	                    return showMoveIdleModal(i);
+	                }
+	            });
+	        }
 
         // ════════════════════════════════════════════════════════════════
         //  showLinksPanel — لوحة روابط البوتات بإيمبد + فلتر + صفحات
@@ -610,11 +1116,11 @@ module.exports = {
 
             // تسميات الفلاتر
             const FILTER_LABELS = {
-                all:     '📋 الكل',
-                in_room: '🔊 بالرومات',
-                idle:    '💤 خاملة (بالسيرفر)',
-                outside: '🌐 خارج السيرفر',
-                offline: '🚫 غير متصلة',
+                all:     'All',
+                in_room: 'In Voice',
+                idle:    'Idle',
+                outside: 'Outside Server',
+                offline: 'Offline',
             };
 
             // فلترة البوتات حسب الاختيار
@@ -655,13 +1161,13 @@ module.exports = {
                 });
 
                 const embed = new EmbedBuilder()
-                    .setTitle(`🔗 روابط البوتات — ${code}`)
+                    .setTitle(`Bot Links — ${code}`)
                     .setDescription(
                         `> **الفلتر:** ${FILTER_LABELS[lpFilter]}  |  **النتائج:** ${filtered.length} بوت\n` +
                         `\u200b\n` +
                         (lines.length ? lines.join('\n') : '*لا توجد بوتات في هذه الفئة.*')
                     )
-                    .setColor(Colors)
+                    .setColor(getEmbedColor(client))
                     .setFooter({ text: `صفحة ${lpPage + 1} / ${totalPages}  •  ${code}` });
 
                 return { embed, totalPages, start, end };
@@ -673,24 +1179,25 @@ module.exports = {
                 const row1 = new ActionRowBuilder().addComponents(
                     new ButtonBuilder()
                         .setCustomId(`lp_${mid}_prev`)
-                        .setLabel('◀️')
+                        .setEmoji(MUSIC_EMOJIS.pagePrev)
                         .setStyle(ButtonStyle.Secondary)
                         .setDisabled(lpPage === 0),
                     new ButtonBuilder()
                         .setCustomId(`lp_${mid}_next`)
-                        .setLabel('▶️')
+                        .setEmoji(MUSIC_EMOJIS.pageNext)
                         .setStyle(ButtonStyle.Secondary)
                         .setDisabled(end >= filtered.length),
                     new ButtonBuilder()
                         .setCustomId(`lp_${mid}_back`)
-                        .setLabel('⬅️ رجوع')
+                        .setLabel('Back')
+                        .setEmoji(MUSIC_EMOJIS.pagePrev)
                         .setStyle(ButtonStyle.Secondary)
                 );
 
                 const row2 = new ActionRowBuilder().addComponents(
                     new StringSelectMenuBuilder()
                         .setCustomId(`lp_${mid}_filter`)
-                        .setPlaceholder('🔽 فلتر البوتات')
+                        .setPlaceholder('Filter bots')
                         .addOptions(
                             Object.entries(FILTER_LABELS).map(([val, lbl]) => ({
                                 label: lbl,

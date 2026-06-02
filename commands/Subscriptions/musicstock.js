@@ -1,7 +1,8 @@
-const { owners, prefix, Colors } = require(`${process.cwd()}/settings/config`);
+const { owners, prefix } = require(`${process.cwd()}/settings/config`);
 const { EmbedBuilder } = require('discord.js');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
+const { getEmbedColor } = require('../../utils/embedColor');
 
 module.exports = {
   name: 'musicstock',
@@ -19,7 +20,7 @@ module.exports = {
     const userTokenCount = tokens.length;
     
     const embed = new EmbedBuilder()
-      .setColor(Colors) 
+      .setColor(getEmbedColor(client))
       .setDescription(`***Tokens Stock,***\n***works:*** ${userTokenCount} \`${userTokenCount === 0 ? '🔴' : '🟢'}\`\n***Available:*** ${botTokenCount} \`🟢\``)
    
     message.reply({ embeds: [embed] });

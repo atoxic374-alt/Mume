@@ -1,5 +1,5 @@
 const path = require('path');
-const { owners, Colors, logChannelId, Botsname } = require(`${process.cwd()}/settings/config`);
+const { owners, logChannelId, Botsname } = require(`${process.cwd()}/settings/config`);
 const { EmbedBuilder, Client, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');

@@ -19,8 +19,9 @@ const {
 const fs = require('fs');
 const store = require('./utils/store');
 const config = require(`${process.cwd()}/config`);
+const { getEmbedColor, refreshEmbedColor } = require('./utils/embedColor');
 
-const { prefix, Colors, Token, logChannelId } = config;
+const { prefix, Token, logChannelId } = config;
 
 const client = new Client({
     intents: [
@@ -78,6 +79,7 @@ require('./manager.js');
       });
 
 client.once('ready', () => {
+    refreshEmbedColor(client).catch(() => {});
     const { checkAndReplaceTokens } = require('./tokenHealthChecker');
     setTimeout(() => checkAndReplaceTokens(client), 15000);
     setInterval(() => checkAndReplaceTokens(client), 30 * 60 * 1000);
@@ -99,7 +101,7 @@ client.once('ready', () => {
             .setTitle("إشعار انتهى اشتراك! 🔔")
             .setThumbnail("https://cdn.discordapp.com/attachments/1091536665912299530/1316233635464220803/512-512-max.png?ex=675a4d99&is=6758fc19&hm=352d005827ec0252e09be31a939f3c2f1abb3c8a0d660f20012ac80a2bc62b12&")
             .setDescription(`> الإسم : <@${user.id}>\n> ألاشتراك : \`Music x${log.botsCount}\` \`(SuID ${log.code})\`\n> بدأ فيـ : \`${new Date(log.expirationTime).toLocaleString()}\``)
-            .setColor(Colors);
+            .setColor(getEmbedColor(client));
             
                user.send({ content: `> <@${user.id}>`, embeds: [userembed] })
               .catch(error => console.error(`Could not send DM to ${user.tag}.\n`, error)); 
@@ -109,7 +111,7 @@ client.once('ready', () => {
             .setTitle("إشعار انتهى اشتراك! 🔔")
             .setThumbnail("https://cdn.discordapp.com/attachments/1091536665912299530/1316233635464220803/512-512-max.png?ex=675a4d99&is=6758fc19&hm=352d005827ec0252e09be31a939f3c2f1abb3c8a0d660f20012ac80a2bc62b12&")
             .setDescription(`> الإسم : <@${user.id}>\n> ألاشتراك : \`Music x${log.botsCount}\` \`(SuID ${log.code})\`\n> بدأ فيـ : \`${new Date(log.expirationTime).toLocaleString()}\``)
-            .setColor(Colors);
+            .setColor(getEmbedColor(client));
             
             if (logChannel) logChannel.send({ content: "```العملية تمت بنجاح، وتم حذف أشتراك العميل.```", embeds: [embed] });
              

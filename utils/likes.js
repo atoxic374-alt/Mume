@@ -32,12 +32,24 @@ db.serialize(() => {
 
 // ── Public API (all async via callbacks wrapped in Promises) ──────────────
 
+function trackKey(track) {
+    const info = track?.info || track || {};
+    return info.uri
+        || info.identifier
+        || [info.sourceName, info.author, info.title, info.length].filter(Boolean).join(':')
+        || null;
+}
+
 /**
  * Toggle like for a track. Returns { liked: true/false }
  */
 function toggle(userId, track) {
     return new Promise((resolve, reject) => {
-        const { uri, title, author = '', length = 0 } = track?.info || {};
+        const info = track?.info || {};
+        const uri = trackKey(track);
+        const title = info.title || 'Unknown track';
+        const author = info.author || '';
+        const length = Number(info.length || 0);
         if (!userId || !uri) return reject(new Error('missing userId or uri'));
 
         db.get(`SELECT 1 FROM likes WHERE userId=? AND uri=?`, [userId, uri], (err, row) => {
@@ -66,8 +78,10 @@ function toggle(userId, track) {
 /**
  * Check if a track is liked by the user. Returns boolean.
  */
-function isLiked(userId, uri) {
+function isLiked(userId, uriOrTrack) {
     return new Promise((resolve, reject) => {
+        const uri = typeof uriOrTrack === 'string' ? uriOrTrack : trackKey(uriOrTrack);
+        if (!userId || !uri) return resolve(false);
         db.get(`SELECT 1 FROM likes WHERE userId=? AND uri=?`, [userId, uri], (err, row) => {
             if (err) return reject(err);
             resolve(!!row);
@@ -114,4 +128,4 @@ function getAllLikes(userId) {
     });
 }
 
-module.exports = { toggle, isLiked, getLikes, getAllLikes };
+module.exports = { toggle, isLiked, getLikes, getAllLikes, trackKey };

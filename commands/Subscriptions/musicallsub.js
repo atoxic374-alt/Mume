@@ -1,7 +1,8 @@
-const { owners, Colors } = require(`${process.cwd()}/settings/config`);
+const { owners } = require(`${process.cwd()}/settings/config`);
 const { ActionRowBuilder, ButtonBuilder, EmbedBuilder, ButtonStyle } = require('discord.js');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
+const { getEmbedColor } = require('../../utils/embedColor');
 
 module.exports = {
   name: 'musicallsub',
@@ -29,7 +30,7 @@ module.exports = {
 
         const embed = new EmbedBuilder()
           .setTitle('📋 جميع الاشتراكات')
-          .setColor(Colors)
+          .setColor(getEmbedColor(client))
           .setFooter({ text: `الصفحة ${page}/${totalPages} | الإجمالي: ${logsArray.length}`, iconURL: client.user.displayAvatarURL() });
 
         let description = '';

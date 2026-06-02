@@ -1,7 +1,8 @@
-const { owners, prefix, Colors } = require(`${process.cwd()}/settings/config`);
+const { owners, prefix } = require(`${process.cwd()}/settings/config`);
 const { EmbedBuilder } = require('discord.js');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
+const { getEmbedColor } = require('../../utils/embedColor');
 
 module.exports = {
   name: 'mysub',
@@ -43,7 +44,7 @@ module.exports = {
       });
 
       const embed = new EmbedBuilder()
-        .setColor(Colors)
+        .setColor(getEmbedColor(client))
         .setFooter({
           text: `${message.client.user.username} | Timer`,
           iconURL: `${message.client.user.displayAvatarURL({ dynamic: true })}`

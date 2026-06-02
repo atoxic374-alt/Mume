@@ -1,6 +1,6 @@
 const { Client, GatewayIntentBits, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
-const { Colors } = require('./config');
 const store = require('./utils/store');
+const { getEmbedColor } = require('./utils/embedColor');
 
 // ── Extract bot ID from token (base64 first segment) ──────────────────────────
 function extractBotId(token) {
@@ -52,65 +52,61 @@ async function validateToken(token) {
     });
 }
 
+const NO_STOCK_NOTICE_INTERVAL = 12 * 60 * 60 * 1000;
+
+async function resolveBotName(mainClient, botId, runningName) {
+    if (runningName) return runningName;
+    if (!botId) return null;
+
+    const user = await mainClient.users.fetch(botId).catch(() => null);
+    return user?.username || null;
+}
+
+function shouldSendNoStockNotice(entry, oldBotId) {
+    const now = Date.now();
+    const sameInvalidBot = entry.invalidBotId === oldBotId;
+    const lastNotice = Number(entry.invalidTokenNotifiedAt || 0);
+    return !sameInvalidBot || !lastNotice || now - lastNotice >= NO_STOCK_NOTICE_INTERVAL;
+}
+
 // ── Notify subscription owner with a clean embed ──────────────────────────────
-async function notifyOwner(mainClient, entry, oldBotId, oldBotName, newBotInfo) {
+async function notifyOwner(mainClient, entry, oldBotName, newBotInfo) {
     try {
         const owner = await mainClient.users.fetch(entry.client).catch(() => null);
         if (!owner) return;
 
-        const oldDisplay = oldBotName
-            ? `**${oldBotName}** (\`${oldBotId}\`)`
-            : `\`${oldBotId || 'Unknown'}\``;
+        const oldDisplay = oldBotName ? `**${oldBotName}**` : '**Previous bot**';
+        const newDisplay = newBotInfo?.name ? `**${newBotInfo.name}**` : '**New bot**';
 
-        // ── Description ──────────────────────────────────────────────────
         const desc = [
-            `> **Your bot token has expired or been changed**`,
-            `> التوكن الخاص ببوتك انتهى صلاحيته أو تغيّر`,
+            `> **Bot replaced automatically**`,
+            `> تم استبدال البوت تلقائياً بنفس إعدادات اشتراكك.`,
             ``,
-            `**Subscription** — \`${entry.code}\``,
-            `**Old Bot** — ${oldDisplay}`,
+            `**Subscription:** \`${entry.code}\``,
+            `**Old Bot:** ${oldDisplay}`,
+            `**New Bot:** ${newDisplay}`,
             ``,
-            `━━━━━━━━━━━━━━━━━━━━━━━━`,
-            ``,
-            `**What happened?**`,
-            `الجهاز الذي أُنشئ منه التوكن قام بإعادة توليده، مما أبطل التوكن القديم.`,
-            ``,
-            `**What to do?**`,
-            `1 — **Kick the old bot** من جميع سيرفراتك — اسمه ${oldDisplay}`,
-            `2 — **Invite the new bot** باستخدام الرابط أدناه`,
-            `3 — **Setup the new bot** بنفس الإعدادات السابقة`,
+            `ادعُ البوت الجديد فقط. القنوات، الحالة، المنصة، والأزرار بقيت كما هي.`,
         ].join('\n');
 
         const embed = new EmbedBuilder()
-            .setColor(0xED4245) // Discord red — خطر
-            .setTitle('⚠️  Bot Token Replaced')
+            .setColor(getEmbedColor(newBotInfo?.avatar || mainClient))
+            .setTitle('Bot Ready')
             .setDescription(desc)
             .setTimestamp();
 
-        if (newBotInfo) {
-            embed.addFields({
-                name: '🤖  New Bot',
-                value: [
-                    `**Name** — ${newBotInfo.name}`,
-                    `**ID** — \`${newBotInfo.id}\``,
-                ].join('\n'),
-                inline: false,
-            });
-            if (newBotInfo.avatar) embed.setThumbnail(newBotInfo.avatar);
-        }
+        if (newBotInfo?.avatar) embed.setThumbnail(newBotInfo.avatar);
+        embed.setFooter({ text: 'لا تشارك توكنات البوت مع أي شخص.' });
 
-        embed.setFooter({ text: 'هذا الإشعار تلقائي — لا تشارك التوكنات مع أحد' });
-
-        // ── Invite button ─────────────────────────────────────────────────
         const components = [];
         if (newBotInfo?.invite) {
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
-                    .setLabel('Invite New Bot')
+                    .setLabel('Invite Bot')
                     .setStyle(ButtonStyle.Link)
                     .setURL(newBotInfo.invite),
                 new ButtonBuilder()
-                    .setLabel('Support Server')
+                    .setLabel('Support')
                     .setStyle(ButtonStyle.Link)
                     .setURL('https://discord.gg/ens'),
             );
@@ -124,6 +120,33 @@ async function notifyOwner(mainClient, entry, oldBotId, oldBotName, newBotInfo) 
     }
 }
 
+async function notifyNoStock(mainClient, entry, oldBotName) {
+    const noStockEmbed = new EmbedBuilder()
+        .setColor(0xED4245)
+        .setTitle('Bot Waiting For Replacement')
+        .setDescription([
+            `> **Your bot is paused temporarily.**`,
+            `> البوت متوقف مؤقتاً ولا يوجد بديل متاح الآن.`,
+            ``,
+            `**Subscription:** \`${entry.code}\``,
+            `**Bot:** ${oldBotName ? `**${oldBotName}**` : '**Previous bot**'}`,
+            ``,
+            `سيتم استبداله تلقائياً بنفس الإعدادات عند توفر بوت بديل.`,
+        ].join('\n'))
+        .setTimestamp()
+        .setFooter({ text: 'لا تشارك توكنات البوت مع أي شخص.' });
+
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setLabel('Support Server')
+            .setStyle(ButtonStyle.Link)
+            .setURL('https://discord.gg/ens'),
+    );
+
+    const owner = await mainClient.users.fetch(entry.client).catch(() => null);
+    if (owner) await owner.send({ embeds: [noStockEmbed], components: [row] }).catch(() => {});
+}
+
 // ── Main checker ──────────────────────────────────────────────────────────────
 async function checkAndReplaceTokens(mainClient) {
     try {
@@ -131,6 +154,7 @@ async function checkAndReplaceTokens(mainClient) {
         let botsArray   = store.get('bots')   || [];
 
         let changed = false;
+        const replacementsToStart = [];
         const batchSize = 5;
 
         // جلب runningBots لمعرفة اسم البوت القديم لو كان شغّالاً
@@ -147,61 +171,84 @@ async function checkAndReplaceTokens(mainClient) {
                 console.warn(`[TokenChecker] Invalid token detected — sub ${entry.code} owner ${entry.client}`);
 
                 // ── معلومات البوت القديم ──────────────────────────────────
-                const oldBotId   = extractBotId(entry.token);
-                const oldBotName = runningBots?.get(entry.token)?.user?.username || null;
+                const oldBotId = extractBotId(entry.token);
+                const oldBotName = await resolveBotName(
+                    mainClient,
+                    oldBotId,
+                    runningBots?.get(entry.token)?.user?.username || null
+                );
 
                 // ── استبدال من المخزون ────────────────────────────────────
                 if (botsArray.length === 0) {
                     console.error(`[TokenChecker] No replacement bots — sub ${entry.code}`);
 
-                    // أُبلغ المالك حتى لو ما في استبدال
-                    const noStockEmbed = new EmbedBuilder()
-                        .setColor(0xED4245)
-                        .setTitle('⚠️  Bot Token Expired — No Replacement Available')
-                        .setDescription([
-                            `> **Your bot token has expired or been changed**`,
-                            `> التوكن الخاص ببوتك انتهى ولا يوجد بوت بديل حالياً`,
-                            ``,
-                            `**Subscription** — \`${entry.code}\``,
-                            `**Old Bot** — ${oldBotName ? `**${oldBotName}** (\`${oldBotId}\`)` : `\`${oldBotId || 'Unknown'}\``}`,
-                            ``,
-                            `━━━━━━━━━━━━━━━━━━━━━━━━`,
-                            ``,
-                            `تواصل مع الإدارة لتجديد بوتك. سيتم إعادة تفعيل اشتراكك بمجرد توفّر بوت بديل.`,
-                        ].join('\n'))
-                        .setTimestamp()
-                        .setFooter({ text: `اطرد البوت القديم حتى لا يشغل مكاناً — ${oldBotName || oldBotId || ''}` });
+                    if (!shouldSendNoStockNotice(entry, oldBotId)) return;
+                    await notifyNoStock(mainClient, entry, oldBotName);
 
-                    const row = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder()
-                            .setLabel('Support Server')
-                            .setStyle(ButtonStyle.Link)
-                            .setURL('https://discord.gg/ens'),
-                    );
-
-                    const owner = await mainClient.users.fetch(entry.client).catch(() => null);
-                    if (owner) await owner.send({ embeds: [noStockEmbed], components: [row] }).catch(() => {});
+                    entry.invalidBotId = oldBotId || null;
+                    entry.invalidTokenNotifiedAt = Date.now();
+                    changed = true;
                     return;
                 }
 
-                const newBot = botsArray.shift();
                 const oldToken = entry.token;
-                entry.token = newBot.token;
-                changed = true;
+                let newBot = null;
+                let newBotInfo = null;
 
-                // ── جلب معلومات البوت الجديد ──────────────────────────────
-                const newBotInfo = await fetchBotInfo(entry.token);
+                while (botsArray.length > 0 && !newBotInfo) {
+                    newBot = botsArray.shift();
+                    newBotInfo = await fetchBotInfo(newBot.token);
+                    if (!newBotInfo) {
+                        changed = true;
+                        console.warn(`[TokenChecker] Skipped invalid replacement token from stock — sub ${entry.code}`);
+                    }
+                }
+
+                if (!newBotInfo) {
+                    console.error(`[TokenChecker] No valid replacement bots — sub ${entry.code}`);
+                    if (!shouldSendNoStockNotice(entry, oldBotId)) return;
+                    await notifyNoStock(mainClient, entry, oldBotName);
+                    entry.invalidBotId = oldBotId || null;
+                    entry.invalidTokenNotifiedAt = Date.now();
+                    changed = true;
+                    return;
+                }
+
+                entry.token = newBot.token;
+                delete entry.invalidBotId;
+                delete entry.invalidTokenNotifiedAt;
+                changed = true;
 
                 console.log(`[TokenChecker] Replaced token for sub ${entry.code} → new bot ${newBotInfo?.name || '?'} (${newBotInfo?.id || '?'})`);
 
                 // ── إشعار المالك ──────────────────────────────────────────
-                await notifyOwner(mainClient, entry, oldBotId, oldBotName, newBotInfo);
+                const oldClient = runningBots?.get(oldToken);
+                if (oldClient) {
+                    await oldClient.destroy().catch(() => {});
+                    runningBots.delete(oldToken);
+                }
+
+                replacementsToStart.push({ token: entry.token, Server: entry.Server });
+
+                await notifyOwner(mainClient, entry, oldBotName, newBotInfo);
             }));
         }
 
         if (changed) {
             store.set('tokens', tokensArray);
             store.set('bots',   botsArray);
+            store.flushSync();
+        }
+
+        if (replacementsToStart.length > 0) {
+            const music = require('./music');
+            for (const botData of replacementsToStart) {
+                setImmediate(() => {
+                    music.runsys(botData.token, botData.Server).catch((err) => {
+                        console.error(`[TokenChecker] Failed to start replacement for ${botData.Server}:`, err?.message || err);
+                    });
+                });
+            }
         }
 
     } catch (err) {

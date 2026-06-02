@@ -1,8 +1,9 @@
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require("discord.js");
-const { owners, Colors } = require(`${process.cwd()}/settings/config`);
+const { owners } = require(`${process.cwd()}/settings/config`);
 const fs = require('fs');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
+const { getEmbedColor } = require('../../utils/embedColor');
 
 module.exports = {
   name: "automatic",
@@ -23,7 +24,7 @@ module.exports = {
           { name: "المخزون المتوفر", value: `\`${botsStock.length}\` بوت`, inline: true },
           { name: "الاشتراكات النشطة", value: `\`${activeSubs.length}\` اشتراك`, inline: true }
         )
-        .setColor(Colors)
+        .setColor(getEmbedColor(client))
         .setFooter({ text: "Mume Music System", iconURL: client.user.displayAvatarURL() });
 
       const buying = new ButtonBuilder()

@@ -1,4 +1,4 @@
-const { owners, Colors, logChannelId } = require(`${process.cwd()}/settings/config`);
+const { owners, logChannelId } = require(`${process.cwd()}/settings/config`);
 const {
   EmbedBuilder,
   ActionRowBuilder,
@@ -11,6 +11,7 @@ const {
 const ms = require('ms');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
+const { getEmbedColor } = require('../../utils/embedColor');
 
 module.exports = {
   name: 'musicaddsub',
@@ -41,7 +42,7 @@ module.exports = {
       .setThumbnail(mention.user.displayAvatarURL({ dynamic: true, size: 512 }))
       .addFields({ name: '👤 المستخدم', value: `<@${userId}>`, inline: true })
       .setFooter({ text: `${message.guild.name} | إضافة اشتراك`, iconURL: message.guild.iconURL({ dynamic: true }) })
-      .setColor(Colors);
+      .setColor(getEmbedColor(client));
 
     const getBots = () => {
       return store.get('bots') || [];
@@ -234,14 +235,14 @@ module.exports = {
       // DM
       mention.send({
         content: '```الشراء ناجح. اشتراكك مفعل الآن.```',
-        embeds: [new EmbedBuilder().setTitle('🎵 تم تفعيل اشتراكك!').addFields({ name: '🤖 البوتات', value: `\`${selectedCount}\` بوت`, inline: true }, { name: '⏳ المدة', value: `\`${formattedDuration}\``, inline: true }, { name: '🔖 رقم الاشتراك', value: `\`SuID #${randomCode}\``, inline: true }).setColor(Colors).setFooter({ text: `${message.guild.name} | Timer`, iconURL: message.guild.iconURL({ dynamic: true }) })]
+        embeds: [new EmbedBuilder().setTitle('🎵 تم تفعيل اشتراكك!').addFields({ name: '🤖 البوتات', value: `\`${selectedCount}\` بوت`, inline: true }, { name: '⏳ المدة', value: `\`${formattedDuration}\``, inline: true }, { name: '🔖 رقم الاشتراك', value: `\`SuID #${randomCode}\``, inline: true }).setColor(getEmbedColor(client)).setFooter({ text: `${message.guild.name} | Timer`, iconURL: message.guild.iconURL({ dynamic: true }) })]
       }).catch(() => {});
 
       // Log
       const logChannel = client.channels.cache.get(logChannelId);
       if (logChannel) {
         logChannel.send({
-          embeds: [new EmbedBuilder().setTitle('إضافة اشتراك! ✅').addFields({ name: '👤 المستخدم', value: `<@${userId}>`, inline: true }, { name: '🖥️ السيرفر', value: `\`${serverId}\``, inline: true }, { name: '🤖 البوتات', value: `\`${selectedCount}\``, inline: true }, { name: '⏳ المدة', value: `\`${formattedDuration}\``, inline: true }, { name: '🔖 SuID', value: `\`#${randomCode}\``, inline: true }, { name: '🛠️ بواسطة', value: `<@${message.author.id}>`, inline: true }).setColor(Colors).setFooter({ text: `${message.guild.name} | Timer`, iconURL: message.guild.iconURL({ dynamic: true }) })]
+          embeds: [new EmbedBuilder().setTitle('إضافة اشتراك! ✅').addFields({ name: '👤 المستخدم', value: `<@${userId}>`, inline: true }, { name: '🖥️ السيرفر', value: `\`${serverId}\``, inline: true }, { name: '🤖 البوتات', value: `\`${selectedCount}\``, inline: true }, { name: '⏳ المدة', value: `\`${formattedDuration}\``, inline: true }, { name: '🔖 SuID', value: `\`#${randomCode}\``, inline: true }, { name: '🛠️ بواسطة', value: `<@${message.author.id}>`, inline: true }).setColor(getEmbedColor(client)).setFooter({ text: `${message.guild.name} | Timer`, iconURL: message.guild.iconURL({ dynamic: true }) })]
         });
       }
 

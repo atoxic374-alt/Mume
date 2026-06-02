@@ -11,24 +11,356 @@ const {
     ButtonStyle,
     StringSelectMenuBuilder,
     ActivityType,
-    Options
+    Options,
+    ComponentType
 } = require('discord.js');
 
 const fs = require('fs');
 const { Poru } = require('poru');
 
-const { Colors, owners, TwitchUrl, statuses } = require(`${process.cwd()}/config`);
+const { owners, TwitchUrl, statuses } = require(`${process.cwd()}/config`);
 const { getVoiceConnection } = require('@discordjs/voice');
 const duratiform = require('duratiform');
 
 const store = require('./utils/store');
 const likes = require('./utils/likes');
+const { getDisplay } = require('./utils/display');
+const MUSIC_EMOJIS = require('./utils/musicEmojis');
+const { getEmbedColor, refreshEmbedColor } = require('./utils/embedColor');
 
 const runningBots = new Collection();
 const botLastActivity = new Map();
 const tempData = new Collection();
 tempData.set("bots", []);
 const collection = new Collection();
+
+const FILTER_NAMES = {
+    clear: 'بدون فلتر',
+    bassboost: 'Bass Boost',
+    nightcore: 'Nightcore',
+    '8d': '8D Audio',
+    vaporwave: 'Vaporwave',
+    karaoke: 'Karaoke',
+    tremolo: 'Tremolo',
+    vibrato: 'Vibrato',
+    lowpass: 'Low Pass',
+    channelmix: 'Channel Mix',
+};
+
+const FILTER_OPTIONS = [
+    { label: 'إيقاف الفلاتر', value: 'clear', description: 'إزالة جميع الفلاتر', emoji: '⬛' },
+    { label: 'Bass Boost', value: 'bassboost', description: 'جهير أوضح بدون تشويه', emoji: '🔊' },
+    { label: 'Nightcore', value: 'nightcore', description: 'سرعة ونبرة أعلى', emoji: '🌙' },
+    { label: '8D Audio', value: '8d', description: 'حركة صوتية خفيفة', emoji: '🌀' },
+    { label: 'Vaporwave', value: 'vaporwave', description: 'أبطأ وأنعم', emoji: '🌊' },
+    { label: 'Karaoke', value: 'karaoke', description: 'تقليل الصوت البشري', emoji: '🎤' },
+    { label: 'Tremolo', value: 'tremolo', description: 'اهتزاز مستوى الصوت', emoji: '〰️' },
+    { label: 'Vibrato', value: 'vibrato', description: 'اهتزاز النبرة', emoji: '📳' },
+    { label: 'Low Pass', value: 'lowpass', description: 'صوت أنعم', emoji: '🔉' },
+    { label: 'Channel Mix', value: 'channelmix', description: 'مزج خفيف للقنوات', emoji: '🔀' },
+];
+
+const BASE_FILTERS = {
+    volume: 1.0,
+    equalizer: [],
+    karaoke: undefined,
+    timescale: undefined,
+    tremolo: undefined,
+    vibrato: undefined,
+    rotation: undefined,
+    distortion: undefined,
+    channelMix: undefined,
+    lowPass: undefined,
+};
+
+const FILTER_PRESETS = {
+    clear: {},
+    bassboost: {
+        equalizer: [
+            { band: 0, gain: 0.16 }, { band: 1, gain: 0.14 }, { band: 2, gain: 0.10 },
+            { band: 3, gain: 0.06 }, { band: 4, gain: 0.03 }, { band: 5, gain: 0.00 },
+            { band: 6, gain: -0.02 },
+        ],
+    },
+    nightcore: { timescale: { speed: 1.12, pitch: 1.10, rate: 1.0 } },
+    '8d': { rotation: { rotationHz: 0.14 } },
+    vaporwave: { timescale: { speed: 0.92, pitch: 0.90, rate: 1.0 } },
+    karaoke: { karaoke: { level: 0.35, monoLevel: 0.35, filterBand: 220.0, filterWidth: 90.0 } },
+    tremolo: { tremolo: { frequency: 3.5, depth: 0.25 } },
+    vibrato: { vibrato: { frequency: 4.5, depth: 0.25 } },
+    lowpass: { lowPass: { smoothing: 5.0 } },
+    channelmix: { channelMix: { leftToLeft: 0.85, leftToRight: 0.15, rightToLeft: 0.15, rightToRight: 0.85 } },
+};
+
+function displaySettings(tokenObj) {
+    const saved = tokenObj?.code ? getDisplay(tokenObj.code) : {};
+    return {
+        buttons: tokenObj?.buttons ? tokenObj.buttons === 'on' : saved.buttons !== false,
+        embeds: tokenObj?.embeds ? tokenObj.embeds === 'on' : saved.embeds !== false,
+        platform: tokenObj?.source || saved.platform || 'ytsearch',
+    };
+}
+
+function shortDuration(ms) {
+    const value = Number(ms || 0);
+    if (!value || value < 0) return 'Live';
+    const total = Math.floor(value / 1000);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = String(total % 60).padStart(2, '0');
+    return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+}
+
+function createMusicControlButtons(liked = false) {
+    const row1 = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId('loop')
+                .setEmoji(MUSIC_EMOJIS.loop)
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('volume_up')
+                .setEmoji(MUSIC_EMOJIS.volumeUp)
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('pause')
+                .setEmoji(MUSIC_EMOJIS.pause)
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('volume_down')
+                .setEmoji(MUSIC_EMOJIS.volumeDown)
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('skip')
+                .setEmoji(MUSIC_EMOJIS.skip)
+                .setStyle(ButtonStyle.Secondary),
+        );
+    const row2 = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId('like')
+                .setLabel(liked ? '💔 إلغاء اللايك' : '❤️ لايك')
+                .setStyle(liked ? ButtonStyle.Danger : ButtonStyle.Secondary),
+        );
+    return [row1, row2];
+}
+
+function buildMusicComponents({ liked = false, artistTracks = [], selectedFilter = 'clear', selectedArtistIndex = null, showControls = true }) {
+    const rows = [];
+    if (showControls) rows.push(...createMusicControlButtons(liked));
+
+    if (showControls && artistTracks.length > 0) {
+        const artistMenu = new StringSelectMenuBuilder()
+            .setCustomId('np_artist')
+            .setPlaceholder('أفضل 5 أغاني لنفس الفنان')
+            .addOptions(artistTracks.slice(0, 5).map((t, i) => ({
+                label: (t.info.title || 'Unknown').slice(0, 99),
+                value: String(i),
+                description: `${shortDuration(t.info.length)} · ${(t.info.author || '').slice(0, 50)}`.slice(0, 99),
+                emoji: ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'][i],
+                default: selectedArtistIndex === i,
+            })));
+        rows.push(new ActionRowBuilder().addComponents(artistMenu));
+    }
+
+    if (showControls) {
+        const filterMenu = new StringSelectMenuBuilder()
+            .setCustomId('np_filter')
+            .setPlaceholder('الفلاتر الصوتية')
+            .addOptions(FILTER_OPTIONS.map(option => ({
+                ...option,
+                default: option.value === selectedFilter,
+            })));
+        rows.push(new ActionRowBuilder().addComponents(filterMenu));
+    }
+
+    return rows.slice(0, 5);
+}
+
+function buildNowPlayingPayload(TrueMusic, tokenObj, track, requester, options = {}) {
+    const settings = displaySettings(tokenObj);
+    const title = track?.info?.title || 'Unknown track';
+    const uri = track?.info?.uri;
+    const duration = shortDuration(track?.info?.length);
+    const requesterName = requester?.displayName || requester?.username || 'Unknown';
+    const titleText = uri ? `[${title}](${uri})` : title;
+    const components = buildMusicComponents({
+        liked: !!options.liked,
+        artistTracks: options.artistTracks || [],
+        selectedFilter: options.selectedFilter || 'clear',
+        selectedArtistIndex: options.selectedArtistIndex ?? null,
+        showControls: settings.buttons,
+    });
+
+    if (settings.embeds) {
+        const embed = new EmbedBuilder()
+            .setColor(getEmbedColor(TrueMusic))
+            .setTitle('Now Playing')
+            .setThumbnail('attachment://NowPlaying.png')
+            .setDescription(`**${titleText}**`)
+            .addFields(
+                { name: 'Duration', value: `\`${duration}\``, inline: true },
+                { name: 'By', value: `**${requesterName}**`, inline: true },
+            )
+            .setFooter({
+                text: TrueMusic.user?.displayName || TrueMusic.user?.username || 'Music',
+                iconURL: TrueMusic.user?.displayAvatarURL?.({ dynamic: true }),
+            });
+
+        return {
+            content: `🎶 **${TrueMusic.user?.displayName || TrueMusic.user?.username || 'Music'}**`,
+            embeds: [embed],
+            files: ['./assets/image/icons/NowPlaying.png'],
+            components,
+        };
+    }
+
+    return {
+        content: `🎶 Now playing: **${title}** • \`${duration}\` • ${requesterName}`,
+        embeds: [],
+        components,
+    };
+}
+
+function compactMusicText({ title, description, fields = [] }) {
+    const parts = [];
+    if (title) parts.push(`**${title}**`);
+    if (description) parts.push(description);
+    fields.forEach(field => {
+        if (field?.name && field?.value) parts.push(`**${field.name}:** ${field.value}`);
+    });
+    return parts.join('\n') || 'Done.';
+}
+
+function musicPayload(tokenObj, { title, description, fields = [], components = [], color = undefined, thumbnail = null, files = [] }) {
+    const settings = displaySettings(tokenObj);
+    const colorSource = tokenObj?.token ? runningBots.get(tokenObj.token) : null;
+    const payload = {
+        components: settings.buttons && components.length ? components : [],
+    };
+
+    if (settings.embeds) {
+        const embed = new EmbedBuilder().setColor(getEmbedColor(colorSource, color));
+        if (title) embed.setTitle(title);
+        if (description) embed.setDescription(description);
+        if (thumbnail) embed.setThumbnail(thumbnail);
+        if (fields.length) embed.addFields(fields);
+        payload.embeds = [embed];
+        if (files.length) payload.files = files;
+    } else {
+        payload.content = compactMusicText({ title, description, fields });
+        payload.embeds = [];
+    }
+
+    return payload;
+}
+
+function platformDisplay(source) {
+    const names = {
+        ytsearch: 'YouTube',
+        ytmsearch: 'YouTube Music',
+        scsearch: 'SoundCloud',
+        spsearch: 'Spotify',
+        amsearch: 'Apple Music',
+        dzsearch: 'Deezer',
+    };
+    return `${MUSIC_EMOJIS.platforms[source] || '🎵'} ${names[source] || source || 'YouTube'}`;
+}
+
+function buildBotInfoEmbed(TrueMusic, tokenObj, guildId) {
+    const settings = displaySettings(tokenObj);
+    const guild = TrueMusic.guilds.cache.get(guildId);
+    const me = guild?.members?.me;
+    const voiceChannel = me?.voice?.channel;
+    const player = TrueMusic.poru.players.get(guildId);
+    const currentTrack = player?.currentTrack;
+    const nodeName = player?.node?.options?.name || player?.node?.options?.host || 'Offline';
+    const activeFilter = player?.data?.activeFilter || 'clear';
+    const uptime = TrueMusic.readyAt
+        ? `<t:${Math.floor(TrueMusic.readyAt.getTime() / 1000)}:R>`
+        : 'Unknown';
+
+    const playback = currentTrack
+        ? [
+            `**Song :** **${(currentTrack.info?.title || 'Unknown').slice(0, 80)}**`,
+            `**Volume :** \`${player.volume || 100}%\``,
+            `**Loop :** \`${player.loop === 'TRACK' ? 'ON' : 'OFF'}\``,
+            `**Autoplay :** \`${player.data?.autoPlay ? 'ON' : 'OFF'}\``,
+            `**Filter :** \`${FILTER_NAMES[activeFilter] || activeFilter}\``,
+        ].join('\n')
+        : '> **Nothing is playing right now.**';
+
+    return new EmbedBuilder()
+        .setColor(getEmbedColor(TrueMusic))
+        .setAuthor({
+            name: TrueMusic.user?.username || 'Music Bot',
+            iconURL: TrueMusic.user?.displayAvatarURL?.({ dynamic: true }),
+        })
+        .setTitle('Bot Info')
+        .setThumbnail(TrueMusic.user?.displayAvatarURL?.({ dynamic: true, size: 256 }))
+        .addFields(
+            {
+                name: 'Bot',
+                value: [
+                    `**Name :** **${TrueMusic.user?.username || 'Unknown'}**`,
+                    `**ID :** \`${TrueMusic.user?.id || 'Unknown'}\``,
+                    `**Ping :** \`${Math.round(TrueMusic.ws.ping || 0)}ms\``,
+                    `**Uptime :** ${uptime}`,
+                ].join('\n'),
+                inline: false,
+            },
+            {
+                name: 'Music',
+                value: [
+                    `**Platform :** ${platformDisplay(settings.platform)}`,
+                    `**Voice :** ${voiceChannel ? `<#${voiceChannel.id}>` : '`Not Connected`'}`,
+                    `**Node :** \`${nodeName}\``,
+                ].join('\n'),
+                inline: true,
+            },
+            {
+                name: 'Display',
+                value: [
+                    `**Buttons :** \`${settings.buttons ? 'ON' : 'OFF'}\``,
+                    `**Embeds :** \`${settings.embeds ? 'ON' : 'OFF'}\``,
+                    `**Prefix :** \`${tokenObj?.prefix || 'No Prefix'}\``,
+                ].join('\n'),
+                inline: true,
+            },
+            {
+                name: 'Now Playing',
+                value: playback,
+                inline: false,
+            },
+        )
+        .setFooter({ text: TrueMusic.user?.username || 'Music Bot' })
+        .setTimestamp();
+}
+
+function disableComponents(components = []) {
+    return components.map(row => {
+        const next = new ActionRowBuilder();
+        next.addComponents(row.components.map(component => {
+            const type = component.data?.type || component.type;
+            if (type === ComponentType.Button) return ButtonBuilder.from(component).setDisabled(true);
+            if (type === ComponentType.StringSelect) return StringSelectMenuBuilder.from(component).setDisabled(true);
+            return component;
+        }));
+        return next;
+    });
+}
+
+async function finalizePlayerUi(player) {
+    const msg = player?.data?.nowPlayingMessage;
+    if (msg?.components?.length) {
+        await msg.edit({ components: disableComponents(msg.components) }).catch(() => {});
+    }
+    if (player?.data) {
+        player.data.nowPlayingMessage = null;
+        player.data.nowPlayingToken = null;
+        player.data.ui = null;
+    }
+}
 
 module.exports = {
     runsys: async function runBotSystem(token, idbot) {
@@ -161,6 +493,7 @@ module.exports = {
         let lastVCStatus = null;
 
         TrueMusic.once('ready', async () => {
+            refreshEmbedColor(TrueMusic).catch(() => {});
             try { TrueMusic.poru.init(TrueMusic); } catch (e) { console.error(`[Poru] فشل الاتصال بـ Lavalink: ${e.message}`); }
             collection.set(TrueMusic.user.id, TrueMusic);
 
@@ -278,7 +611,7 @@ module.exports = {
 
                         const row1 = new ActionRowBuilder().addComponents(button1);
                         const helpEmbed = new EmbedBuilder()
-                            .setColor(Colors)
+                            .setColor(getEmbedColor(TrueMusic))
 
                             .setThumbnail("https://cdn.discordapp.com/attachments/1091536665912299530/1264225405465002025/O.png?ex=669d1928&is=669bc7a8&hm=ee36f6e8facc4eb99721570bc7f32dff9551bc5bea89d7a027c09408cafba604&")
                             .setDescription(`
@@ -320,7 +653,7 @@ module.exports = {
 
 
                         const additionalEmbed = new EmbedBuilder()
-                            .setColor(Colors)
+                            .setColor(getEmbedColor(TrueMusic))
                             .setDescription(`
                 **Owner :** <@${botOwnerId}>
                 **Ownerid :** \`${botOwnerId}\``);
@@ -332,7 +665,7 @@ module.exports = {
                         }).then(async () => {
 
                             const helpdma = new EmbedBuilder()
-                                .setColor(Colors)
+                                .setColor(getEmbedColor(TrueMusic))
                                 .setDescription(`> **تم إرسال الاوامر في الخاص.**`)
                                 .setFooter({
                                     text: 'Ens 𝐒𝐭𝐨𝐫𝐞',
@@ -558,15 +891,21 @@ module.exports = {
 
 
 
-    TrueMusic.poru.on("queueEnd", async (player) => {
-      if (!player?.data?.autoPlay || player.data.autoPlay === false) {
-        if (player.isPlaying) player.stop();
-        player.queue.clear();
-        player.data.autoPlay = false;
+    TrueMusic.poru.on('trackEnd', async (player) => {
+      await finalizePlayerUi(player);
+	    });
+
+	    TrueMusic.poru.on("queueEnd", async (player) => {
+	      await finalizePlayerUi(player);
+	      if (!player?.data?.autoPlay || player.data.autoPlay === false) {
+	        if (player.isPlaying) player.stop();
+	        player.queue.clear();
+	        player.data.autoPlay = false;
         return;
       }
       const currentTrack = player.currentTrack;
       if (!currentTrack) {
+        await finalizePlayerUi(player);
         if (player.isPlaying) player.stop();
         player.queue.clear();
         player.data.autoPlay = false;
@@ -579,6 +918,7 @@ module.exports = {
       });
 
       if (!res || res.tracks.length === 0) {
+        await finalizePlayerUi(player);
         if (player.isPlaying) player.stop();
         player.queue.clear();
         player.data.autoPlay = false;
@@ -588,6 +928,7 @@ module.exports = {
       const nextTrack = res.tracks.find(track => track.info.uri !== currentTrack.info.uri);
 
       if (!nextTrack) {
+        await finalizePlayerUi(player);
         if (player.isPlaying) player.stop();
         player.queue.clear();
         player.data.autoPlay = false;
@@ -606,150 +947,39 @@ module.exports = {
 
     // ── Helper: apply audio filter preset ──────────────────────────────
     async function applyFilter(player, name) {
-        const f = player.filters;
-        // أولاً نصفّر كل الفلاتر ثم نطبّق الجديد في طلب واحد
-        if (name === 'clear') {
-            await f.clearFilters();
-            return;
-        }
-        // نصفّر بدون await (غير محظور) ثم نطبّق الفلتر الجديد فوراً
-        f.clearFilters().catch(() => {});
-        switch (name) {
-            case 'bassboost':
-                await f.setEqualizer([
-                    { band: 0, gain: 0.35 }, { band: 1, gain: 0.30 }, { band: 2, gain: 0.25 },
-                    { band: 3, gain: 0.20 }, { band: 4, gain: 0.15 }, { band: 5, gain: 0.08 },
-                    { band: 6, gain: 0.02 }, { band: 7, gain: -0.02 }
-                ]); break;
-            case 'nightcore':
-                await f.setTimescale({ speed: 1.25, pitch: 1.3, rate: 1.0 }); break;
-            case '8d':
-                await f.setRotation({ rotationHz: 0.25 }); break;
-            case 'vaporwave':
-                await f.setTimescale({ speed: 0.8, pitch: 0.8, rate: 1.0 }); break;
-            case 'karaoke':
-                await f.setKaraoke({ level: 1.0, monoLevel: 1.0, filterBand: 220.0, filterWidth: 100.0 }); break;
-            case 'tremolo':
-                await f.setTremolo({ frequency: 4.0, depth: 0.75 }); break;
-            case 'vibrato':
-                await f.setVibrato({ frequency: 7.0, depth: 0.6 }); break;
-            case 'distortion':
-                await f.setDistortion({ sinOffset: 0, sinScale: 1, cosOffset: 1, cosScale: 0.6, tanOffset: 0, tanScale: 1, offset: 0, scale: 1.3 }); break;
-            case 'lowpass':
-                await f.setLowPass({ smoothing: 15 }); break;
-            case 'channelmix':
-                await f.setChannelMix({ leftToLeft: 0.5, leftToRight: 0.5, rightToLeft: 0.5, rightToRight: 0.5 }); break;
-        }
-    }
+        if (!player?.node?.rest) throw new Error('player is not connected');
+        const selected = FILTER_PRESETS[name] ? name : 'clear';
+        const filters = { ...BASE_FILTERS, ...FILTER_PRESETS[selected] };
 
-    // ── Helper: show artist top songs + filters menus ───────────────────
-    async function showPlayMenus(channel, requester, artistTracks, player, currentTrack) {
-        const filterNames = {
-            clear: 'بدون فلتر', bassboost: 'Bass Boost', nightcore: 'Nightcore',
-            '8d': '8D Audio', vaporwave: 'Vaporwave', karaoke: 'Karaoke',
-            tremolo: 'Tremolo', vibrato: 'Vibrato', distortion: 'Distortion',
-            lowpass: 'Low Pass', channelmix: 'Channel Mix'
-        };
-        const rows = [];
-
-        // Row 1: top songs by same artist
-        if (artistTracks.length > 0) {
-            const artistLabel = (currentTrack.info.author || '').slice(0, 40);
-            const artistMenu = new StringSelectMenuBuilder()
-                .setCustomId(`art_${requester.id}`)
-                .setPlaceholder(`🎵 أشهر أغاني ${artistLabel} — اضغط لتشغيل`)
-                .addOptions(artistTracks.slice(0, 5).map((t, i) => {
-                    const dur = t.info.length || 0;
-                    const min = Math.floor(dur / 60000);
-                    const sec = Math.floor((dur % 60000) / 1000).toString().padStart(2, '0');
-                    const lbl = (t.info.title || 'Unknown');
-                    return {
-                        label: lbl.length > 99 ? lbl.slice(0, 96) + '...' : lbl,
-                        value: i.toString(),
-                        description: `${min}:${sec} · ${(t.info.author || '').slice(0, 50)}`.slice(0, 99),
-                        emoji: ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'][i]
-                    };
-                }));
-            rows.push(new ActionRowBuilder().addComponents(artistMenu));
-        }
-
-        // Row 2: filters
-        const filtersMenu = new StringSelectMenuBuilder()
-            .setCustomId(`flt_${requester.id}`)
-            .setPlaceholder('🎛️ الفلاتر الصوتية — اختر فلتراً')
-            .addOptions([
-                { label: 'إيقاف الفلاتر',  value: 'clear',      description: 'إزالة جميع الفلاتر',           emoji: '⬛' },
-                { label: 'Bass Boost',       value: 'bassboost',  description: 'تضخيم الجهير',                  emoji: '🔊' },
-                { label: 'Nightcore',        value: 'nightcore',  description: 'سرعة + نبرة أعلى',              emoji: '🌙' },
-                { label: '8D Audio',         value: '8d',         description: 'صوت دائري ثلاثي الأبعاد',       emoji: '🌀' },
-                { label: 'Vaporwave',        value: 'vaporwave',  description: 'سرعة أبطأ + نبرة أخفض',         emoji: '🌊' },
-                { label: 'Karaoke',          value: 'karaoke',    description: 'إزالة الصوت البشري',             emoji: '🎤' },
-                { label: 'Tremolo',          value: 'tremolo',    description: 'اهتزاز في مستوى الصوت',          emoji: '〰️' },
-                { label: 'Vibrato',          value: 'vibrato',    description: 'اهتزاز في نبرة الصوت',           emoji: '📳' },
-                { label: 'Distortion',       value: 'distortion', description: 'تشويه صوتي',                    emoji: '💥' },
-                { label: 'Low Pass',         value: 'lowpass',    description: 'فلتر الترددات المنخفضة',         emoji: '🔉' },
-                { label: 'Channel Mix',      value: 'channelmix', description: 'مزج القنوات اليسرى/اليمنى',     emoji: '🔀' },
-            ]);
-        rows.push(new ActionRowBuilder().addComponents(filtersMenu));
-
-        const msg = await channel.send({ components: rows }).catch(() => null);
-        if (!msg) return;
-
-        const guildId = player.guildId;
-        // لا نحدد وقت — المنيوهات تبقى موجودة طوال التشغيل
-        const collector = msg.createMessageComponentCollector({ idle: 7200000 });
-
-        collector.on('collect', async i => {
-            if (i.user.id !== requester.id) {
-                return i.reply({ content: 'هذه القائمة ليست لك.', ephemeral: true }).catch(() => {});
-            }
-            const guildPlayer = TrueMusic.poru.players.get(guildId);
-
-            if (i.customId.startsWith('art_')) {
-                await i.deferUpdate().catch(() => {});
-                if (!guildPlayer) return;
-                const t = artistTracks[parseInt(i.values[0])];
-                if (!t) return;
-                t.info.requester = i.user;
-                guildPlayer.queue.add(t);
-                if (!guildPlayer.isPlaying && !guildPlayer.isPaused) guildPlayer.play();
-                i.followUp({ content: `> Added **${t.info.title}** to queue`, ephemeral: true }).catch(() => {});
-
-            } else if (i.customId.startsWith('flt_')) {
-                await i.deferUpdate().catch(() => {});
-                if (!guildPlayer) return;
-                const filterName = i.values[0];
-                try {
-                    await applyFilter(guildPlayer, filterName);
-                    const label = filterNames[filterName] || filterName;
-                    i.followUp({
-                        content: filterName === 'clear'
-                            ? '> Filters cleared'
-                            : `> Filter applied — **${label}**`,
-                        ephemeral: true
-                    }).catch(() => {});
-                } catch {
-                    i.followUp({ content: '> Failed to apply filter', ephemeral: true }).catch(() => {});
-                }
-            }
+        await player.node.rest.updatePlayer({
+            guildId: player.guildId,
+            data: { filters },
         });
 
-        // لا نحذف الرسالة عند انتهاء الـ collector — فقط نعطّل الأزرار
-        collector.on('end', () => {
-            msg.edit({ components: [] }).catch(() => {});
-        });
+        if (player.filters) {
+            player.filters.volume = filters.volume;
+            player.filters.equalizer = filters.equalizer || [];
+            player.filters.karaoke = filters.karaoke || undefined;
+            player.filters.timescale = filters.timescale || undefined;
+            player.filters.tremolo = filters.tremolo || undefined;
+            player.filters.vibrato = filters.vibrato || undefined;
+            player.filters.rotation = filters.rotation || undefined;
+            player.filters.distortion = filters.distortion || undefined;
+            player.filters.channelMix = filters.channelMix || undefined;
+            player.filters.lowPass = filters.lowPass || undefined;
+        }
+
+        player.data.activeFilter = selected;
+        return selected;
     }
 
-    // ── trackStart: fetch artist top songs + show menus ─────────────────
+    // ── trackStart: always publish the normal now-playing panel ──────────
     TrueMusic.poru.on('trackStart', async (player, track) => {
         player.data.lastTrack = track;
 
         const requester = track.info?.requester;
         if (!requester) return;
-        const artistName = track.info?.author;
-        if (!artistName) return;
 
-        // Resolve text channel
         const tc = player.textChannel;
         let channel;
         if (typeof tc === 'string') {
@@ -759,16 +989,54 @@ module.exports = {
         }
         if (!channel) return;
 
-        // Fetch top songs by same artist (non-blocking)
+        const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
+        const selectedFilter = player.data.activeFilter || 'clear';
+        const alreadyLiked = await likes.isLiked(requester.id, track).catch((err) => {
+            console.error('[Likes] isLiked failed:', err?.message || err);
+            return false;
+        });
+
+        player.data.ui = {
+            requesterId: requester.id,
+            artistTracks: [],
+            selectedFilter,
+            selectedArtistIndex: null,
+        };
+
+        const payload = buildNowPlayingPayload(TrueMusic, tokenObj2, track, requester, {
+            liked: alreadyLiked,
+            selectedFilter,
+        });
+
+        const msg = await channel.send(payload).catch(() => null);
+        if (!msg) return;
+
+        player.data.nowPlayingMessage = msg;
+        player.data.nowPlayingToken = track?.track || track?.info?.identifier || track?.info?.title || null;
+
+        const artistName = track.info?.author;
+        if (!artistName) return;
+
         try {
-            const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
-            const source = tokenObj2?.source || 'ytsearch';
+            const source = displaySettings(tokenObj2).platform;
             const res = await TrueMusic.poru.resolve({ query: artistName, source });
             const artistTracks = (res?.tracks || [])
-                .filter(t => t.info.uri !== track.info.uri)
+                .filter(t => (t.info.uri || t.info.identifier) !== (track.info.uri || track.info.identifier))
                 .slice(0, 5);
-            await showPlayMenus(channel, requester, artistTracks, player, track);
-        } catch { /* silently skip if Lavalink unreachable */ }
+            player.data.ui.artistTracks = artistTracks;
+            if (player.data.nowPlayingMessage?.id === msg.id && player.currentTrack === track) {
+                const components = buildMusicComponents({
+                    liked: alreadyLiked,
+                    artistTracks,
+                    selectedFilter: player.data.ui.selectedFilter,
+                    selectedArtistIndex: player.data.ui.selectedArtistIndex,
+                    showControls: displaySettings(tokenObj2).buttons,
+                });
+                await msg.edit({ components }).catch(() => {});
+            }
+        } catch (err) {
+            console.error('[TopSongs] failed:', err?.message || err);
+        }
     });
 
 
@@ -787,59 +1055,55 @@ module.exports = {
                 if (!tokenObj) {
                     console.warn('Warning: Token not found in tokens.json');
                     return;
-                }
-            }
+	                }
+	            }
 
-            let memberVoice = message.member?.voice?.channel;
-            if (!memberVoice) return;
+	            const parseSubBotCommand = () => {
+	                const raw = message.content.trim();
+	                const botMention = `<@${TrueMusic.user.id}>`;
+	                const botMentionBang = `<@!${TrueMusic.user.id}>`;
+	                const botPrefix = tokenObj.prefix ?? "";
+	                let body = null;
+
+	                if (raw.startsWith(botMentionBang)) body = raw.slice(botMentionBang.length).trim();
+	                else if (raw.startsWith(botMention)) body = raw.slice(botMention.length).trim();
+	                else if (botPrefix && raw.toLowerCase().startsWith(botPrefix.toLowerCase())) body = raw.slice(botPrefix.length).trim();
+	                else if (!botPrefix) body = raw;
+
+	                if (!body) return null;
+	                const parts = body.split(/ +/);
+	                const name = (parts.shift() || '').toLowerCase();
+	                return { name, args: parts };
+	            };
+
+		            const subBotCommand = parseSubBotCommand();
+		            if (subBotCommand && ['set', 'settings', 'اعدادات', 'إعدادات'].includes(subBotCommand.name)) {
+		                const settingsCommand = require('./commands/Subscriptions/settings');
+		                return settingsCommand.execute(TrueMusic, message, subBotCommand.args);
+		            }
+		            if (subBotCommand && ['info', 'botinfo', 'about', 'معلومات', 'معلومه', 'تفاصيل'].includes(subBotCommand.name)) {
+		                const embed = buildBotInfoEmbed(TrueMusic, tokenObj, message.guild.id);
+		                return message.reply({ embeds: [embed] }).catch(() => {});
+		            }
+
+		            let memberVoice = message.member?.voice?.channel;
+	            if (!memberVoice) return;
 
             let clientVoice = message.guild.members?.me?.voice?.channel;
             if (!clientVoice || memberVoice.id !== clientVoice.id) return;
 
             const prefix = tokenObj.prefix || "";
 
-            if (tokenObj.chat && message.channel.id !== tokenObj.chat) return;
+            if (tokenObj.chat) {
+                const allowedTextChannels = new Set([tokenObj.chat, tokenObj.channel].filter(Boolean));
+                if (!allowedTextChannels.has(message.channel.id)) return;
+            }
             if (!message.content.startsWith(prefix)) return;
 
             const args = message.content.slice(prefix.length).trim().split(/ +/);
             const command = args.shift().toLowerCase();
 
-            function createMusicControlButtons(liked = false) {
-                const row1 = new ActionRowBuilder()
-                    .addComponents(
-                        new ButtonBuilder()
-                            .setCustomId('loop')
-                            .setEmoji('1222068127807045632')
-                            .setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder()
-                            .setCustomId('volume_up')
-                            .setEmoji('1222069466930876466')
-                            .setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder()
-                            .setCustomId('pause')
-                            .setEmoji('1222069145433280602')
-                            .setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder()
-                            .setCustomId('volume_down')
-                            .setEmoji('1222068728057823332')
-                            .setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder()
-                            .setCustomId('skip')
-                            .setEmoji('1222069661965877329')
-                            .setStyle(ButtonStyle.Secondary),
-                    );
-                const row2 = new ActionRowBuilder()
-                    .addComponents(
-                        new ButtonBuilder()
-                            .setCustomId('like')
-                            .setLabel(liked ? '💔 إلغاء اللايك' : '❤️ لايك')
-                            .setStyle(liked ? ButtonStyle.Danger : ButtonStyle.Secondary),
-                    );
-                return [row1, row2];
-            }
-
-
-            let cmdsArray = {
+	            let cmdsArray = {
                 play: [`شغل`, `ش`, `p`, `play`, `P`, `Play`],
                 stop: [`stop`, `وقف`, `Stop`, `توقيف`],
                 skip: [`skip`, `سكب`, `تخطي`, `s`, `س`, `S`, `Skip`],
@@ -857,17 +1121,14 @@ module.exports = {
             if (cmdsArray.play.includes(command)) {
                 const song = args.join(' ');
                 if (!song) {
-                    const embed = new EmbedBuilder()
-                        .setThumbnail('attachment://Error.png')
-                        .setColor(Colors)
-                        .setDescription(
-                            '`play [Song]` : *Play the first result from **YouTube**\n' +
-                            '`play [URL]` : *Play from **YouTube** or **SoundCloud** or Spotify*'
-                        );
-                    return message.channel.send({
-                        embeds: [embed],
-                        files: ['./assets/image/icons/Error.png']
-                    });
+                    return message.channel.send(musicPayload(tokenObj, {
+                        title: 'Play Command',
+                        description:
+                            '`play [Song]` : Play the first search result\n' +
+                            '`play [URL]` : Play from YouTube, SoundCloud, Spotify, Apple Music, or Deezer',
+                        thumbnail: 'attachment://Error.png',
+                        files: ['./assets/image/icons/Error.png'],
+                    }));
                 }
 
                 let player = TrueMusic.poru.players.get(message.guild.id);
@@ -893,40 +1154,27 @@ module.exports = {
                 }
 
                 try {
-                    const searchSource = tokenObj.source || 'ytsearch';
+	                    const searchSource = displaySettings(tokenObj).platform;
                     const res = await TrueMusic.poru.resolve({ query: song, source: searchSource });
 
                     if (!res || !res.tracks || res.tracks.length === 0) {
-                        const embed = new EmbedBuilder()
-                            .setColor('#ff0000')
-                            .setThumbnail('attachment://Error.png')
-                            .setDescription(`*No results found for* : **${song}**`);
-                        return message.reply({
-                            embeds: [embed],
-                            files: ['./assets/image/icons/Error.png']
-                        });
+                        return message.reply(musicPayload(tokenObj, {
+                            title: 'No Results',
+                            description: `No results found for **${song}**.`,
+                            color: '#ff0000',
+                            thumbnail: 'attachment://Error.png',
+                            files: ['./assets/image/icons/Error.png'],
+                        }));
                     }
 
                     if (res.loadType === 'playlist') {
-                        const embed = new EmbedBuilder()
-                            .setColor(Colors)
-                            .setTitle("Playing Playlist")
-                            .setThumbnail('attachment://NowPlaying.png')
-                            .setDescription(`**[${res.playlistInfo.name}](${res.playlistInfo.url || res.tracks[0].info.uri})**`)
-                            .setFooter({
-                                text: `${message.author.displayName}`,
-                                iconURL: message.author.displayAvatarURL({ dynamic: true })
-                            })
-                            .addFields({
-                                name: "Playlist Tracks",
-                                value: `**${res.tracks.length}**`,
-                                inline: true
-                            });
-
-                        message.reply({
-                            embeds: [embed],
-                            files: ['./assets/image/icons/NowPlaying.png']
-                        });
+                        message.reply(musicPayload(tokenObj, {
+                            title: 'Playing Playlist',
+                            description: `**[${res.playlistInfo.name}](${res.playlistInfo.url || res.tracks[0].info.uri})**`,
+                            fields: [{ name: 'Playlist Tracks', value: `**${res.tracks.length}**`, inline: true }],
+                            thumbnail: 'attachment://NowPlaying.png',
+                            files: ['./assets/image/icons/NowPlaying.png'],
+                        }));
 
                         for (const track of res.tracks) {
                             track.info.requester = message.author;
@@ -938,93 +1186,48 @@ module.exports = {
                         player.queue.add(track);
 
                         if (player.isPlaying) {
-                            const embed = new EmbedBuilder()
-                                .setColor(Colors)
-                                .setTitle("Add Song")
-                                .setThumbnail('attachment://AddSong.png')
-                                .setDescription(`**[${track.info.title}](${track.info.uri})**`)
-                                .addFields({
-                                    name: "Song Duration",
-                                    value: `**${new Date(track.info.length).toISOString().substr(11, 8)}**`,
-                                    inline: true
-                                })
-                                .setFooter({
-                                    text: `${message.author.displayName}`,
-                                    iconURL: message.author.displayAvatarURL({ dynamic: true })
-                                });
-
-                            return message.reply({
-                                embeds: [embed],
-                                files: ['./assets/image/icons/AddSong.png']
-                            });
+                            return message.reply(musicPayload(tokenObj, {
+                                title: 'Add Song',
+                                description: `**[${track.info.title}](${track.info.uri})**`,
+                                fields: [{ name: 'Song Duration', value: `**${shortDuration(track.info.length)}**`, inline: true }],
+                                thumbnail: 'attachment://AddSong.png',
+                                files: ['./assets/image/icons/AddSong.png'],
+                            }));
                         }
                     }
 
-                    if (!player.isPlaying && !player.isPaused) {
-                        player.play();
-                        const track = player.currentTrack;
-
-                        const embed = new EmbedBuilder()
-                            .setColor(Colors)
-                            .setTitle("Playing Song")
-                            .setThumbnail('attachment://NowPlaying.png')
-                            .setDescription(`**[${track.info.title}](${track.info.uri})**`)
-                            .setFooter({
-                                text: `${message.author.displayName}`,
-                                iconURL: message.author.displayAvatarURL({ dynamic: true })
-                            })
-                            .addFields({
-                                name: "Song Duration",
-                                value: `**${new Date(track.info.length).toISOString().substr(11, 8)}**`,
-                                inline: true
-                            });
-
-                        const replyData = {
-                            embeds: [embed],
-                            content: `🎶 **${TrueMusic.user.displayName}**`,
-                            files: ['./assets/image/icons/NowPlaying.png']
-                        };
-
-                        if (tokenObj.buttons === 'on') {
-                            const alreadyLiked = await likes.isLiked(message.author.id, track.info?.uri).catch(() => false);
-                            replyData.components = createMusicControlButtons(alreadyLiked);
-                        }
-
-                        message.reply(replyData);
-                    }
+	                    if (!player.isPlaying && !player.isPaused) {
+	                        await player.play();
+	                    }
 
                 } catch (error) {
                     console.error('Error searching for song:', error.message);
-                    const embed = new EmbedBuilder()
-                        .setColor(Colors)
-                        .setThumbnail('attachment://error.png')
-                        .setDescription('An error occurred while searching for the song.');
-                    message.reply({
-                        embeds: [embed],
-                        files: ['./assets/image/icons/error.png']
-                    });
+                    message.reply(musicPayload(tokenObj, {
+                        title: 'Search Error',
+                        description: 'An error occurred while searching for the song.',
+                        thumbnail: 'attachment://error.png',
+                        files: ['./assets/image/icons/error.png'],
+                    }));
                 }
             }
             else if (cmdsArray.stop.includes(command)) {
                 let player = TrueMusic.poru.players.get(message.guild.id);
 
                 if (!player) {
-                    const embed = new EmbedBuilder()
-                        .setColor(Colors)
-                        .setThumbnail('attachment://Error.png')
-                        .setDescription(`*No music is currently playing.*`);
-
-                    return message.reply({
-                        embeds: [embed],
-                        files: ['./assets/image/icons/Error.png']
-                    });
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'No Music',
+                        description: 'No music is currently playing.',
+                        thumbnail: 'attachment://Error.png',
+                        files: ['./assets/image/icons/Error.png'],
+                    }));
                 }
 
-                player.setLoop('NONE');
-                player.queue.clear();
-                player.data.autoPlay = false;
-                await player.destroy();
-                message.react(`🔴`);
+	                player.setLoop('NONE');
+	                player.queue.clear();
+	                player.data.autoPlay = false;
+	                await finalizePlayerUi(player);
+	                await player.destroy();
+	                message.react(`🔴`);
             }
 
 
@@ -1032,7 +1235,10 @@ module.exports = {
 
                 let player = TrueMusic.poru.players.get(message.guild.id);
                 if (!player || !player.currentTrack) {
-                    return message.reply(`*No music is currently playing.*`);
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'No Music',
+                        description: 'No music is currently playing.',
+                    }));
                 }
 
                 let memberVoice = message.member?.voice?.channel;
@@ -1056,51 +1262,46 @@ module.exports = {
 
                 const progressBar = '─'.repeat(validProgress) + '🔴' + '─'.repeat(progressBarLength - validProgress);
 
-                const embed = new EmbedBuilder()
-                    .setColor(Colors)
-                    .setDescription(
-                        `**Now Playing**\n` +
+                return message.channel.send(musicPayload(tokenObj, {
+                    title: 'Now Playing',
+                    description:
                         `**Title:** ${current.title}\n` +
                         `**Loop:** \`${loopMode}\` | **Volume:** \`${volume}\`\n` +
                         `**Requester:** \`${message.author.tag}\`\n\n` +
                         `\`\`\`► ${progressBar}\`\`\`\n` +
-                        `\`[${duratiform.format(currentTime, 'mm:ss')} / ${duratiform.format(totalTime, 'mm:ss')}]\``
-                    );
-
-                message.channel.send({ content: `🎶 **.${message.client.user.username}**`, embeds: [embed] });
+                        `\`[${duratiform.format(currentTime, 'mm:ss')} / ${duratiform.format(totalTime, 'mm:ss')}]\``,
+                }));
             }
             else if (cmdsArray.loop.includes(command)) {
                 let player = TrueMusic.poru.players.get(message.guild.id);
                 if (!player || !player.isPlaying) {
-                    const embed = new EmbedBuilder()
-                        .setColor(Colors)
-                        .setThumbnail('attachment://Error.png')
-                        .setDescription(`*No music is currently playing.*`);
-                    return message.reply({
-                        embeds: [embed],
-                        files: ['./assets/image/icons/Error.png']
-                    });
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'No Music',
+                        description: 'No music is currently playing.',
+                        thumbnail: 'attachment://Error.png',
+                        files: ['./assets/image/icons/Error.png'],
+                    }));
                 }
 
                 const currentLoop = player.loop;
                 const newLoopMode = currentLoop === "NONE" ? "TRACK" : "NONE";
                 player.setLoop(newLoopMode);
 
-                const embed = new EmbedBuilder()
-                    .setColor(Colors)
-                    .setThumbnail(`attachment://${newLoopMode === "TRACK" ? 'LoopON.png' : 'LoopOFF.png'}`)
-                    .setDescription(`*Loop mode is now:* **${newLoopMode === "TRACK" ? 'ON' : 'OFF'}**`);
-
-                return message.reply({
-                    embeds: [embed],
-                    files: [`./assets/image/icons/${newLoopMode === "TRACK" ? 'LoopON.png' : 'LoopOFF.png'}`]
-                });
+                return message.reply(musicPayload(tokenObj, {
+                    title: 'Loop',
+                    description: `Loop mode is now **${newLoopMode === "TRACK" ? 'ON' : 'OFF'}**.`,
+                    thumbnail: `attachment://${newLoopMode === "TRACK" ? 'LoopON.png' : 'LoopOFF.png'}`,
+                    files: [`./assets/image/icons/${newLoopMode === "TRACK" ? 'LoopON.png' : 'LoopOFF.png'}`],
+                }));
             }
 
             if (cmdsArray.pause.includes(command)) {
                 const player = TrueMusic.poru.players.get(message.guild.id);
                 if (!player || !player.currentTrack) {
-                    return message.reply(`*No music is currently playing.*`);
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'No Music',
+                        description: 'No music is currently playing.',
+                    }));
                 }
 
                 const memberVoice = message.member.voice?.channel;
@@ -1126,26 +1327,22 @@ module.exports = {
 
                 const player = TrueMusic.poru.players.get(message.guild.id);
                 if (!player || !player.queue || player.queue.length === 0) {
-                    const embed = new EmbedBuilder()
-                        .setColor(Colors)
-                        .setThumbnail('attachment://Error.png')
-                        .setDescription(`*No songs are currently in the queue.*`);
-                    return message.reply({
-                        embeds: [embed],
-                        files: ['./assets/image/icons/Error.png']
-                    });
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'Queue',
+                        description: 'No songs are currently in the queue.',
+                        thumbnail: 'attachment://Error.png',
+                        files: ['./assets/image/icons/Error.png'],
+                    }));
                 }
 
                 const nowPlayingTrack = player.currentTrack;
                 if (!nowPlayingTrack) {
-                    const embed = new EmbedBuilder()
-                        .setColor(Colors)
-                        .setThumbnail('attachment://Error.png')
-                        .setDescription(`*No song is currently playing.*`);
-                    return message.reply({
-                        embeds: [embed],
-                        files: ['./assets/image/icons/Error.png']
-                    });
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'Queue',
+                        description: 'No song is currently playing.',
+                        thumbnail: 'attachment://Error.png',
+                        files: ['./assets/image/icons/Error.png'],
+                    }));
                 }
 
                 const nowPlayingTitle = nowPlayingTrack.info.title;
@@ -1164,26 +1361,25 @@ module.exports = {
                     })
                     .join('\n');
 
-                let embed = new EmbedBuilder()
-                    .setTitle(`${message.guild.name} Queue`)
-                    .setDescription(`**Now Playing**\n> [${nowPlayingTitle}](${nowPlayingUrl}) • [\`${nowPlayingDuration}\`]\n\n**Queued Songs**\n${getQueuedTracks()}`)
-                    .setColor(Colors);
+                const buildQueueDescription = () =>
+                    `**Now Playing**\n> [${nowPlayingTitle}](${nowPlayingUrl}) • [\`${nowPlayingDuration}\`]\n\n` +
+                    `**Queued Songs**\n${getQueuedTracks()}`;
 
                 const menuOptions = [
                     {
                         label: 'القائمة التالية',
                         value: 'next_page',
-                        emoji: '1251766110022537256'
+                        emoji: MUSIC_EMOJIS.pageNext
                     },
                     {
                         label: 'القائمة السابقه',
                         value: 'previous_page',
-                        emoji: '1251766205111468043'
+                        emoji: MUSIC_EMOJIS.pagePrev
                     },
                     {
                         label: 'حذف قائمة التشغيل',
                         value: 'clear_queue',
-                        emoji: '1240135421434925076'
+                        emoji: MUSIC_EMOJIS.clear
                     }
                 ];
 
@@ -1194,10 +1390,16 @@ module.exports = {
 
                 const row = new ActionRowBuilder().addComponents(selectMenu);
 
-                message.reply({ embeds: [embed], components: [row] }).catch(console.error);
+                const queueMessage = await message.reply(musicPayload(tokenObj, {
+                    title: `${message.guild.name} Queue`,
+                    description: buildQueueDescription(),
+                    components: [row],
+                })).catch(console.error);
+
+                if (!queueMessage || !displaySettings(tokenObj).buttons) return;
 
                 const filter = interaction => interaction.customId === 'queue_menu' && interaction.user.id === message.author.id;
-                const collector = message.channel.createMessageComponentCollector({ filter, time: 30000 });
+                const collector = queueMessage.createMessageComponentCollector({ filter, time: 30000 });
 
                 collector.on('collect', async interaction => {
                     const selectedOption = interaction.values[0];
@@ -1208,25 +1410,29 @@ module.exports = {
                         if (page > 0) page--;
                     } else if (selectedOption === 'clear_queue') {
                         player.queue.clear();
-                        await interaction.update({ content: 'The queue has been cleared!', components: [] });
+                        await interaction.update(musicPayload(tokenObj, {
+                            title: 'Queue',
+                            description: 'The queue has been cleared.',
+                        }));
                         return;
                     }
 
-                    embed.setDescription(`**Now Playing**\n> [${nowPlayingTitle}](${nowPlayingUrl}) • [\`${nowPlayingDuration}\`]\n\n**Queued Songs**\n${getQueuedTracks()}`);
-                    await interaction.update({ embeds: [embed] });
+                    await interaction.update(musicPayload(tokenObj, {
+                        title: `${message.guild.name} Queue`,
+                        description: buildQueueDescription(),
+                        components: [row],
+                    }));
                 });
             } else if (cmdsArray.skip.includes(command)) {
                 let player = TrueMusic.poru.players.get(message.guild.id);
 
                 if (!player || !player.isPlaying) {
-                    const embed = new EmbedBuilder()
-                        .setColor(Colors)
-                        .setThumbnail('attachment://Error.png')
-                        .setDescription(`*No music is currently playing.*`);
-                    return message.reply({
-                        embeds: [embed],
-                        files: ['./assets/image/icons/Error.png']
-                    });
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'No Music',
+                        description: 'No music is currently playing.',
+                        thumbnail: 'attachment://Error.png',
+                        files: ['./assets/image/icons/Error.png'],
+                    }));
                 }
 
                 let memberVoice = message.member?.voice?.channel;
@@ -1237,29 +1443,25 @@ module.exports = {
                 const currentTrack = player.currentTrack;
 
                 if (player.queue.length === 0) {
+                    await finalizePlayerUi(player);
                     await player.destroy();
-                    const embed = new EmbedBuilder()
-                        .setColor(Colors)
-                        .setThumbnail('attachment://Skip.png')
-                        .setDescription(`*Skipped :* **${currentTrack.info.title}**\n_By:_ **${message.author.displayName}**`);
-
-                    return message.reply({
-                        embeds: [embed],
-                        files: ['./assets/image/icons/Skip.png']
-                    });
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'Skipped',
+                        description: `**${currentTrack.info.title}**\nBy **${message.author.displayName}**`,
+                        thumbnail: 'attachment://Skip.png',
+                        files: ['./assets/image/icons/Skip.png'],
+                    }));
                 } else {
                     const skippedTrack = currentTrack;
+                    await finalizePlayerUi(player);
                     await player.skip();
 
-                    const embed = new EmbedBuilder()
-                        .setColor(Colors)
-                        .setThumbnail('attachment://Skip.png')
-                        .setDescription(`*Skipped :* **${skippedTrack.info.title}**\n_By:_ **${message.author.displayName}**`);
-
-                    return message.reply({
-                        embeds: [embed],
-                        files: ['./assets/image/icons/Skip.png']
-                    });
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'Skipped',
+                        description: `**${skippedTrack.info.title}**\nBy **${message.author.displayName}**`,
+                        thumbnail: 'attachment://Skip.png',
+                        files: ['./assets/image/icons/Skip.png'],
+                    }));
                 }
             }
 
@@ -1269,14 +1471,12 @@ module.exports = {
                 let player = TrueMusic.poru.players.get(message.guild.id);
 
                 if (!player || !player.isPlaying) {
-                    const embed = new EmbedBuilder()
-                        .setColor(Colors)
-                        .setThumbnail('attachment://Error.png')
-                        .setDescription(`*No music is currently playing.*`);
-                    return message.reply({
-                        embeds: [embed],
-                        files: ['./assets/image/icons/Error.png']
-                    });
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'No Music',
+                        description: 'No music is currently playing.',
+                        thumbnail: 'attachment://Error.png',
+                        files: ['./assets/image/icons/Error.png'],
+                    }));
                 }
 
                 let member_voice = message.member?.voice?.channel;
@@ -1289,50 +1489,41 @@ module.exports = {
                 const currentVolume = player.volume || 100;
 
                 if (isNaN(volume)) {
-                    const embed = new EmbedBuilder()
-                        .setColor(Colors)
-                        .setThumbnail('attachment://Volumeup.png')
-                        .setDescription(`**Current volume: ${currentVolume}%**`);
-                    return message.reply({
-                        embeds: [embed],
-                        files: ['./assets/image/icons/Volumeup.png']
-                    });
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'Volume',
+                        description: `Current volume is **${currentVolume}%**.`,
+                        thumbnail: 'attachment://Volumeup.png',
+                        files: ['./assets/image/icons/Volumeup.png'],
+                    }));
                 }
 
                 if (volume < 0 || volume > 130) {
-                    const embed = new EmbedBuilder()
-                        .setColor(Colors)
-                        .setThumbnail('attachment://Error.png')
-                        .setDescription('*Please provide a valid volume level between* **0%** *and* **130%**');
-                    return message.reply({
-                        embeds: [embed],
-                        files: ['./assets/image/icons/Error.png']
-                    });
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'Volume',
+                        description: 'Please provide a valid volume level between **0%** and **130%**.',
+                        thumbnail: 'attachment://Error.png',
+                        files: ['./assets/image/icons/Error.png'],
+                    }));
                 }
 
                 player.setVolume(volume);
 
-                const embed = new EmbedBuilder()
-                    .setColor(Colors)
-                    .setThumbnail(`attachment://${volume < currentVolume ? 'Volumedowwn' : 'Volumeup'}.png`)
-                    .setDescription(`*Volume changed from* **${currentVolume}%** *to* **${volume}%**`);
-
-                return message.reply({
-                    embeds: [embed],
-                    files: [`./assets/image/icons/${volume < currentVolume ? 'Volumedowwn' : 'Volumeup'}.png`]
-                });
+                return message.reply(musicPayload(tokenObj, {
+                    title: 'Volume',
+                    description: `Volume changed from **${currentVolume}%** to **${volume}%**.`,
+                    thumbnail: `attachment://${volume < currentVolume ? 'Volumedowwn' : 'Volumeup'}.png`,
+                    files: [`./assets/image/icons/${volume < currentVolume ? 'Volumedowwn' : 'Volumeup'}.png`],
+                }));
             } else if (cmdsArray.seek.includes(command)) {
                 const player = TrueMusic.poru.players.get(message.guild.id);
 
                 if (!player || !player.currentTrack) {
-                    const embed = new EmbedBuilder()
-                        .setColor(Colors)
-                        .setThumbnail('attachment://Error.png')
-                        .setDescription(`*No music is currently playing.*`);
-                    return message.reply({
-                        embeds: [embed],
-                        files: ['./assets/image/icons/Error.png']
-                    });
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'No Music',
+                        description: 'No music is currently playing.',
+                        thumbnail: 'attachment://Error.png',
+                        files: ['./assets/image/icons/Error.png'],
+                    }));
                 }
 
                 const memberVoice = message.member?.voice?.channel;
@@ -1344,15 +1535,12 @@ module.exports = {
                 const timeArg = args[1];
 
                 if (!timeArg) {
-                    const embed = new EmbedBuilder()
-                        .setColor(Colors)
-                        .setThumbnail('attachment://seek.png')
-                        .setDescription('*Please provide seek duration `1:11` or `90s` or `2m`*');
-
-                    return message.reply({
-                        embeds: [embed],
-                        files: ['./assets/image/icons/seek.png']
-                    });
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'Seek',
+                        description: 'Please provide a seek duration like `1:11`, `90s`, or `2m`.',
+                        thumbnail: 'attachment://seek.png',
+                        files: ['./assets/image/icons/seek.png'],
+                    }));
                 }
 
                 let seconds = 0;
@@ -1368,15 +1556,12 @@ module.exports = {
                 }
 
                 if (isNaN(seconds)) {
-                    const embed = new EmbedBuilder()
-                        .setColor(Colors)
-                        .setThumbnail('attachment://seek.png')
-                        .setDescription('*Invalid time format. Please use something like `1:30` or `90s`*');
-
-                    return message.reply({
-                        embeds: [embed],
-                        files: ['./assets/image/icons/seek.png']
-                    });
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'Seek',
+                        description: 'Invalid time format. Use something like `1:30` or `90s`.',
+                        thumbnail: 'attachment://seek.png',
+                        files: ['./assets/image/icons/seek.png'],
+                    }));
                 }
 
                 const seekTime = Math.min(seconds * 1000, player.currentTrack.info.length);
@@ -1389,127 +1574,195 @@ module.exports = {
             else if (cmdsArray.search.includes(command)) {
                 const searchQuery = args.join(' ');
                 if (!searchQuery) {
-                    return message.channel.send('*Please write the name of the song*');
+                    return message.channel.send(musicPayload(tokenObj, {
+                        title: 'Search',
+                        description: 'Please write the name of the song.',
+                    }));
                 }
 
-                const selectSource = new StringSelectMenuBuilder()
-                    .setCustomId('select_source')
-                    .setPlaceholder('Choose a platform to search')
-                    .addOptions([
-                        { label: 'YouTube',      value: 'ytsearch',  emoji: '🎥' },
-                        { label: 'YouTube Music',value: 'ytmsearch', emoji: '🎵' },
-                        { label: 'SoundCloud',   value: 'scsearch',  emoji: '🔊' },
-                        { label: 'Spotify',      value: 'spsearch',  emoji: '🟢' },
-                        { label: 'Apple Music',  value: 'amsearch',  emoji: '🍎' },
-                        { label: 'Deezer',       value: 'dzsearch',  emoji: '🎧' },
-                    ]);
+                if (!displaySettings(tokenObj).buttons) {
+                    return message.channel.send(musicPayload(tokenObj, {
+                        title: 'Search',
+                        description: 'Search menus are disabled for this subscription. Use `play <song>` or enable buttons from settings.',
+                    }));
+                }
 
-                const row = new ActionRowBuilder().addComponents(selectSource);
+                const searchId = `search_${message.id}`;
+                let currentTracks = [];
+                let completed = false;
 
-                const sourceMessage = await message.channel.send({
-                    content: `*Choose platform to search for:* \`${searchQuery}\``,
-                    components: [row]
+                const platformOptions = [
+                    { label: 'YouTube', value: 'ytsearch', emoji: MUSIC_EMOJIS.platforms.ytsearch },
+                    { label: 'YouTube Music', value: 'ytmsearch', emoji: MUSIC_EMOJIS.platforms.ytmsearch },
+                    { label: 'SoundCloud', value: 'scsearch', emoji: MUSIC_EMOJIS.platforms.scsearch },
+                    { label: 'Spotify', value: 'spsearch', emoji: MUSIC_EMOJIS.platforms.spsearch },
+                    { label: 'Apple Music', value: 'amsearch', emoji: MUSIC_EMOJIS.platforms.amsearch },
+                    { label: 'Deezer', value: 'dzsearch', emoji: MUSIC_EMOJIS.platforms.dzsearch },
+                ];
+
+                const controlRow = (showBack = false) => {
+                    const row = new ActionRowBuilder();
+                    if (showBack) {
+                        row.addComponents(
+                            new ButtonBuilder()
+                                .setCustomId(`${searchId}_back`)
+                                .setLabel('Back')
+                                .setEmoji(MUSIC_EMOJIS.pagePrev)
+                                .setStyle(ButtonStyle.Secondary)
+                        );
+                    }
+                    row.addComponents(
+                        new ButtonBuilder()
+                            .setCustomId(`${searchId}_cancel`)
+                            .setLabel('Cancel')
+                            .setStyle(ButtonStyle.Danger)
+                    );
+                    return row;
+                };
+
+                const buildPlatformRows = () => [
+                    new ActionRowBuilder().addComponents(
+                        new StringSelectMenuBuilder()
+                            .setCustomId(`${searchId}_source`)
+                            .setPlaceholder('Choose search platform')
+                            .addOptions(platformOptions)
+                    ),
+                    controlRow(false),
+                ];
+
+                const buildTrackRows = (tracks) => [
+                    new ActionRowBuilder().addComponents(
+                        new StringSelectMenuBuilder()
+                            .setCustomId(`${searchId}_song`)
+                            .setPlaceholder('Choose a track')
+                            .addOptions(tracks.map((track, index) => ({
+                                label: (track.info.title || 'Unknown').slice(0, 99),
+                                value: String(index),
+                                description: `${shortDuration(track.info.length)} - ${(track.info.author || 'Unknown').slice(0, 50)}`.slice(0, 99),
+                            })))
+                    ),
+                    controlRow(true),
+                ];
+
+                const sourceMessage = await message.channel.send(musicPayload(tokenObj, {
+                    title: 'Search',
+                    description: `البحث عن: **${searchQuery}**\nاختر المنصة التي تريد البحث فيها.`,
+                    components: buildPlatformRows(),
+                }));
+
+                const collector = sourceMessage.createMessageComponentCollector({
+                    filter: i => i.user.id === message.author.id && i.customId.startsWith(searchId),
+                    time: 60000,
                 });
 
-                const filter = i => i.customId === 'select_source' && i.user.id === message.author.id;
-                const collector = message.channel.createMessageComponentCollector({ filter, time: 30000 });
-
                 collector.on('collect', async interaction => {
-                    const selectedSource = interaction.values[0];
-                    collector.stop();
+                    if (interaction.customId === `${searchId}_cancel`) {
+                        completed = true;
+                        collector.stop('cancel');
+                        return interaction.update(musicPayload(tokenObj, {
+                            title: 'Search Cancelled',
+                            description: 'تم إلغاء البحث.',
+                        }));
+                    }
 
-                    try {
-                        const result = await TrueMusic.poru.resolve({ query: searchQuery, source: selectedSource });
+                    if (interaction.customId === `${searchId}_back`) {
+                        currentTracks = [];
+                        return interaction.update(musicPayload(tokenObj, {
+                            title: 'Search',
+                            description: `البحث عن: **${searchQuery}**\nاختر المنصة التي تريد البحث فيها.`,
+                            components: buildPlatformRows(),
+                        }));
+                    }
 
-                        if (!result || !result.tracks.length) {
-                            return interaction.update({ content: `*No results found on ${selectedSource}.*`, components: [] });
+                    if (interaction.customId === `${searchId}_source`) {
+                        const selectedSource = interaction.values[0];
+                        await interaction.update(musicPayload(tokenObj, {
+                            title: 'Searching',
+                            description: `يتم البحث في ${platformDisplay(selectedSource)} عن **${searchQuery}**...`,
+                        }));
+
+                        try {
+                            const result = await TrueMusic.poru.resolve({ query: searchQuery, source: selectedSource });
+                            currentTracks = result?.tracks?.slice(0, 10) || [];
+
+                            if (currentTracks.length === 0) {
+                                return sourceMessage.edit(musicPayload(tokenObj, {
+                                    title: 'No Results',
+                                    description: `لم يتم العثور على نتائج في ${platformDisplay(selectedSource)}.`,
+                                    components: [controlRow(true)],
+                                }));
+                            }
+
+                            return sourceMessage.edit(musicPayload(tokenObj, {
+                                title: 'Search Results',
+                                description: `النتائج من ${platformDisplay(selectedSource)}.\nاختر أغنية أو ارجع لتغيير المنصة.`,
+                                components: buildTrackRows(currentTracks),
+                            }));
+                        } catch (err) {
+                            console.error('Error searching for videos:', err);
+                            return sourceMessage.edit(musicPayload(tokenObj, {
+                                title: 'Search Error',
+                                description: 'حدث خطأ أثناء البحث. يمكنك الرجوع واختيار منصة أخرى.',
+                                components: [controlRow(true)],
+                            }));
+                        }
+                    }
+
+                    if (interaction.customId === `${searchId}_song`) {
+                        await interaction.deferUpdate().catch(() => {});
+                        const selectedIndex = parseInt(interaction.values[0], 10);
+                        const selectedTrack = currentTracks[selectedIndex];
+                        if (!selectedTrack) {
+                            return sourceMessage.edit(musicPayload(tokenObj, {
+                                title: 'Search',
+                                description: 'لم يعد هذا الاختيار متاحاً. ارجع واختر نتيجة أخرى.',
+                                components: [controlRow(true)],
+                            }));
                         }
 
-                        const tracks = result.tracks.slice(0, 10);
+                        let player = TrueMusic.poru.players.get(message.guild.id);
+                        if (!player) {
+                            player = await TrueMusic.poru.createConnection({
+                                guildId: message.guild.id,
+                                voiceChannel: message.member.voice.channel.id,
+                                textChannel: message.channel,
+                                deaf: true,
+                            });
+                        }
 
-                        const selectMenu = new StringSelectMenuBuilder()
-                            .setCustomId('song_select')
-                            .setPlaceholder('Select a song')
-                            .addOptions(
-                                tracks.map((track, index) => {
-                                    const duration = track.info.length || 0;
-                                    const min = Math.floor(duration / 60000);
-                                    const sec = Math.floor((duration % 60000) / 1000).toString().padStart(2, '0');
-                                    return {
-                                        label: track.info.title.length > 99 ? track.info.title.slice(0, 96) + "..." : track.info.title,
-                                        value: index.toString(),
-                                        description: `Duration: ${min}:${sec}`
-                                    };
-                                })
-                            );
+                        selectedTrack.info.requester = message.author;
+                        player.queue.add(selectedTrack);
 
-                        const newRow = new ActionRowBuilder().addComponents(selectMenu);
+                        completed = true;
+                        collector.stop('selected');
 
-                        await interaction.update({
-                            content: `*Select a song from the search results:*`,
-                            components: [newRow]
-                        });
+                        await sourceMessage.edit(musicPayload(tokenObj, {
+                            title: player.isPlaying ? 'Add Song' : 'Playing',
+                            description: `**${selectedTrack.info.title}**\nBy **${message.author.displayName}**`,
+                        }));
 
-                        const songCollector = message.channel.createMessageComponentCollector({
-                            filter: i => i.customId === 'song_select' && i.user.id === message.author.id,
-                            max: 1
-                        });
-
-                        songCollector.on('collect', async interaction => {
-                            const selectedIndex = parseInt(interaction.values[0]);
-                            const selectedTrack = tracks[selectedIndex];
-
-                            let player = TrueMusic.poru.players.get(message.guild.id);
-                            if (!player) {
-                                player = await TrueMusic.poru.createConnection({
-                                    guildId: message.guild.id,
-                                    voiceChannel: message.member.voice.channel.id,
-                                    textChannel: message.channel,
-                                    deaf: true
-                                });
-                            }
-
-                            selectedTrack.info.requester = message.author;
-                            player.queue.add(selectedTrack);
-
-                            if (player.isPlaying) {
-                                interaction.channel.send(`*Add song:* **${selectedTrack.info.title}** _By:_ **${message.author.displayName}**`);
-                            }
-
-                            if (!player.isPlaying && !player.isPaused) {
-                                player.play();
-                                message.reply({
-                                    content: `_Now playing:_ **${selectedTrack.info.title}** _By:_ **${message.author.displayName}**`,
-                                    components: tokenObj.buttons === 'on' ? createMusicControlButtons(false) : []
-                                });
-                            }
-
-                            sourceMessage.delete().catch(() => { });
-                        });
-
-                    } catch (err) {
-                        console.error('Error searching for videos:', err);
-                        message.channel.send('An error occurred while searching for songs.');
+                        if (!player.isPlaying && !player.isPaused) await player.play();
                     }
                 });
 
-                collector.on('end', collected => {
-                    if (collected.size === 0) {
-                        sourceMessage.edit({ content: `*Nothing was selected.*`, components: [] });
+                collector.on('end', (_, reason) => {
+                    if (!completed && reason === 'time') {
+                        sourceMessage.edit(musicPayload(tokenObj, {
+                            title: 'Search Expired',
+                            description: 'انتهى وقت البحث بدون اختيار.',
+                        })).catch(() => {});
                     }
                 });
             } else if (cmdsArray.autoplay.includes(command)) {
                 let player = TrueMusic.poru.players.get(message.guild.id);
 
                 if (!player) {
-                    const embed = new EmbedBuilder()
-                        .setColor(Colors)
-                        .setThumbnail('attachment://Error.png')
-                        .setDescription(`*No music is currently playing.*`);
-                    return message.reply({
-                        embeds: [embed],
-                        files: ['./assets/image/icons/Error.png']
-                    });
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'No Music',
+                        description: 'No music is currently playing.',
+                        thumbnail: 'attachment://Error.png',
+                        files: ['./assets/image/icons/Error.png'],
+                    }));
                 }
 
 
@@ -1519,15 +1772,12 @@ module.exports = {
 
 
 
-                const embed = new EmbedBuilder()
-                    .setColor(Colors)
-                    .setThumbnail('attachment://AutoPlay.png')
-                    .setDescription(`*Autoplay is now* : **${player.data.autoPlay ? 'ON' : 'OFF'}**\n_By:_ **${message.author.displayName}**`);
-
-                return message.reply({
-                    embeds: [embed],
-                    files: ['./assets/image/icons/AutoPlay.png']
-                });
+                return message.reply(musicPayload(tokenObj, {
+                    title: 'Autoplay',
+                    description: `Autoplay is now **${player.data.autoPlay ? 'ON' : 'OFF'}**.\nBy **${message.author.displayName}**`,
+                    thumbnail: 'attachment://AutoPlay.png',
+                    files: ['./assets/image/icons/AutoPlay.png'],
+                }));
             }
 
 
@@ -1536,119 +1786,161 @@ module.exports = {
 
 
 
-        TrueMusic.on('interactionCreate', async (interaction) => {
-            if (!interaction.isButton()) return;
+	        TrueMusic.on('interactionCreate', async (interaction) => {
+	            const musicButtons = new Set(['loop', 'pause', 'volume_down', 'volume_up', 'skip', 'like']);
+	            const isMusicButton = interaction.isButton() && musicButtons.has(interaction.customId);
+	            const isMusicMenu = interaction.isStringSelectMenu() && ['np_artist', 'np_filter'].includes(interaction.customId);
+	            if (!isMusicButton && !isMusicMenu) return;
 
-            const getPlayer = () => {
-                const player = TrueMusic.poru.players.get(interaction.guildId);
-                if (!player || !player.currentTrack) {
-                    interaction.reply({ content: '*No music is currently playing.*', ephemeral: true });
-                    return null;
-                }
-                return player;
-            };
+	            const replyEphemeral = async (content) => {
+	                if (interaction.deferred || interaction.replied) {
+	                    return interaction.followUp({ content, ephemeral: true }).catch(() => {});
+	                }
+	                return interaction.reply({ content, ephemeral: true }).catch(() => {});
+	            };
 
-            const memberVoice = interaction.member?.voice?.channel;
-            const clientVoice = interaction.guild.members?.me?.voice?.channel;
-            if (!memberVoice || !clientVoice || memberVoice.id !== clientVoice.id) return;
+	            const memberVoice = interaction.member?.voice?.channel;
+	            const clientVoice = interaction.guild?.members?.me?.voice?.channel;
+	            if (!memberVoice || !clientVoice || memberVoice.id !== clientVoice.id) {
+	                return replyEphemeral('ادخل نفس الروم الصوتي أولاً.');
+	            }
 
-            if (!interaction.deferred && !interaction.replied) {
-                await interaction.deferReply({ ephemeral: true });
-            }
+	            const player = TrueMusic.poru.players.get(interaction.guildId);
+	            if (!player || !player.currentTrack) {
+	                return replyEphemeral('لا يوجد شيء يعمل الآن.');
+	            }
 
-            const player = getPlayer();
-            if (!player) return;
+	            const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
+	            const ui = player.data.ui || {};
+	            const editPanel = async (liked = false) => {
+	                const components = buildMusicComponents({
+	                    liked,
+	                    artistTracks: ui.artistTracks || [],
+	                    selectedFilter: ui.selectedFilter || player.data.activeFilter || 'clear',
+	                    selectedArtistIndex: ui.selectedArtistIndex ?? null,
+	                    showControls: displaySettings(tokenObj).buttons,
+	                });
+	                await interaction.message?.edit({ components }).catch(() => {});
+	            };
 
-            let responseMessage = '';
+	            if (isMusicMenu) {
+	                await interaction.deferUpdate().catch(() => {});
 
-            // Loop toggle
-            if (interaction.customId === 'loop') {
-                const currentLoop = player.loop;
-                const newLoopMode = currentLoop === 'NONE' ? 'TRACK' : 'NONE';
-                player.setLoop(newLoopMode);
-                responseMessage = `*Loop mode is now :* **${newLoopMode === 'TRACK' ? 'ON' : 'OFF'}**`;
-            }
+	                if (interaction.customId === 'np_artist') {
+	                    if (ui.requesterId && interaction.user.id !== ui.requesterId) {
+	                        return replyEphemeral('هذه القائمة لصاحب الطلب فقط.');
+	                    }
 
-            // Pause/Resume toggle
-            if (interaction.customId === 'pause') {
-                if (player.isPaused) {
-                    await player.pause(false);
-                    responseMessage = '*Resumed playing.*';
-                } else {
-                    await player.pause(true);
-                    responseMessage = '*Paused playing.*';
-                }
-            }
+	                    const selectedIndex = Number(interaction.values[0]);
+	                    const selectedTrack = ui.artistTracks?.[selectedIndex];
+	                    if (!selectedTrack) return replyEphemeral('لم أجد الأغنية المختارة.');
 
-            // Volume down
-            if (interaction.customId === 'volume_down') {
-                const newVolume = Math.max(player.volume - 10, 0);
-                player.setVolume(newVolume);
-                responseMessage = `*Volume decreased to :* **${newVolume}%**`;
-            }
+	                    selectedTrack.info.requester = interaction.user;
+	                    player.queue.unshift(selectedTrack);
+	                    ui.selectedArtistIndex = selectedIndex;
+	                    player.data.ui = ui;
 
-            // Volume up
-            if (interaction.customId === 'volume_up') {
-                const newVolume = Math.min(player.volume + 10, 130);
-                player.setVolume(newVolume);
-                responseMessage = `*Volume increased to :* **${newVolume}%**`;
-            }
+	                    if (player.currentTrack) {
+	                        await finalizePlayerUi(player);
+	                        await player.skip();
+	                    } else if (!player.isPlaying && !player.isPaused) {
+	                        await player.play();
+	                    }
+	                    return replyEphemeral(`تم تشغيل **${selectedTrack.info.title || 'الأغنية'}**.`);
+	                }
 
-            // Skip
-            if (interaction.customId === 'skip') {
-                const currentTrack = player.currentTrack;
-                if (!currentTrack) {
-                    responseMessage = '*No song to skip.*';
-                } else if (player.queue.length === 0) {
-                    await player.destroy();
-                    responseMessage = `*Skipped:* **${currentTrack.info.title}**`;
-                } else {
-                    const skippedTrack = player.currentTrack;
-                    await player.skip();
-                    responseMessage = `*Skipped:* **${skippedTrack.info.title}**`;
-                }
-            }
+	                if (interaction.customId === 'np_filter') {
+	                    const filterName = interaction.values[0];
+	                    try {
+	                        const applied = await applyFilter(player, filterName);
+	                        ui.selectedFilter = applied;
+	                        player.data.ui = ui;
+	                        await editPanel(await likes.isLiked(interaction.user.id, player.currentTrack).catch(() => false));
+	                        const label = FILTER_NAMES[applied] || applied;
+	                        return replyEphemeral(applied === 'clear' ? 'تم إيقاف الفلاتر.' : `تم تطبيق **${label}**.`);
+	                    } catch (err) {
+	                        console.error('[Filters] failed:', err?.message || err);
+	                        return replyEphemeral('تعذر تطبيق الفلتر الآن.');
+	                    }
+	                }
+	            }
 
-            // Like / Unlike
-            if (interaction.customId === 'like') {
-                const currentTrack = player.currentTrack;
-                if (!currentTrack) {
-                    responseMessage = '*No song is currently playing.*';
-                } else {
-                    try {
-                        const { liked } = await likes.toggle(interaction.user.id, currentTrack);
-                        responseMessage = liked
-                            ? `❤️ تم حفظ **${currentTrack.info.title}** في لايكاتك`
-                            : `💔 تم إزالة **${currentTrack.info.title}** من لايكاتك`;
+	            await interaction.deferReply({ ephemeral: true }).catch(() => {});
+	            let responseMessage = '';
 
-                        // Update the button label on the original message
-                        const newRows = createMusicControlButtons(liked);
-                        interaction.message?.edit({ components: newRows }).catch(() => {});
-                    } catch (e) {
-                        responseMessage = '❌ حدث خطأ أثناء حفظ اللايك.';
-                    }
-                }
-            }
+	            if (interaction.customId === 'loop') {
+	                const newLoopMode = player.loop === 'NONE' ? 'TRACK' : 'NONE';
+	                player.setLoop(newLoopMode);
+	                responseMessage = `التكرار: **${newLoopMode === 'TRACK' ? 'ON' : 'OFF'}**`;
+	            }
 
-            await interaction.editReply(responseMessage);
+	            if (interaction.customId === 'pause') {
+	                if (player.isPaused) {
+	                    await player.pause(false);
+	                    responseMessage = 'تم الاستئناف.';
+	                } else {
+	                    await player.pause(true);
+	                    responseMessage = 'تم الإيقاف المؤقت.';
+	                }
+	            }
 
-            setTimeout(async () => {
-                try {
-                    await interaction.deleteReply();
-                } catch (error) {
-                    console.error('Failed to delete reply:', error);
-                }
-            }, 8000);
-        });
+	            if (interaction.customId === 'volume_down') {
+	                const newVolume = Math.max(player.volume - 10, 0);
+	                await player.setVolume(newVolume);
+	                responseMessage = `الصوت: **${newVolume}%**`;
+	            }
+
+	            if (interaction.customId === 'volume_up') {
+	                const newVolume = Math.min(player.volume + 10, 130);
+	                await player.setVolume(newVolume);
+	                responseMessage = `الصوت: **${newVolume}%**`;
+	            }
+
+	            if (interaction.customId === 'skip') {
+	                const currentTrack = player.currentTrack;
+	                if (!currentTrack) {
+	                    responseMessage = 'لا توجد أغنية للتخطي.';
+	                } else if (player.queue.length === 0) {
+	                    await finalizePlayerUi(player);
+	                    await player.destroy();
+	                    responseMessage = `تم التخطي: **${currentTrack.info.title || 'الأغنية'}**`;
+	                } else {
+	                    await finalizePlayerUi(player);
+	                    await player.skip();
+	                    responseMessage = `تم التخطي: **${currentTrack.info.title || 'الأغنية'}**`;
+	                }
+	            }
+
+	            if (interaction.customId === 'like') {
+	                const currentTrack = player.currentTrack;
+	                if (!currentTrack) {
+	                    responseMessage = 'لا يوجد شيء يعمل الآن.';
+	                } else {
+	                    try {
+	                        const { liked } = await likes.toggle(interaction.user.id, currentTrack);
+	                        responseMessage = liked
+	                            ? `تم حفظ **${currentTrack.info.title || 'الأغنية'}** في لايكاتك.`
+	                            : `تم حذف **${currentTrack.info.title || 'الأغنية'}** من لايكاتك.`;
+	                        await editPanel(liked);
+	                    } catch (err) {
+	                        console.error('[Likes] toggle failed:', err?.message || err);
+	                        responseMessage = 'تعذر حفظ اللايك الآن.';
+	                    }
+	                }
+	            }
+
+	            await interaction.editReply(responseMessage || 'تم.');
+	            setTimeout(() => interaction.deleteReply().catch(() => {}), 8000);
+	        });
 
 
 
-        try {
-            await TrueMusic.login(token);
-        } catch (e) {
-            console.log(`Failed to login with token: ${token}`);
-            return;
-        }
+	        try {
+	            await TrueMusic.login(token);
+	        } catch (e) {
+	            console.log(`[Music] Failed to login a subscription bot for server ${idbot || 'unknown'}: ${e?.message || e}`);
+	            return;
+	        }
 
     }
 };

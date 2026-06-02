@@ -1,7 +1,8 @@
 const fs = require('fs');
 const store = require('../../utils/store');
 const { Client, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, EmbedBuilder, ComponentType } = require('discord.js');
-const { owners, prefix, Colors } = require(`${process.cwd()}/settings/config`);
+const { owners, prefix } = require(`${process.cwd()}/settings/config`);
+const { getEmbedColor } = require('../../utils/embedColor');
 const axios = require("axios");
 const db = require('../../utils/db');
 const Discord = require('discord.js');
@@ -1103,7 +1104,7 @@ module.exports = {
                             }
 
                             const embed = new EmbedBuilder()
-                                .setColor(Colors)
+                                .setColor(getEmbedColor(client))
                             let description = '';
                             userSubscriptions.forEach((userSubscription, index) => {
                                 const expirationTime = userSubscription.expirationTime;

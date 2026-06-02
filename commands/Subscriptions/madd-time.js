@@ -1,8 +1,9 @@
-const { owners, Colors, logChannelId } = require(`${process.cwd()}/settings/config`);
+const { owners, logChannelId } = require(`${process.cwd()}/settings/config`);
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const ms = require('ms');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
+const { getEmbedColor } = require('../../utils/embedColor');
 
 function formatDuration(msValue) {
   const d = Math.floor(msValue / 86400000);
@@ -38,7 +39,7 @@ module.exports = {
           { name: '👤 المستخدم', value: `<@${entry.user}>`, inline: true },
           { name: '📅 ينتهي في', value: `<t:${Math.floor(entry.expirationTime/1000)}:R>`, inline: true }
         )
-        .setColor(Colors);
+        .setColor(getEmbedColor(client));
 
       const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`addtime_1d_${code}_${mid}`).setLabel('+1d').setStyle(ButtonStyle.Secondary),
@@ -139,7 +140,7 @@ async function executeAddTime(code, durationMs, durationStr, message, client, pr
             { name: '📅 الانتهاء الجديد', value: `<t:${Math.floor(entry.expirationTime/1000)}:R>`, inline: true },
             { name: '🛠️ بواسطة', value: `<@${message.author.id}>`, inline: true }
           )
-          .setColor(Colors)]
+          .setColor(getEmbedColor(client))]
       });
     }
   } catch (e) { console.error(e); }

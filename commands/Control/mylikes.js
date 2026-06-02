@@ -5,8 +5,8 @@ const {
     ButtonStyle,
     StringSelectMenuBuilder,
 } = require('discord.js');
-const { Colors } = require('../../settings/config');
 const { getLikes, getAllLikes } = require('../../utils/likes');
+const { getEmbedColor } = require('../../utils/embedColor');
 
 const PAGE = 10;
 
@@ -42,7 +42,7 @@ module.exports = {
             });
 
             return new EmbedBuilder()
-                .setColor(Colors)
+                .setColor(getEmbedColor(client))
                 .setAuthor({
                     name: `Liked Songs — ${message.author.displayName}`,
                     iconURL: message.author.displayAvatarURL({ dynamic: true }),
