@@ -2,6 +2,12 @@
 
 const { createCanvas } = require('@napi-rs/canvas');
 
+const PROGRESS_CACHE_MAX_ENTRIES = 768;
+const PROGRESS_CACHE_MAX_BYTES = 12 * 1024 * 1024;
+const PROGRESS_CACHE_TTL_MS = 10 * 60 * 1000;
+const progressCache = new Map();
+let progressCacheBytes = 0;
+
 function normalizeColorNumber(input) {
     if (typeof input === 'number' && Number.isFinite(input)) {
         return input & 0xFFFFFF;
@@ -67,6 +73,68 @@ function fillRoundedRect(ctx, x, y, width, height, radius) {
     ctx.fill();
 }
 
+function compactLabelKey(currentLabel, durationLabel) {
+    return `${currentLabel || 'x'}-${durationLabel || 'x'}`
+        .replace(/[^a-z0-9]+/gi, '')
+        .slice(0, 24) || 'labels';
+}
+
+function progressCacheGet(key) {
+    const entry = progressCache.get(key);
+    if (!entry) return null;
+
+    if (entry.expiresAt <= Date.now()) {
+        progressCache.delete(key);
+        progressCacheBytes -= entry.bytes;
+        return null;
+    }
+
+    progressCache.delete(key);
+    progressCache.set(key, entry);
+    return {
+        attachment: entry.attachment,
+        name: entry.name,
+        ratio: entry.ratio,
+        cacheHit: true,
+    };
+}
+
+function trimProgressCache() {
+    while (
+        progressCache.size > PROGRESS_CACHE_MAX_ENTRIES
+        || progressCacheBytes > PROGRESS_CACHE_MAX_BYTES
+    ) {
+        const oldestKey = progressCache.keys().next().value;
+        if (!oldestKey) break;
+        const oldest = progressCache.get(oldestKey);
+        progressCache.delete(oldestKey);
+        progressCacheBytes -= oldest?.bytes || 0;
+    }
+}
+
+function progressCacheSet(key, result) {
+    if (!result?.attachment?.length) return result;
+    const bytes = result.attachment.length;
+    if (bytes > PROGRESS_CACHE_MAX_BYTES) return result;
+
+    const old = progressCache.get(key);
+    if (old) {
+        progressCache.delete(key);
+        progressCacheBytes -= old.bytes;
+    }
+
+    progressCache.set(key, {
+        attachment: result.attachment,
+        name: result.name,
+        ratio: result.ratio,
+        bytes,
+        expiresAt: Date.now() + PROGRESS_CACHE_TTL_MS,
+    });
+    progressCacheBytes += bytes;
+    trimProgressCache();
+    return result;
+}
+
 function buildProgressBarAttachment({ position = 0, duration = 0, color, currentLabel = '', durationLabel = '', width = 860, height = 58, variant = 'default' } = {}) {
     const base = colorParts(color);
     const light = mixColor(base, { r: 255, g: 255, b: 255 }, 0.10);
@@ -74,6 +142,20 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
     const durationMs = Number(duration || 0);
     const positionMs = Number(position || 0);
     const ratio = durationMs > 0 ? clamp(positionMs / durationMs, 0, 1) : 0;
+    const bucket = durationMs > 0 ? Math.round(ratio * 1000) : 0;
+    const labelKey = compactLabelKey(currentLabel, durationLabel);
+    const cacheKey = [
+        variant,
+        base.hex,
+        width,
+        height,
+        bucket,
+        currentLabel || '',
+        durationLabel || '',
+    ].join('|');
+    const cached = progressCacheGet(cacheKey);
+    if (cached) return cached;
+
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
 
@@ -138,15 +220,11 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
             drawLabel(durationLabel, width, 'right');
         }
 
-        const bucket = durationMs > 0 ? Math.round(ratio * 1000) : 0;
-        const labelKey = `${currentLabel || 'x'}-${durationLabel || 'x'}`
-            .replace(/[^a-z0-9]+/gi, '')
-            .slice(0, 24) || 'labels';
-        return {
+        return progressCacheSet(cacheKey, {
             attachment: canvas.toBuffer('image/png'),
             name: `progress-compact-v3-${base.hex}-${width}x${height}-${bucket}-${labelKey}.png`,
             ratio,
-        };
+        });
     }
 
     const railX = currentLabel ? 96 : 24;
@@ -204,12 +282,11 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
     ctx.arc(knobX, knobY, knobRadius - 1, 0, Math.PI * 2);
     ctx.stroke();
 
-    const bucket = durationMs > 0 ? Math.round(ratio * 1000) : 0;
-    return {
+    return progressCacheSet(cacheKey, {
         attachment: canvas.toBuffer('image/png'),
         name: `progress-${base.hex}-${bucket}.png`,
         ratio,
-    };
+    });
 }
 
 module.exports = {

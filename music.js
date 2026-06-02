@@ -176,8 +176,8 @@ function displaySettings(tokenObj) {
 }
 
 function shortDuration(ms) {
-    const value = Number(ms || 0);
-    if (!value || value < 0) return 'Live';
+    const value = Number(ms);
+    if (!Number.isFinite(value) || value < 0) return 'Live';
     const total = Math.floor(value / 1000);
     const h = Math.floor(total / 3600);
     const m = Math.floor((total % 3600) / 60);
@@ -531,9 +531,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
         return buildNowPlayingFallbackPayload(tokenObj, player, options.requester || current.requester || message?.author);
     }
 
-    const totalTime = Math.max(0, Number(options.durationOverride ?? current.length ?? 0));
-    const rawCurrentTime = Math.max(0, Number(options.positionOverride ?? player.position ?? 0));
-    const currentTime = totalTime > 0 ? Math.min(rawCurrentTime, totalTime) : rawCurrentTime;
+    const { currentTime, totalTime } = safeProgressTimes(player, track, options);
     const title = cleanInlineText(current.title, 'Unknown track', 96);
     const author = cleanInlineText(current.author, 'Unknown artist', 72);
     const uri = isHttpUrl(current.uri) ? current.uri : null;
@@ -775,6 +773,60 @@ function ensurePlayerData(player) {
 function trackIdentity(track) {
     const info = track?.info || track || {};
     return track?.track || info.uri || info.identifier || [info.sourceName, info.author, info.title, info.length].filter(Boolean).join(':');
+}
+
+function warnPlayerOnce(player, key, message, minDelay = 30_000) {
+    const data = ensurePlayerData(player);
+    if (!data.warningLog) data.warningLog = {};
+    const now = Date.now();
+    if (now - Number(data.warningLog[key] || 0) < minDelay) return;
+    data.warningLog[key] = now;
+    console.warn(message);
+}
+
+function clearProgressInterval(player, reason = '') {
+    if (!player?.data?.progressInterval) return;
+    clearInterval(player.data.progressInterval);
+    player.data.progressInterval = null;
+    if (reason) console.warn(`[ProgressUpdate] cleared interval: ${reason}`);
+}
+
+function safeProgressTimes(player, track, options = {}) {
+    ensurePlayerData(player);
+    const totalTime = Math.max(0, Number(options.durationOverride ?? track?.info?.length ?? 0));
+    const hasOverride = options.positionOverride !== undefined;
+    let rawPosition = Number(options.positionOverride ?? player?.position ?? player?.data?.lastPosition ?? 0);
+
+    if (!Number.isFinite(rawPosition) || rawPosition < 0) {
+        warnPlayerOnce(
+            player,
+            'invalid-progress-position',
+            `[ProgressUpdate] invalid position for ${trackIdentity(track) || 'unknown'}: ${rawPosition}`,
+        );
+        rawPosition = 0;
+    }
+
+    if (!hasOverride && totalTime > 0 && rawPosition > totalTime + 3000) {
+        const lastPosition = Number(player?.data?.lastPosition || 0);
+        const elapsed = player?.data?.trackStartedAt ? Date.now() - player.data.trackStartedAt : 0;
+        const fallback = [lastPosition, elapsed]
+            .filter(value => Number.isFinite(value) && value >= 0 && value <= totalTime + 3000)
+            .sort((a, b) => b - a)[0] || 0;
+        warnPlayerOnce(
+            player,
+            'overshoot-progress-position',
+            `[ProgressUpdate] position overshoot ignored for ${trackIdentity(track) || 'unknown'}: ${rawPosition}/${totalTime}, using ${fallback}`,
+        );
+        rawPosition = fallback;
+    }
+
+    const currentTime = totalTime > 0 ? Math.min(rawPosition, totalTime) : Math.max(0, rawPosition);
+    return { currentTime, totalTime };
+}
+
+function isNaturalTrackEnd(reason) {
+    const value = String(reason || '').toLowerCase();
+    return value === 'finished' || value === 'finish' || value.includes('finish');
 }
 
 function rememberTextChannel(player, channelId) {
@@ -1341,10 +1393,7 @@ async function updatePlaybackVoiceStatus(client, tokenObj, player, track = null)
 }
 
 async function finalizePlayerUi(player, options = {}) {
-    if (player?.data?.progressInterval) {
-        clearInterval(player.data.progressInterval);
-        player.data.progressInterval = null;
-    }
+    clearProgressInterval(player);
     const msg = player?.data?.nowPlayingMessage;
     if (msg?.components?.length) {
         const context = player?.data?.nowPlayingContext;
@@ -1353,10 +1402,10 @@ async function finalizePlayerUi(player, options = {}) {
         if (client && track?.info) {
             const tokenObj = (store.get('tokens') || []).find(t => t.token === context.token);
             const totalTime = Math.max(0, Number(options.durationOverride ?? track.info.length ?? 0));
-            const currentPosition = Math.max(0, Number(player?.position || player?.data?.lastPosition || 0));
+            const safeTimes = safeProgressTimes(player, track, { durationOverride: totalTime });
             const finalPosition = options.complete && totalTime > 0
                 ? totalTime
-                : (totalTime > 0 ? Math.min(currentPosition, totalTime) : currentPosition);
+                : safeTimes.currentTime;
             const ui = player?.data?.ui || {};
             const payload = buildNowPlayingV2Payload(client, tokenObj, player, { author: track.info.requester || context.requester }, {
                 track,
@@ -1383,6 +1432,9 @@ async function finalizePlayerUi(player, options = {}) {
     if (player?.data) {
         player.data.nowPlayingMessage = null;
         player.data.nowPlayingToken = null;
+        player.data.nowPlayingTrackIdentity = null;
+        player.data.nowPlayingSentAt = null;
+        player.data.nowPlayingSendLock = null;
         player.data.nowPlayingContext = null;
         player.data.ui = null;
     }
@@ -2118,12 +2170,18 @@ module.exports = {
     });
 
     TrueMusic.poru.on('trackEnd', async (player, track, data) => {
-      await finalizePlayerUi(player, { complete: true, track });
-      await bumpQueueVersion(player, `track_end:${data?.reason || 'unknown'}`);
+      ensurePlayerData(player);
+      const reason = data?.reason || 'unknown';
+      const naturalEnd = isNaturalTrackEnd(reason);
+      player.data.lastTrackEndReason = reason;
+      player.data.lastTrackEndNatural = naturalEnd;
+      if (!naturalEnd) console.warn(`[TrackEnd] non-natural end for ${trackIdentity(track) || 'unknown'}: ${reason}`);
+      await finalizePlayerUi(player, { complete: naturalEnd, track });
+      await bumpQueueVersion(player, `track_end:${reason}`);
             });
 
             TrueMusic.poru.on("queueEnd", async (player) => {
-              await finalizePlayerUi(player, { complete: true });
+              await finalizePlayerUi(player, { complete: player?.data?.lastTrackEndNatural === true });
               await bumpQueueVersion(player, 'queue_end');
               const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
               await updatePlaybackVoiceStatus(TrueMusic, tokenObj2, player, null);
@@ -2220,6 +2278,31 @@ module.exports = {
             TrueMusic.poru.on('trackStart', async (player, track) => {
         await bumpQueueVersion(player, 'track_start');
         ensurePlayerData(player);
+        const identity = trackIdentity(track);
+        const previousContext = player.data.nowPlayingContext;
+        const previousIdentity = player.data.nowPlayingTrackIdentity || trackIdentity(previousContext?.track);
+        if (player.data.nowPlayingMessage && previousIdentity) {
+            if (identity && previousIdentity === identity) {
+                warnPlayerOnce(
+                    player,
+                    `duplicate-panel:${identity}`,
+                    `[NowPlaying] duplicate trackStart suppressed for ${identity}`,
+                    10_000,
+                );
+                return;
+            }
+            console.warn(`[NowPlaying] finalizing stale panel before new track: ${previousIdentity} -> ${identity || 'unknown'}`);
+            await finalizePlayerUi(player, { complete: false, track: previousContext?.track });
+            ensurePlayerData(player);
+        }
+        if (identity) {
+            const sendLock = player.data.nowPlayingSendLock;
+            if (sendLock?.identity === identity && Date.now() - Number(sendLock.at || 0) < 10_000) {
+                warnPlayerOnce(player, `send-lock:${identity}`, `[NowPlaying] send lock suppressed duplicate panel for ${identity}`, 10_000);
+                return;
+            }
+            player.data.nowPlayingSendLock = { identity, at: Date.now() };
+        }
         const stuckRecoveryIdentity = player.data.stuckRecoveryIdentity;
         const stuckResumePosition = Math.max(0, Number(player.data.stuckResumePosition || 0));
         const shouldResumeStuckTrack = stuckRecoveryIdentity && stuckRecoveryIdentity === trackIdentity(track);
@@ -2243,9 +2326,13 @@ module.exports = {
         }
 
                 const requester = track.info?.requester;
-        const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
-        await updatePlaybackVoiceStatus(TrueMusic, tokenObj2, player, track);
-                if (!requester) return;
+	        const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
+	        await updatePlaybackVoiceStatus(TrueMusic, tokenObj2, player, track);
+	                if (!requester) {
+	                    player.data.nowPlayingSendLock = null;
+	                    console.warn(`[NowPlaying] skipped panel without requester for ${identity || 'unknown'}`);
+	                    return;
+	                }
 
                 const tc = player.data.lastTextChannel || player.textChannel;
                 let channel;
@@ -2254,7 +2341,11 @@ module.exports = {
                 } else if (tc && typeof tc === 'object') {
                     channel = TrueMusic.channels.cache.get(tc.id) || tc;
                 }
-                if (!channel) return;
+	                if (!channel) {
+	                    player.data.nowPlayingSendLock = null;
+	                    console.warn(`[NowPlaying] skipped panel without text channel for ${identity || 'unknown'}`);
+	                    return;
+	                }
 
                 const selectedFilter = player.data.activeFilter || 'clear';
         const alreadyLiked = await likes.isLiked(requester.id, track).catch((err) => {
@@ -2284,27 +2375,51 @@ module.exports = {
             progressWidth: PLAY_PROGRESS_WIDTH,
         });
 
-        const msg = await channel.send(payload).catch(() => null);
-        if (!msg) return;
+        const msg = await channel.send(payload).catch((err) => {
+            console.warn(`[NowPlaying] failed to send panel for ${identity || 'unknown'}: ${err?.message || err}`);
+            return null;
+        });
+        if (!msg) {
+            player.data.nowPlayingSendLock = null;
+            return;
+        }
 
         player.data.nowPlayingMessage = msg;
         player.data.nowPlayingToken = track?.track || track?.info?.identifier || track?.info?.title || null;
+        player.data.nowPlayingTrackIdentity = identity || null;
+        player.data.nowPlayingSentAt = Date.now();
         player.data.nowPlayingContext = {
             client: TrueMusic,
             token,
             track,
             requester,
         };
+        player.data.nowPlayingSendLock = null;
 
-        if (player.data.progressInterval) clearInterval(player.data.progressInterval);
+        clearProgressInterval(player);
         player.data.progressInterval = setInterval(async () => {
             if (!player.data.nowPlayingMessage || player.data.nowPlayingMessage.id !== msg.id) {
-                clearInterval(player.data.progressInterval);
-                player.data.progressInterval = null;
+                clearProgressInterval(player, 'message changed or missing');
                 return;
             }
             try {
+                const currentIdentity = trackIdentity(player.currentTrack);
+                if (!player.currentTrack || (identity && currentIdentity !== identity)) {
+                    warnPlayerOnce(
+                        player,
+                        `stale-progress:${identity || msg.id}`,
+                        `[ProgressUpdate] stopped stale updater for ${identity || 'unknown'}; current=${currentIdentity || 'none'}`,
+                        10_000,
+                    );
+                    clearProgressInterval(player);
+                    return;
+                }
                 const tokenObj3 = (store.get('tokens') || []).find(t => t.token === token);
+                if (!tokenObj3) {
+                    warnPlayerOnce(player, `missing-token:${token}`, `[ProgressUpdate] token config missing for ${token}`);
+                    clearProgressInterval(player);
+                    return;
+                }
                         const ui3 = player.data.ui || {};
                         const alreadyLiked3 = await likes.isLiked(
                             player.currentTrack?.info?.requester?.id || '',
@@ -2323,10 +2438,12 @@ module.exports = {
                             compactPlayLayout: ui3.compactPlayLayout === true,
                             showProgressLabels: true,
                             showInfoRow: false,
-                            useEmbedAccent: false,
-                            progressWidth: PLAY_PROGRESS_WIDTH,
-                        });
-                await msg.edit(payload3).catch(() => {});
+	                            useEmbedAccent: false,
+	                            progressWidth: PLAY_PROGRESS_WIDTH,
+	                        });
+                await msg.edit(payload3).catch((err) => {
+                    warnPlayerOnce(player, `edit-failed:${msg.id}`, `[ProgressUpdate] edit failed for ${msg.id}: ${err?.message || err}`);
+                });
             } catch (err) {
                 console.error('[ProgressUpdate] failed:', err?.message || err);
             }
