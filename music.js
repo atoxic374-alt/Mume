@@ -281,7 +281,8 @@ function buildMusicComponents({ liked = false, paused = false, artistTracks = []
 function buildNowPlayingPayload(TrueMusic, tokenObj, track, requester, options = {}) {
     const settings = displaySettings(tokenObj);
     const embedColor = getEmbedColor(TrueMusic);
-    const title = track?.info?.title || 'Unknown track';
+    const title = cleanInlineText(track?.info?.title, 'Unknown track', 96);
+    const author = cleanInlineText(track?.info?.author, 'Unknown artist', 72);
     const uri = track?.info?.uri;
     const duration = shortDuration(track?.info?.length);
     const requesterName = requester?.displayName || requester?.username || 'Unknown';
@@ -318,18 +319,38 @@ function buildNowPlayingPayload(TrueMusic, tokenObj, track, requester, options =
     }
 
     return {
-        content: `🎶 Now playing: **${title}** • \`${duration}\` • ${requesterName}`,
+        content: [
+            '**Now Playing**',
+            `**${title}**`,
+            author !== 'Unknown artist'
+                ? `**${author}** | By : **${requesterName}**`
+                : `By : **${requesterName}**`,
+        ].join('\n'),
         embeds: [],
         components,
     };
 }
 
+function plainMusicText(value) {
+    return String(value || '')
+        .replace(/\[([^\]\n]+)\]\((?:https?:\/\/|www\.)[^)\s]+(?:\s+"[^"]*")?\)/gi, '$1')
+        .replace(/https?:\/\/\S+/gi, '')
+        .replace(/www\.\S+/gi, '')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
 function compactMusicText({ title, description, fields = [] }) {
     const parts = [];
-    if (title) parts.push(`**${title}**`);
-    if (description) parts.push(description);
+    const cleanTitle = plainMusicText(title);
+    const cleanDescription = plainMusicText(description);
+    if (cleanTitle) parts.push(`**${cleanTitle}**`);
+    if (cleanDescription) parts.push(cleanDescription);
     fields.forEach(field => {
-        if (field?.name && field?.value) parts.push(`**${field.name}:** ${field.value}`);
+        const name = plainMusicText(field?.name);
+        const value = plainMusicText(field?.value);
+        if (name && value) parts.push(`**${name}:** ${value}`);
     });
     return parts.join('\n') || 'Done.';
 }
@@ -422,21 +443,17 @@ function buildInlineProgressBar(position, duration, length = 22, meta = '') {
 
 function buildNowPlayingFallbackPayload(tokenObj, player, requester) {
     const current = player.currentTrack.info;
-    const loopMode = player.loop === 'TRACK' ? 'ON' : 'OFF';
-    const volume = player.volume || 100;
-    const currentTime = player.position || 0;
-    const totalTime = current.length || 0;
-    const titleText = current.uri ? `[${current.title || 'Unknown'}](${current.uri})` : (current.title || 'Unknown');
+    const titleText = cleanInlineText(current.title, 'Unknown track', 96);
+    const authorText = cleanInlineText(current.author, 'Unknown artist', 72);
     const requesterName = requester?.displayName || requester?.globalName || requester?.username || requester?.tag || 'Unknown';
 
     return musicPayload(tokenObj, {
         title: 'Now Playing',
         description:
-            `**Title:** ${titleText}\n` +
-            `**Loop:** \`${loopMode}\` | **Volume:** \`${volume}%\`\n` +
-            `**Requester:** \`${requesterName}\`\n\n` +
-            `\`\`\`► ${buildTextProgressBar(currentTime, totalTime)}\`\`\`\n` +
-            `\`[${shortDuration(currentTime)} / ${shortDuration(totalTime)}]\``,
+            `**${titleText}**\n` +
+            (authorText !== 'Unknown artist'
+                ? `**${authorText}** | By : **${requesterName}**`
+                : `By : **${requesterName}**`),
     });
 }
 
@@ -535,7 +552,8 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     const accentColor = normalizeColorNumber(embedColor);
     const useEmbedAccent = options.useEmbedAccent === true;
     const showProgressLabels = options.showProgressLabels === true;
-    const progressColor = useEmbedAccent ? accentColor : '#b5bac1';
+    const progressColor = useEmbedAccent ? accentColor : (options.progressColor || '#b5bac1');
+    const showDisabledNowPlayingInfo = compactPlayLayout && options.includeControls && !settings.buttons;
 
     const interactiveRows = options.includeControls && settings.buttons
         ? buildMusicComponents({
@@ -570,7 +588,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
             color: progressColor,
             currentLabel: showProgressLabels ? shortDuration(currentTime) : '',
             durationLabel: showProgressLabels ? shortDuration(totalTime) : '',
-            width: showProgressLabels ? 660 : 620,
+            width: showProgressLabels ? (options.progressWidth || 500) : 620,
             height: showProgressLabels ? 36 : 32,
             variant: 'discordCompact',
         });
@@ -587,7 +605,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
 
         if (useEmbedAccent) container.setAccentColor(accentColor);
 
-        if (options.showInfoRow === true) {
+        if (options.showInfoRow === true || showDisabledNowPlayingInfo) {
             container.addActionRowComponents(buildNowPlayingMetaRow(
                 tokenObj,
                 currentTime,
@@ -597,9 +615,9 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
                 player,
                 {
                     platform: options.infoPlatform !== false,
-                    time: options.infoTime !== false,
-                    volume: options.infoVolume === true,
-                    loop: options.infoLoop === true,
+                    time: showDisabledNowPlayingInfo ? false : options.infoTime !== false,
+                    volume: showDisabledNowPlayingInfo ? true : options.infoVolume === true,
+                    loop: showDisabledNowPlayingInfo ? true : options.infoLoop === true,
                 },
             ));
         }
@@ -1074,6 +1092,189 @@ async function resolveSmartTracks(poru, query, source, limit = 20, options = {})
     return rankTracksForQuery(tracks, query, { strict: options.strict }).slice(0, limit);
 }
 
+const PLAY_PROGRESS_WIDTH = 440;
+const GENERIC_LABEL_WORDS_PATTERN = /\b(?:records?|recordings?|label|music|musics|official|channel|productions?|producer|publisher|publishing|studios?|entertainment|media|network|group|company|distribution|distributor|digital|sound|audio|video|tv|vevo|youtube)\b|ري?كورد(?:ز)?|ميوزك|موسيقي|موسيقى|قناه|قناة|رسمي|رسميه|الرسمية|شركة|شركه|انتاج|الانتاج|للانتاج|للإنتاج|توزيع|ناشر|نشر|استوديو|ستوديو|ميديا|شبكه|شبكة|جروب|مجموعة|قروب|ساوند|صوت|تلفزيون|يوتيوب/i;
+const KNOWN_LABEL_NAMES = [
+    'rotana', 'rotana music', 'rotana audio', 'rotana video', 'rotana records',
+    'mazzika', 'mazika', 'maziika', 'melody music', 'melody hits', 'nogoum records',
+    'alam el fan', 'alam el phan', 'free music', 'platinum records', 'watary', 'watary production',
+    'lifestylez studios', 'lifestylez', 'chabaka', 'qanawat', 'sono cairo', 'delta sound',
+    'sout el hob', 'sout el fan', 'arabica music', 'arabica tv', 'music masters',
+    'universal music', 'universal music group', 'sony music', 'sony music middle east',
+    'warner music', 'warner music mena', 'emi', 'virgin music', 'believe music',
+    'believe digital', 'awal', 'orchard', 'the orchard', 'tunecore', 'distrokid',
+    'sony', 'warner', 'universal', 'virgin', 'believe', 'platinum', 'tseries',
+    'zee', 'saregama', 'tips', 'venus', 'speed', 'spinnin', 'armada', 'ultra',
+    'vevo', 'spinnin records', 'armada music', 'monstercat', 'ultra records',
+    't series', 't-series', 'zee music', 'zee music company', 'saregama', 'speed records',
+    'tips music', 'venus music', 'times music', 'coke studio', 'mtv', 'mbc',
+    'روتانا', 'روتانا ميوزك', 'روتانا صوتيات', 'روتانا فيديو', 'مزيكا', 'مزيكا ميوزك',
+    'ميلودي', 'ميلودي ميوزك', 'نجوم ريكوردز', 'نجوم', 'عالم الفن', 'فري ميوزك',
+    'بلاتينوم ريكوردز', 'بلاتينيوم ريكوردز', 'وتري', 'واتري', 'لايف ستايلز',
+    'لايف ستايلز ستوديوز', 'شبكة قنوات', 'قنوات', 'سونو كايرو', 'صوت القاهره',
+    'صوت القاهرة', 'دلتا ساوند', 'صوت الحب', 'صوت الفن', 'ارابيكا', 'أرابيكا',
+    'ميوزك ماسترز', 'يونيفرسال ميوزك', 'سوني ميوزك', 'وارنر ميوزك',
+    'يونيفرسال', 'سوني', 'وارنر', 'بلاتينوم', 'بلاتينيوم',
+    'تي سيريز', 'زي ميوزك', 'ساريغاما', 'سبيد ريكوردز', 'كوك ستوديو',
+];
+const NORMALIZED_LABEL_NAMES = KNOWN_LABEL_NAMES.map(normalizeSearchText).filter(Boolean);
+const ARTIST_TRACK_CACHE_TTL_MS = 10 * 60 * 1000;
+const ARTIST_TRACK_CACHE_MAX = 200;
+const artistTrackCache = new Map();
+
+function trimArtistCandidate(value) {
+    return String(value || '')
+        .replace(/\[[^\]]*\]|\([^)]*\)/g, ' ')
+        .replace(/\b(official|video|audio|lyrics?|lyric|clip|remix|hd|4k|music)\b/ig, ' ')
+        .replace(/رسمي|الرسمية|فيديو|كليب|صوتي|كلمات|حصري|جديد|اغنيه|اغنية/g, ' ')
+        .replace(/^[\s\-–—|:،,]+|[\s\-–—|:،,]+$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function isLikelyLabelAuthor(author) {
+    const raw = String(author || '').trim();
+    if (!raw) return false;
+    const normalized = normalizeSearchText(raw);
+    if (GENERIC_LABEL_WORDS_PATTERN.test(raw) || GENERIC_LABEL_WORDS_PATTERN.test(normalized)) return true;
+    const words = new Set(normalized.split(' ').filter(Boolean));
+    return NORMALIZED_LABEL_NAMES.some((label) => {
+        if (normalized === label) return true;
+        const labelWords = label.split(' ').filter(Boolean);
+        if (labelWords.length === 1) return words.has(label);
+        return normalized.includes(label);
+    });
+}
+
+function inferArtistFromTitle(title) {
+    const raw = String(title || '').replace(/\s+/g, ' ').trim();
+    if (!raw) return '';
+
+    const parts = raw.split(/\s+(?:-|–|—|\|)\s+/).map(trimArtistCandidate).filter(Boolean);
+    const candidate = parts[0] || '';
+    const tokenCount = searchTokens(candidate).length;
+
+    if (!candidate || candidate.length < 2 || candidate.length > 80) return '';
+    if (tokenCount > 7 || isLikelyLabelAuthor(candidate)) return '';
+
+    return candidate;
+}
+
+function artistQueryForTrack(track) {
+    const info = track?.info || {};
+    const rawAuthor = String(info.author || '').replace(/\s+/g, ' ').trim();
+    const author = trimArtistCandidate(rawAuthor);
+    const titleArtist = inferArtistFromTitle(info.title);
+    const authorLooksLabel = isLikelyLabelAuthor(rawAuthor) || isLikelyLabelAuthor(author);
+
+    if (titleArtist && (!author || authorLooksLabel)) {
+        return {
+            primary: titleArtist,
+            fallback: authorLooksLabel ? (rawAuthor || author) : '',
+        };
+    }
+
+    return {
+        primary: authorLooksLabel ? (rawAuthor || author) : (author || titleArtist),
+        fallback: '',
+    };
+}
+
+function artistCacheKey(source, artistName) {
+    const normalized = normalizeSearchText(artistName);
+    return `${source || 'auto'}:${normalized}`;
+}
+
+function getCachedArtistTracks(key) {
+    const cached = artistTrackCache.get(key);
+    if (!cached) return null;
+    if (cached.expiresAt <= Date.now()) {
+        artistTrackCache.delete(key);
+        return null;
+    }
+    return cached.tracks;
+}
+
+function setCachedArtistTracks(key, tracks) {
+    if (artistTrackCache.size >= ARTIST_TRACK_CACHE_MAX) {
+        const oldest = artistTrackCache.keys().next().value;
+        if (oldest) artistTrackCache.delete(oldest);
+    }
+    artistTrackCache.set(key, {
+        expiresAt: Date.now() + ARTIST_TRACK_CACHE_TTL_MS,
+        tracks,
+    });
+}
+
+function isNearSameTrackTitle(track, currentTrack) {
+    const currentTitle = currentTrack?.info?.title;
+    const nextTitle = track?.info?.title;
+    if (!currentTitle || !nextTitle) return false;
+
+    const currentTokens = new Set(searchTokens(currentTitle));
+    const nextTokens = new Set(searchTokens(nextTitle));
+    if (currentTokens.size < 2 || nextTokens.size < 2) return false;
+
+    let shared = 0;
+    for (const token of currentTokens) {
+        if (nextTokens.has(token)) shared++;
+    }
+
+    const smaller = Math.min(currentTokens.size, nextTokens.size);
+    const larger = Math.max(currentTokens.size, nextTokens.size);
+    return shared / smaller >= 0.8 && shared / larger >= 0.55;
+}
+
+function filterArtistTracks(tracks, currentTrack, limit) {
+    const currentId = currentTrack?.info?.uri || currentTrack?.info?.identifier;
+    const withoutCurrent = dedupeTracks(tracks)
+        .filter(t => (t.info.uri || t.info.identifier) !== currentId);
+    const withoutSameSong = withoutCurrent.filter(t => !isNearSameTrackTitle(t, currentTrack));
+
+    return (withoutSameSong.length ? withoutSameSong : withoutCurrent).slice(0, limit);
+}
+
+async function resolveCachedArtistQuery(poru, query, source, limit) {
+    const key = artistCacheKey(source, query);
+    let tracks = getCachedArtistTracks(key);
+
+    if (!tracks) {
+        tracks = await resolveSmartTracks(poru, query, source || 'auto', Math.max(12, limit * 2));
+        setCachedArtistTracks(key, tracks);
+    }
+
+    return tracks;
+}
+
+async function resolveArtistTracks(poru, artistQuery, source, currentTrack, limit = 5) {
+    const artistName = typeof artistQuery === 'string' ? artistQuery : artistQuery?.primary;
+    const fallbackName = typeof artistQuery === 'object' ? artistQuery.fallback : '';
+    if (!artistName) return [];
+
+    const key = artistCacheKey(source, artistName);
+    let tracks = getCachedArtistTracks(key);
+
+    if (!tracks) {
+        tracks = await resolveSmartTracks(poru, artistName, source || 'auto', Math.max(12, limit * 2));
+        setCachedArtistTracks(key, tracks);
+    }
+
+    const primaryTracks = filterArtistTracks(tracks, currentTrack, limit);
+    const needsFallback = fallbackName
+        && normalizeSearchText(fallbackName) !== normalizeSearchText(artistName)
+        && primaryTracks.length < Math.min(3, limit);
+
+    if (!needsFallback) return primaryTracks;
+
+    const fallbackTracks = filterArtistTracks(
+        await resolveCachedArtistQuery(poru, fallbackName, source, limit),
+        currentTrack,
+        limit,
+    );
+
+    return dedupeTracks([...primaryTracks, ...fallbackTracks]).slice(0, limit);
+}
+
 function compactTrackStatusTitle(title) {
     const cleaned = String(title || 'Music')
         .replace(/\[[^\]]*\]|\([^)]*\)/g, ' ')
@@ -1150,6 +1351,7 @@ async function finalizePlayerUi(player, options = {}) {
                 showProgressLabels: true,
                 showInfoRow: false,
                 useEmbedAccent: false,
+                progressWidth: PLAY_PROGRESS_WIDTH,
                 positionOverride: finalPosition,
                 durationOverride: totalTime,
             });
@@ -2060,6 +2262,7 @@ module.exports = {
             showProgressLabels: true,
             showInfoRow: false,
             useEmbedAccent: false,
+            progressWidth: PLAY_PROGRESS_WIDTH,
         });
 
         const msg = await channel.send(payload).catch(() => null);
@@ -2102,6 +2305,7 @@ module.exports = {
 	                    showProgressLabels: true,
 	                    showInfoRow: false,
 	                    useEmbedAccent: false,
+	                    progressWidth: PLAY_PROGRESS_WIDTH,
 	                });
                 await msg.edit(payload3).catch(() => {});
             } catch (err) {
@@ -2109,15 +2313,12 @@ module.exports = {
             }
         }, 15000);
 
-        const artistName = track.info?.author;
-        if (!artistName) return;
+        const artistQuery = artistQueryForTrack(track);
+        if (!artistQuery?.primary) return;
 
                 try {
                     const source = displaySettings(tokenObj2).platform;
-                    const resolvedTracks = await resolveSmartTracks(TrueMusic.poru, artistName, source || 'auto', 12);
-                    const artistTracks = resolvedTracks
-                        .filter(t => (t.info.uri || t.info.identifier) !== (track.info.uri || track.info.identifier))
-                        .slice(0, 5);
+                    const artistTracks = await resolveArtistTracks(TrueMusic.poru, artistQuery, source || 'auto', track, 5);
             player.data.ui.artistTracks = artistTracks;
             if (player.data.nowPlayingMessage?.id === msg.id && player.currentTrack === track) {
                 const payload = buildNowPlayingV2Payload(TrueMusic, tokenObj2, player, { author: requester }, {
@@ -2132,6 +2333,7 @@ module.exports = {
 	                    showProgressLabels: true,
 	                    showInfoRow: false,
 	                    useEmbedAccent: false,
+	                    progressWidth: PLAY_PROGRESS_WIDTH,
 	                });
                 await msg.edit(payload).catch(() => {});
             }
@@ -2182,13 +2384,29 @@ module.exports = {
                                 const settingsCommand = require('./commands/Subscriptions/settings');
                                 return settingsCommand.execute(TrueMusic, message, subBotCommand.args);
                             }
-                            if (subBotCommand && ['info', 'botinfo', 'about', 'معلومات', 'معلومه', 'تفاصيل'].includes(subBotCommand.name)) {
-                                const embed = buildBotInfoEmbed(TrueMusic, tokenObj, message.guild.id);
-                                return message.reply({ embeds: [embed] }).catch(() => {});
-                            }
+	                            if (subBotCommand && ['info', 'botinfo', 'about', 'معلومات', 'معلومه', 'تفاصيل'].includes(subBotCommand.name)) {
+	                                const embed = buildBotInfoEmbed(TrueMusic, tokenObj, message.guild.id);
+	                                return message.reply({ embeds: [embed] }).catch(() => {});
+	                            }
+	                            const likesCommandNames = ['mylikes', 'likes', 'liked', 'لايكاتي'];
+	                            const runMyLikesCommand = (args = []) => {
+	                                const allowedMyLikesChannels = new Set([tokenObj.chat, tokenObj.channel].filter(Boolean));
+	                                if (allowedMyLikesChannels.size && !allowedMyLikesChannels.has(message.channel.id)) return null;
+	                                const myLikesCommand = require('./commands/Control/mylikes');
+	                                return myLikesCommand.execute(TrueMusic, message, args);
+	                            };
+	                            if (subBotCommand && likesCommandNames.includes(subBotCommand.name)) {
+	                                return runMyLikesCommand(subBotCommand.args);
+	                            }
+	                            const rawNoPrefix = message.content.trim();
+	                            const noPrefixName = rawNoPrefix.split(/ +/)[0]?.toLowerCase();
+	                            if (likesCommandNames.includes(noPrefixName)) {
+	                                const myLikesArgs = rawNoPrefix.split(/ +/).slice(1);
+	                                return runMyLikesCommand(myLikesArgs);
+	                            }
 
-                            let memberVoice = message.member?.voice?.channel;
-                    if (!memberVoice) return;
+	                            let memberVoice = message.member?.voice?.channel;
+	                    if (!memberVoice) return;
 
             let clientVoice = message.guild.members?.me?.voice?.channel;
             if (!clientVoice || memberVoice.id !== clientVoice.id) return;
@@ -2200,17 +2418,7 @@ module.exports = {
                 if (!allowedTextChannels.has(message.channel.id)) return;
             }
 
-            const rawNoPrefix = message.content.trim();
-            const noPrefixName = rawNoPrefix.split(/ +/)[0]?.toLowerCase();
-            if (['mylikes', 'likes', 'liked', 'لايكاتي'].includes(noPrefixName)) {
-                const allowedMyLikesChannels = new Set([tokenObj.chat, tokenObj.channel].filter(Boolean));
-                if (allowedMyLikesChannels.size && !allowedMyLikesChannels.has(message.channel.id)) return;
-                const myLikesCommand = require('./commands/Control/mylikes');
-                const myLikesArgs = rawNoPrefix.split(/ +/).slice(1);
-                return myLikesCommand.execute(TrueMusic, message, myLikesArgs);
-            }
-
-            if (!message.content.startsWith(prefix)) return;
+	            if (!message.content.startsWith(prefix)) return;
 
             const args = message.content.slice(prefix.length).trim().split(/ +/);
             const command = args.shift().toLowerCase();
@@ -3010,6 +3218,7 @@ module.exports = {
 	                            showProgressLabels: true,
 	                            showInfoRow: false,
 	                            useEmbedAccent: false,
+	                            progressWidth: PLAY_PROGRESS_WIDTH,
 	                        });
                         if (targetInteraction && !targetInteraction.deferred && !targetInteraction.replied) {
                             await targetInteraction.deferUpdate().catch(() => {});
@@ -3193,22 +3402,22 @@ module.exports = {
                         }
                     }
 
-                    if (interaction.customId === 'like') {
-                        const currentTrack = player.currentTrack;
-                        if (!currentTrack) {
-                            responseMessage = 'لا يوجد شيء يعمل الآن.';
-                        } else if (requesterId && interaction.user.id !== requesterId) {
-                            responseMessage = 'اللايك متاح فقط لصاحب تشغيل الأغنية.';
-                        } else {
-                            try {
-                                const { liked } = await likes.toggle(requesterId || interaction.user.id, currentTrack);
-                                responseMessage = liked
-                                    ? `تم حفظ **${currentTrack.info.title || 'الأغنية'}** في لايكاتك.`
-                                    : `تم حذف **${currentTrack.info.title || 'الأغنية'}** من لايكاتك.`;
-                                await editPanel(liked);
-                            } catch (err) {
-                                console.error('[Likes] toggle failed:', err?.message || err);
-                                responseMessage = 'تعذر حفظ اللايك الآن.';
+	                    if (interaction.customId === 'like') {
+	                        const currentTrack = player.currentTrack;
+	                        if (!currentTrack) {
+	                            responseMessage = 'لا يوجد شيء يعمل الآن.';
+	                        } else {
+	                            try {
+	                                const { liked } = await likes.toggle(interaction.user.id, currentTrack);
+	                                responseMessage = liked
+	                                    ? `تم حفظ **${currentTrack.info.title || 'الأغنية'}** في لايكاتك.`
+	                                    : `تم حذف **${currentTrack.info.title || 'الأغنية'}** من لايكاتك.`;
+	                                if (!requesterId || interaction.user.id === requesterId) {
+	                                    await editPanel(liked);
+	                                }
+	                            } catch (err) {
+	                                console.error('[Likes] toggle failed:', err?.message || err);
+	                                responseMessage = 'تعذر حفظ اللايك الآن.';
                             }
                         }
                     }
