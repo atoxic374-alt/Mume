@@ -2409,13 +2409,15 @@ module.exports = {
                                     }
                                     const likesCommandNames = ['mylikes', 'likes', 'liked', 'لايكاتي'];
                                     const runMyLikesCommand = (args = []) => {
-                                        // Only respond if user is in the same VC as this sub-bot
-                                        const botVoice = message.guild.members?.me?.voice?.channel;
+                                        // Must be in same VC as this sub-bot — identical to music command behaviour
+                                        const botVoice   = message.guild.members?.me?.voice?.channel;
                                         const memberVoice = message.member?.voice?.channel;
-                                        if (botVoice && (!memberVoice || memberVoice.id !== botVoice.id)) return null;
+                                        if (!memberVoice || !botVoice || memberVoice.id !== botVoice.id) return null;
 
+                                        // Must be in the allowed text channel (if one is configured)
                                         const allowedMyLikesChannels = new Set([tokenObj.chat, tokenObj.channel].filter(Boolean));
                                         if (allowedMyLikesChannels.size && !allowedMyLikesChannels.has(message.channel.id)) return null;
+
                                         const myLikesCommand = require('./commands/Control/mylikes');
                                         return myLikesCommand.execute(TrueMusic, message, args);
                                     };
