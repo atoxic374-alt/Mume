@@ -569,12 +569,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
 
     const section = new SectionBuilder()
         .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(
-                [
-                    `### ${titleLine}`,
-                    author !== 'Unknown artist' ? `**${author}**` : '',
-                ].filter(Boolean).join('\n'),
-            ),
+            new TextDisplayBuilder().setContent(`### ${titleLine}`),
         );
 
     if (artworkUrl) {
