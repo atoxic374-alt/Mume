@@ -185,43 +185,42 @@ function shortDuration(ms) {
     return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
 }
 
-function createMusicControlButtons(liked = false) {
+function createMusicControlButtons(liked = false, paused = false) {
     const row1 = new ActionRowBuilder()
         .addComponents(
-            new ButtonBuilder()
-                .setCustomId('loop')
-                .setEmoji(MUSIC_EMOJIS.loop)
-                .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-                .setCustomId('volume_up')
-                .setEmoji(MUSIC_EMOJIS.volumeUp)
-                .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-                .setCustomId('pause')
-                .setEmoji(MUSIC_EMOJIS.pause)
-                .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('volume_down')
                 .setEmoji(MUSIC_EMOJIS.volumeDown)
                 .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
+                .setCustomId('loop')
+                .setEmoji(MUSIC_EMOJIS.loop)
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('pause')
+                .setEmoji(paused ? '▶️' : MUSIC_EMOJIS.pause)
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
                 .setCustomId('skip')
                 .setEmoji(MUSIC_EMOJIS.skip)
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('volume_up')
+                .setEmoji(MUSIC_EMOJIS.volumeUp)
                 .setStyle(ButtonStyle.Secondary),
         );
     const row2 = new ActionRowBuilder()
         .addComponents(
             new ButtonBuilder()
                 .setCustomId('like')
-                .setLabel(liked ? '💔 إلغاء اللايك' : '❤️ لايك')
+                .setEmoji(liked ? '💔' : '❤️')
                 .setStyle(liked ? ButtonStyle.Danger : ButtonStyle.Secondary),
         );
     return [row1, row2];
 }
 
-function buildMusicComponents({ liked = false, artistTracks = [], selectedFilter = 'clear', selectedArtistIndex = null, showControls = true }) {
+function buildMusicComponents({ liked = false, paused = false, artistTracks = [], selectedFilter = 'clear', selectedArtistIndex = null, showControls = true }) {
     const rows = [];
-    if (showControls) rows.push(...createMusicControlButtons(liked));
 
     if (showControls && artistTracks.length > 0) {
         const artistMenu = new StringSelectMenuBuilder()
@@ -246,6 +245,8 @@ function buildMusicComponents({ liked = false, artistTracks = [], selectedFilter
             })));
         rows.push(new ActionRowBuilder().addComponents(filterMenu));
     }
+
+    if (showControls) rows.push(...createMusicControlButtons(liked, paused));
 
     return rows.slice(0, 5);
 }
@@ -397,11 +398,12 @@ function buildNowPlayingFallbackPayload(tokenObj, player, requester) {
     });
 }
 
-function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message) {
-    const current = player.currentTrack.info;
+function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options = {}) {
+    const track = options.track || player.currentTrack;
+    const current = track.info;
     const settings = displaySettings(tokenObj);
     if (!settings.embeds) {
-        return buildNowPlayingFallbackPayload(tokenObj, player, current.requester || message.author);
+        return buildNowPlayingFallbackPayload(tokenObj, player, options.requester || current.requester || message?.author);
     }
 
     const embedColor = getEmbedColor(TrueMusic);
@@ -412,6 +414,8 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message) {
         position: currentTime,
         duration: totalTime,
         color: accentColor,
+        currentLabel: shortDuration(currentTime),
+        durationLabel: shortDuration(totalTime),
     });
     const progressFile = {
         attachment: progress.attachment,
@@ -421,7 +425,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message) {
     const author = cleanInlineText(current.author, 'Unknown artist', 72);
     const uri = isHttpUrl(current.uri) ? current.uri : null;
     const titleLine = uri ? `[${escapeMarkdownLinkText(title, 96)}](${uri})` : title;
-    const requester = current.requester || message.author;
+    const requester = options.requester || current.requester || message?.author;
     const requesterName = cleanInlineText(
         requester?.displayName || requester?.globalName || requester?.username || requester?.tag,
         'Unknown',
@@ -429,16 +433,24 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message) {
     );
     const loopMode = player.loop === 'TRACK' ? 'ON' : 'OFF';
     const volume = player.volume || 100;
-    const percent = totalTime > 0 ? `${Math.round(progress.ratio * 100)}%` : 'Live';
-    const artworkUrl = trackArtworkUrl(player.currentTrack, TrueMusic);
+    const artworkUrl = trackArtworkUrl(track, TrueMusic);
+    const interactiveRows = options.includeControls && settings.buttons
+        ? buildMusicComponents({
+            liked: !!options.liked,
+            paused: !!player.isPaused,
+            artistTracks: options.artistTracks || [],
+            selectedFilter: options.selectedFilter || player.data?.activeFilter || 'clear',
+            selectedArtistIndex: options.selectedArtistIndex ?? null,
+            showControls: true,
+        })
+        : [];
     const section = new SectionBuilder()
         .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
                 [
                     `### ${titleLine}`,
-                    `**Artist:** ${author}`,
-                    `**Requester:** ${requesterName}`,
-                ].join('\n'),
+                    author !== 'Unknown artist' ? `**${author}**` : '',
+                ].filter(Boolean).join('\n'),
             ),
         );
 
@@ -454,24 +466,27 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message) {
         );
 
     const container = new ContainerBuilder()
-        .setAccentColor(accentColor)
         .addSectionComponents(section)
-        .addSeparatorComponents(
-            new SeparatorBuilder()
-                .setDivider(true)
-                .setSpacing(SeparatorSpacingSize.Small),
-        )
-        .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(
-                `**${shortDuration(currentTime)} / ${shortDuration(totalTime)}**  •  \`${percent}\``,
-            ),
-        )
         .addMediaGalleryComponents(progressGallery)
         .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-                `**Loop:** \`${loopMode}\`  |  **Volume:** \`${volume}%\``,
+                [
+                    `\`Loop      : ${loopMode}\``,
+                    `\`Requester : ${requesterName}\``,
+                    `\`Volume    : ${volume}%\``,
+                ].join('\n'),
             ),
         );
+
+    if (interactiveRows.length) {
+        container
+            .addSeparatorComponents(
+                new SeparatorBuilder()
+                    .setDivider(false)
+                    .setSpacing(SeparatorSpacingSize.Small),
+            )
+            .addActionRowComponents(...interactiveRows);
+    }
 
     return {
         flags: MessageFlags.IsComponentsV2,
@@ -565,16 +580,28 @@ function buildBotInfoEmbed(TrueMusic, tokenObj, guildId) {
 }
 
 function disableComponents(components = []) {
-    return components.map(row => {
-        const next = new ActionRowBuilder();
-        next.addComponents(row.components.map(component => {
-            const type = component.data?.type || component.type;
-            if (type === ComponentType.Button) return ButtonBuilder.from(component).setDisabled(true);
-            if (type === ComponentType.StringSelect) return StringSelectMenuBuilder.from(component).setDisabled(true);
-            return component;
-        }));
-        return next;
-    });
+    const disableOne = (component) => {
+        const data = typeof component?.toJSON === 'function'
+            ? component.toJSON()
+            : (component?.data || component || {});
+        const type = data.type;
+
+        if (type === ComponentType.Button || type === ComponentType.StringSelect) {
+            return { ...data, disabled: true };
+        }
+
+        if (Array.isArray(data.components)) {
+            return { ...data, components: data.components.map(disableOne) };
+        }
+
+        if (data.accessory) {
+            return { ...data, accessory: disableOne(data.accessory) };
+        }
+
+        return data;
+    };
+
+    return components.map(disableOne);
 }
 
 function ensurePlayerData(player) {
@@ -650,6 +677,20 @@ function isProbablyUrl(value) {
     } catch {
         return false;
     }
+}
+
+function isMemberDeafened(member) {
+    const voice = member?.voice;
+    return !!(voice?.deaf || voice?.selfDeaf || voice?.serverDeaf);
+}
+
+function deafenedPlaybackPayload(tokenObj) {
+    return musicPayload(tokenObj, {
+        title: 'Voice Deafened',
+        description: 'فك الديفن أولاً ثم شغّل الأغنية.',
+        thumbnail: 'attachment://Error.png',
+        files: ['./assets/image/icons/Error.png'],
+    });
 }
 
 function normalizeArabicSearch(value) {
@@ -1719,7 +1760,10 @@ module.exports = {
             selectedArtistIndex: null,
         };
 
-        const payload = buildNowPlayingPayload(TrueMusic, tokenObj2, track, requester, {
+        const payload = buildNowPlayingV2Payload(TrueMusic, tokenObj2, player, { author: requester }, {
+            track,
+            requester,
+            includeControls: true,
             liked: alreadyLiked,
             selectedFilter,
         });
@@ -1741,14 +1785,16 @@ module.exports = {
 	                .slice(0, 5);
             player.data.ui.artistTracks = artistTracks;
             if (player.data.nowPlayingMessage?.id === msg.id && player.currentTrack === track) {
-                const components = buildMusicComponents({
+                const payload = buildNowPlayingV2Payload(TrueMusic, tokenObj2, player, { author: requester }, {
+                    track,
+                    requester,
+                    includeControls: true,
                     liked: alreadyLiked,
                     artistTracks,
                     selectedFilter: player.data.ui.selectedFilter,
                     selectedArtistIndex: player.data.ui.selectedArtistIndex,
-                    showControls: displaySettings(tokenObj2).buttons,
                 });
-                await msg.edit({ components }).catch(() => {});
+                await msg.edit(payload).catch(() => {});
             }
         } catch (err) {
             console.error('[TopSongs] failed:', err?.message || err);
@@ -1847,18 +1893,22 @@ module.exports = {
 
             if (cmdsArray.play.includes(command)) {
                 const song = args.join(' ');
-                if (!song) {
-                    return message.channel.send(musicPayload(tokenObj, {
-                        title: 'Play Command',
+	                if (!song) {
+	                    return message.channel.send(musicPayload(tokenObj, {
+	                        title: 'Play Command',
                         description:
                             '`play [Song]` : Play the first search result\n' +
                             '`play [URL]` : Play from YouTube, SoundCloud, Spotify, Apple Music, or Deezer',
                         thumbnail: 'attachment://Error.png',
                         files: ['./assets/image/icons/Error.png'],
-                    }));
-                }
+	                    }));
+	                }
 
-	                let player = TrueMusic.poru.players.get(message.guild.id);
+	                if (isMemberDeafened(message.member)) {
+	                    return message.reply(deafenedPlaybackPayload(tokenObj));
+	                }
+
+		                let player = TrueMusic.poru.players.get(message.guild.id);
 	                if (player) rememberTextChannel(player, message.channel.id);
 
 	                if (!player) {
@@ -2562,6 +2612,9 @@ module.exports = {
 
                     if (interaction.customId === `${searchId}_song`) {
                         await interaction.deferUpdate().catch(() => {});
+                        if (isMemberDeafened(message.member)) {
+                            return sourceMessage.edit(deafenedPlaybackPayload(tokenObj));
+                        }
                         const selectedIndex = parseInt(interaction.values[0], 10);
                         const selectedTrack = currentTracks[selectedIndex];
                         if (!selectedTrack) {
@@ -2677,17 +2730,19 @@ module.exports = {
 	            const ui = player.data.ui || {};
 	            const requesterId = ui.requesterId || player.currentTrack?.info?.requester?.id || player.currentTrack?.info?.requester;
 	            const editPanel = async (liked = false, targetInteraction = null) => {
-	                const components = buildMusicComponents({
+	                const payload = buildNowPlayingV2Payload(TrueMusic, tokenObj, player, { author: interaction.user }, {
+	                    track: player.currentTrack,
+	                    requester: player.currentTrack?.info?.requester || interaction.user,
+	                    includeControls: true,
 	                    liked,
 	                    artistTracks: ui.artistTracks || [],
 	                    selectedFilter: ui.selectedFilter || player.data.activeFilter || 'clear',
 	                    selectedArtistIndex: ui.selectedArtistIndex ?? null,
-	                    showControls: displaySettings(tokenObj).buttons,
 	                });
 	                if (targetInteraction && !targetInteraction.deferred && !targetInteraction.replied) {
-	                    return targetInteraction.update({ components }).catch(() => {});
+	                    await targetInteraction.deferUpdate().catch(() => {});
 	                }
-	                await interaction.message?.edit({ components }).catch(() => {});
+	                await interaction.message?.edit(payload).catch(() => {});
 	            };
 
 	            if (isMusicMenu) {
@@ -2748,6 +2803,8 @@ module.exports = {
 	                    await player.pause(true);
 	                    responseMessage = 'تم الإيقاف المؤقت.';
 	                }
+	                const liked = await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false);
+	                await editPanel(liked);
 	            }
 
 	            if (interaction.customId === 'volume_down') {

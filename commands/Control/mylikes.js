@@ -9,7 +9,7 @@ const {
 const { getLikes, getAllLikes } = require('../../utils/likes');
 const { getEmbedColor } = require('../../utils/embedColor');
 
-const PAGE = 10;
+const PAGE = 5;
 
 function fmt(ms) {
     if (!ms) return '—';
@@ -40,8 +40,14 @@ function trackLink(title, uri, max = 70) {
     return uri ? `**[${label}](${uri})**` : `**${label}**`;
 }
 
+function isMemberDeafened(member) {
+    const voice = member?.voice;
+    return !!(voice?.deaf || voice?.selfDeaf || voice?.serverDeaf);
+}
+
 async function ensurePlayer(client, message) {
     if (!client.poru) throw new Error('Music player is not ready.');
+    if (isMemberDeafened(message.member)) throw new Error('فك الديفن أولاً ثم شغّل الأغاني.');
 
     let player = client.poru.players.get(message.guild.id);
     if (player) {
