@@ -87,10 +87,10 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         ctx.textBaseline = 'middle';
 
         const cy = height / 2;
-        const railH = 5;
+        const railH = 6;
         const railY = Math.round(cy - railH / 2);
         const radius = railH / 2;
-        const knobRadius = 7;
+        const knobRadius = 9;
 
         const currentW = currentLabel ? Math.ceil(ctx.measureText(currentLabel).width) + 14 : 0;
         const durationW = durationLabel ? Math.ceil(ctx.measureText(durationLabel).width) + 14 : 0;
@@ -115,9 +115,9 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         }
 
         ctx.save();
-        ctx.shadowColor = 'rgba(0,0,0,0.28)';
+        ctx.shadowColor = 'rgba(0,0,0,0.32)';
         ctx.shadowBlur = 3;
-        ctx.fillStyle = rgba(base, 0.98);
+        ctx.fillStyle = 'rgba(255,255,255,0.97)';
         ctx.beginPath();
         ctx.arc(knobX, knobY, knobRadius, 0, Math.PI * 2);
         ctx.fill();
