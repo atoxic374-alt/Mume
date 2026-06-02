@@ -588,8 +588,8 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
             color: progressColor,
             currentLabel: shortDuration(currentTime),
             durationLabel: shortDuration(totalTime),
-            width: options.progressWidth || 620,
-            height: 52,
+            width: options.progressWidth || 440,
+            height: 32,
             variant: 'discordCompact',
         });
 
