@@ -24,6 +24,10 @@ client.on("messageCreate", async (message) => {
 
     if (!command) return;
 
+    // These commands only work from the sub-bot the user is in VC with
+    const SUB_BOT_ONLY = new Set(['mylikes', 'likes', 'liked', 'لايكاتي']);
+    if (SUB_BOT_ONLY.has(cmd.toLowerCase())) return;
+
     // Rate limit: 1.5s per user per command
     if (!check(message.author.id, cmd.toLowerCase())) return;
 
