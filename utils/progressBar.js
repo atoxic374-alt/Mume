@@ -87,10 +87,10 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         ctx.textBaseline = 'middle';
 
         const cy = height / 2;
-        const railH = 6;
+        const railH = 8;
         const railY = Math.round(cy - railH / 2);
         const radius = railH / 2;
-        const knobRadius = 9;
+        const knobRadius = 8;
 
         const currentW = currentLabel ? Math.ceil(ctx.measureText(currentLabel).width) + 14 : 0;
         const durationW = durationLabel ? Math.ceil(ctx.measureText(durationLabel).width) + 14 : 0;
@@ -106,18 +106,21 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
             ctx.fillText(currentLabel, 0, cy);
         }
 
-        ctx.fillStyle = 'rgba(49,50,54,0.96)';
+        // Empty rail — #323234
+        ctx.fillStyle = 'rgba(50,50,52,0.96)';
         fillRoundedRect(ctx, railX, railY, railW, railH, radius);
 
+        // Filled portion — #9d9ad1 purple/lavender (exact from Discord native player)
         if (fillW > 0.5) {
-            ctx.fillStyle = rgba(base, 0.98);
+            ctx.fillStyle = 'rgba(157,154,209,0.98)';
             fillRoundedRect(ctx, railX, railY, fillW, railH, radius);
         }
 
+        // Knob — white #fefdff
         ctx.save();
         ctx.shadowColor = 'rgba(0,0,0,0.32)';
         ctx.shadowBlur = 3;
-        ctx.fillStyle = 'rgba(255,255,255,0.97)';
+        ctx.fillStyle = 'rgba(254,253,255,0.97)';
         ctx.beginPath();
         ctx.arc(knobX, knobY, knobRadius, 0, Math.PI * 2);
         ctx.fill();
