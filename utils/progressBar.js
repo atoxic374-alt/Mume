@@ -82,7 +82,7 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
     ctx.clearRect(0, 0, width, height);
 
     if (variant === 'discordCompact') {
-        // Single-row layout: [currentTime] [====●────────] [totalTime]
+        // Single-row: [currentTime] [====●────────────] [totalTime]
         ctx.font = '600 18px sans-serif';
         ctx.textBaseline = 'middle';
 
@@ -100,6 +100,7 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         const knobX = railX + fillW;
         const knobY = cy;
 
+        // Current time — left of bar
         if (currentLabel) {
             ctx.fillStyle = 'rgba(159,159,167,0.98)';
             ctx.textAlign = 'left';
@@ -110,9 +111,9 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         ctx.fillStyle = 'rgba(50,50,52,0.96)';
         fillRoundedRect(ctx, railX, railY, railW, railH, radius);
 
-        // Filled portion — dynamic accent color (base)
+        // Filled portion — #9d9ad1 purple/lavender
         if (fillW > 0.5) {
-            ctx.fillStyle = rgba(base, 0.98);
+            ctx.fillStyle = 'rgba(157,154,209,0.98)';
             fillRoundedRect(ctx, railX, railY, fillW, railH, radius);
         }
 
@@ -126,6 +127,7 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         ctx.fill();
         ctx.restore();
 
+        // Total time — right of bar
         if (durationLabel) {
             ctx.fillStyle = 'rgba(159,159,167,0.98)';
             ctx.textAlign = 'right';
