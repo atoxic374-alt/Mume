@@ -82,18 +82,21 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
     ctx.clearRect(0, 0, width, height);
 
     if (variant === 'discordCompact') {
-        ctx.font = '700 20px sans-serif';
+        // Layout:
+        //   Row 1 (top ~58% of height): [currentTime]  [====●────────────]
+        //   Row 2 (bot ~42% of height): [totalTime]
+        ctx.font = '600 18px sans-serif';
         ctx.textBaseline = 'middle';
 
-        const hasLabels = !!(currentLabel || durationLabel);
-        const currentW = currentLabel ? Math.ceil(ctx.measureText(currentLabel).width) + 16 : 18;
-        const durationW = durationLabel ? Math.ceil(ctx.measureText(durationLabel).width) + 14 : 18;
-        const railX = currentW;
-        const railW = Math.max(40, width - railX - durationW);
-        const railH = 9;
-        const railY = hasLabels ? Math.round((height - railH) / 2) : Math.max(5, Math.round((height - railH) / 2) - 2);
+        const rowH = Math.round(height * 0.58);
+        const railH = 5;
+        const railY = Math.round((rowH - railH) / 2);
         const radius = railH / 2;
-        const knobRadius = hasLabels ? 8 : 7.5;
+        const knobRadius = 7;
+
+        const currentW = currentLabel ? Math.ceil(ctx.measureText(currentLabel).width) + 14 : 0;
+        const railX = currentW;
+        const railW = Math.max(40, width - railX - 4);
         const fillW = railW * ratio;
         const knobX = railX + fillW;
         const knobY = railY + railH / 2;
@@ -101,7 +104,7 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         if (currentLabel) {
             ctx.fillStyle = 'rgba(159,159,167,0.98)';
             ctx.textAlign = 'left';
-            ctx.fillText(currentLabel, 0, height / 2);
+            ctx.fillText(currentLabel, 0, rowH / 2);
         }
 
         ctx.fillStyle = 'rgba(49,50,54,0.96)';
@@ -114,23 +117,17 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
 
         ctx.save();
         ctx.shadowColor = 'rgba(0,0,0,0.28)';
-        ctx.shadowBlur = 2;
-        ctx.fillStyle = 'rgba(254,255,253,0.99)';
+        ctx.shadowBlur = 3;
+        ctx.fillStyle = rgba(base, 0.98);
         ctx.beginPath();
         ctx.arc(knobX, knobY, knobRadius, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
 
-        ctx.strokeStyle = rgba(light, 0.78);
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(knobX, knobY, knobRadius - 0.5, 0, Math.PI * 2);
-        ctx.stroke();
-
         if (durationLabel) {
             ctx.fillStyle = 'rgba(159,159,167,0.98)';
-            ctx.textAlign = 'right';
-            ctx.fillText(durationLabel, width, height / 2);
+            ctx.textAlign = 'left';
+            ctx.fillText(durationLabel, 0, rowH + (height - rowH) / 2);
         }
 
         const bucket = durationMs > 0 ? Math.round(ratio * 1000) : 0;

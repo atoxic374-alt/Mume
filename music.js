@@ -586,10 +586,10 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
             position: currentTime,
             duration: totalTime,
             color: progressColor,
-            currentLabel: showProgressLabels ? shortDuration(currentTime) : '',
-            durationLabel: showProgressLabels ? shortDuration(totalTime) : '',
-            width: showProgressLabels ? (options.progressWidth || 500) : 620,
-            height: showProgressLabels ? 36 : 32,
+            currentLabel: shortDuration(currentTime),
+            durationLabel: shortDuration(totalTime),
+            width: options.progressWidth || 620,
+            height: 52,
             variant: 'discordCompact',
         });
 
@@ -2286,27 +2286,27 @@ module.exports = {
             }
             try {
                 const tokenObj3 = (store.get('tokens') || []).find(t => t.token === token);
-	                const ui3 = player.data.ui || {};
-	                const alreadyLiked3 = await likes.isLiked(
-	                    player.currentTrack?.info?.requester?.id || '',
-	                    player.currentTrack || track,
-	                ).catch(() => false);
-	                ui3.liked = alreadyLiked3;
-	                player.data.ui = ui3;
-	                const payload3 = buildNowPlayingV2Payload(TrueMusic, tokenObj3, player, { author: player.currentTrack?.info?.requester }, {
-	                    track: player.currentTrack || track,
-	                    requester: player.currentTrack?.info?.requester || requester,
-	                    includeControls: true,
-	                    liked: alreadyLiked3,
-	                    artistTracks: ui3.artistTracks || [],
-	                    selectedFilter: ui3.selectedFilter || player.data.activeFilter || 'clear',
-	                    selectedArtistIndex: ui3.selectedArtistIndex ?? null,
-	                    compactPlayLayout: ui3.compactPlayLayout === true,
-	                    showProgressLabels: true,
-	                    showInfoRow: false,
-	                    useEmbedAccent: false,
-	                    progressWidth: PLAY_PROGRESS_WIDTH,
-	                });
+                        const ui3 = player.data.ui || {};
+                        const alreadyLiked3 = await likes.isLiked(
+                            player.currentTrack?.info?.requester?.id || '',
+                            player.currentTrack || track,
+                        ).catch(() => false);
+                        ui3.liked = alreadyLiked3;
+                        player.data.ui = ui3;
+                        const payload3 = buildNowPlayingV2Payload(TrueMusic, tokenObj3, player, { author: player.currentTrack?.info?.requester }, {
+                            track: player.currentTrack || track,
+                            requester: player.currentTrack?.info?.requester || requester,
+                            includeControls: true,
+                            liked: alreadyLiked3,
+                            artistTracks: ui3.artistTracks || [],
+                            selectedFilter: ui3.selectedFilter || player.data.activeFilter || 'clear',
+                            selectedArtistIndex: ui3.selectedArtistIndex ?? null,
+                            compactPlayLayout: ui3.compactPlayLayout === true,
+                            showProgressLabels: true,
+                            showInfoRow: false,
+                            useEmbedAccent: false,
+                            progressWidth: PLAY_PROGRESS_WIDTH,
+                        });
                 await msg.edit(payload3).catch(() => {});
             } catch (err) {
                 console.error('[ProgressUpdate] failed:', err?.message || err);
@@ -2325,16 +2325,16 @@ module.exports = {
                     track,
                     requester,
                     includeControls: true,
-	                    liked: alreadyLiked,
-	                    artistTracks,
-	                    selectedFilter: player.data.ui.selectedFilter,
-	                    selectedArtistIndex: player.data.ui.selectedArtistIndex,
-	                    compactPlayLayout: true,
-	                    showProgressLabels: true,
-	                    showInfoRow: false,
-	                    useEmbedAccent: false,
-	                    progressWidth: PLAY_PROGRESS_WIDTH,
-	                });
+                            liked: alreadyLiked,
+                            artistTracks,
+                            selectedFilter: player.data.ui.selectedFilter,
+                            selectedArtistIndex: player.data.ui.selectedArtistIndex,
+                            compactPlayLayout: true,
+                            showProgressLabels: true,
+                            showInfoRow: false,
+                            useEmbedAccent: false,
+                            progressWidth: PLAY_PROGRESS_WIDTH,
+                        });
                 await msg.edit(payload).catch(() => {});
             }
         } catch (err) {
@@ -2384,29 +2384,29 @@ module.exports = {
                                 const settingsCommand = require('./commands/Subscriptions/settings');
                                 return settingsCommand.execute(TrueMusic, message, subBotCommand.args);
                             }
-	                            if (subBotCommand && ['info', 'botinfo', 'about', 'معلومات', 'معلومه', 'تفاصيل'].includes(subBotCommand.name)) {
-	                                const embed = buildBotInfoEmbed(TrueMusic, tokenObj, message.guild.id);
-	                                return message.reply({ embeds: [embed] }).catch(() => {});
-	                            }
-	                            const likesCommandNames = ['mylikes', 'likes', 'liked', 'لايكاتي'];
-	                            const runMyLikesCommand = (args = []) => {
-	                                const allowedMyLikesChannels = new Set([tokenObj.chat, tokenObj.channel].filter(Boolean));
-	                                if (allowedMyLikesChannels.size && !allowedMyLikesChannels.has(message.channel.id)) return null;
-	                                const myLikesCommand = require('./commands/Control/mylikes');
-	                                return myLikesCommand.execute(TrueMusic, message, args);
-	                            };
-	                            if (subBotCommand && likesCommandNames.includes(subBotCommand.name)) {
-	                                return runMyLikesCommand(subBotCommand.args);
-	                            }
-	                            const rawNoPrefix = message.content.trim();
-	                            const noPrefixName = rawNoPrefix.split(/ +/)[0]?.toLowerCase();
-	                            if (likesCommandNames.includes(noPrefixName)) {
-	                                const myLikesArgs = rawNoPrefix.split(/ +/).slice(1);
-	                                return runMyLikesCommand(myLikesArgs);
-	                            }
+                                    if (subBotCommand && ['info', 'botinfo', 'about', 'معلومات', 'معلومه', 'تفاصيل'].includes(subBotCommand.name)) {
+                                        const embed = buildBotInfoEmbed(TrueMusic, tokenObj, message.guild.id);
+                                        return message.reply({ embeds: [embed] }).catch(() => {});
+                                    }
+                                    const likesCommandNames = ['mylikes', 'likes', 'liked', 'لايكاتي'];
+                                    const runMyLikesCommand = (args = []) => {
+                                        const allowedMyLikesChannels = new Set([tokenObj.chat, tokenObj.channel].filter(Boolean));
+                                        if (allowedMyLikesChannels.size && !allowedMyLikesChannels.has(message.channel.id)) return null;
+                                        const myLikesCommand = require('./commands/Control/mylikes');
+                                        return myLikesCommand.execute(TrueMusic, message, args);
+                                    };
+                                    if (subBotCommand && likesCommandNames.includes(subBotCommand.name)) {
+                                        return runMyLikesCommand(subBotCommand.args);
+                                    }
+                                    const rawNoPrefix = message.content.trim();
+                                    const noPrefixName = rawNoPrefix.split(/ +/)[0]?.toLowerCase();
+                                    if (likesCommandNames.includes(noPrefixName)) {
+                                        const myLikesArgs = rawNoPrefix.split(/ +/).slice(1);
+                                        return runMyLikesCommand(myLikesArgs);
+                                    }
 
-	                            let memberVoice = message.member?.voice?.channel;
-	                    if (!memberVoice) return;
+                                    let memberVoice = message.member?.voice?.channel;
+                            if (!memberVoice) return;
 
             let clientVoice = message.guild.members?.me?.voice?.channel;
             if (!clientVoice || memberVoice.id !== clientVoice.id) return;
@@ -2418,7 +2418,7 @@ module.exports = {
                 if (!allowedTextChannels.has(message.channel.id)) return;
             }
 
-	            if (!message.content.startsWith(prefix)) return;
+                    if (!message.content.startsWith(prefix)) return;
 
             const args = message.content.slice(prefix.length).trim().split(/ +/);
             const command = args.shift().toLowerCase();
@@ -3195,31 +3195,31 @@ module.exports = {
                                 return replyEphemeral('لا يوجد شيء يعمل الآن.');
                             }
 
-	                            const activePanelId = player.data?.nowPlayingMessage?.id;
-	                            if (activePanelId && interaction.message?.id !== activePanelId) {
-	                                return replyEphemeral('انتهت صلاحية لوحة التحكم لأن الأغنية تغيّرت.');
-	                            }
+                                    const activePanelId = player.data?.nowPlayingMessage?.id;
+                                    if (activePanelId && interaction.message?.id !== activePanelId) {
+                                        return replyEphemeral('انتهت صلاحية لوحة التحكم لأن الأغنية تغيّرت.');
+                                    }
 
                             const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
-	                    const ui = player.data.ui || {};
-	                    const requesterId = ui.requesterId || player.currentTrack?.info?.requester?.id || player.currentTrack?.info?.requester;
-	                    const editPanel = async (liked = false, targetInteraction = null) => {
-	                        ui.liked = liked;
-	                        player.data.ui = ui;
-	                        const payload = buildNowPlayingV2Payload(TrueMusic, tokenObj, player, { author: interaction.user }, {
-	                            track: player.currentTrack,
-	                            requester: player.currentTrack?.info?.requester || interaction.user,
-	                            includeControls: true,
-	                            liked,
-	                            artistTracks: ui.artistTracks || [],
-	                            selectedFilter: ui.selectedFilter || player.data.activeFilter || 'clear',
-	                            selectedArtistIndex: ui.selectedArtistIndex ?? null,
-	                            compactPlayLayout: ui.compactPlayLayout === true,
-	                            showProgressLabels: true,
-	                            showInfoRow: false,
-	                            useEmbedAccent: false,
-	                            progressWidth: PLAY_PROGRESS_WIDTH,
-	                        });
+                            const ui = player.data.ui || {};
+                            const requesterId = ui.requesterId || player.currentTrack?.info?.requester?.id || player.currentTrack?.info?.requester;
+                            const editPanel = async (liked = false, targetInteraction = null) => {
+                                ui.liked = liked;
+                                player.data.ui = ui;
+                                const payload = buildNowPlayingV2Payload(TrueMusic, tokenObj, player, { author: interaction.user }, {
+                                    track: player.currentTrack,
+                                    requester: player.currentTrack?.info?.requester || interaction.user,
+                                    includeControls: true,
+                                    liked,
+                                    artistTracks: ui.artistTracks || [],
+                                    selectedFilter: ui.selectedFilter || player.data.activeFilter || 'clear',
+                                    selectedArtistIndex: ui.selectedArtistIndex ?? null,
+                                    compactPlayLayout: ui.compactPlayLayout === true,
+                                    showProgressLabels: true,
+                                    showInfoRow: false,
+                                    useEmbedAccent: false,
+                                    progressWidth: PLAY_PROGRESS_WIDTH,
+                                });
                         if (targetInteraction && !targetInteraction.deferred && !targetInteraction.replied) {
                             await targetInteraction.deferUpdate().catch(() => {});
                         }
@@ -3236,13 +3236,13 @@ module.exports = {
                                     const selectedTrack = ui.artistTracks?.[selectedIndex];
                                     if (!selectedTrack) return replyEphemeral('لم أجد الأغنية المختارة.');
 
-	                                    const queuedTrack = { ...selectedTrack, info: { ...selectedTrack.info, requester: interaction.user } };
-	                                    player.queue.add(queuedTrack);
-	                                    await bumpQueueVersion(player, 'artist_menu_add');
-		                                    ui.selectedArtistIndex = null;
-		                                    player.data.ui = ui;
+                                            const queuedTrack = { ...selectedTrack, info: { ...selectedTrack.info, requester: interaction.user } };
+                                            player.queue.add(queuedTrack);
+                                            await bumpQueueVersion(player, 'artist_menu_add');
+                                                    ui.selectedArtistIndex = null;
+                                                    player.data.ui = ui;
 
-	                                    const liked = await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false);
+                                            const liked = await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false);
                                     await editPanel(liked, interaction);
 
                                     await safePlay(player);
@@ -3254,11 +3254,11 @@ module.exports = {
                             const filterName = interaction.values[0];
                             try {
                                         const applied = await applyFilter(player, filterName);
-	                                        ui.selectedFilter = applied;
-	                                        ui.selectedArtistIndex = null;
-	                                        ui.liked = await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false);
-	                                        player.data.ui = ui;
-	                                await editPanel(ui.liked);
+                                                ui.selectedFilter = applied;
+                                                ui.selectedArtistIndex = null;
+                                                ui.liked = await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false);
+                                                player.data.ui = ui;
+                                        await editPanel(ui.liked);
                                 const label = FILTER_NAMES[applied] || applied;
                                 return replyEphemeral(applied === 'clear' ? 'تم إيقاف الفلاتر.' : `تم تطبيق **${label}**.`);
                             } catch (err) {
@@ -3402,22 +3402,22 @@ module.exports = {
                         }
                     }
 
-	                    if (interaction.customId === 'like') {
-	                        const currentTrack = player.currentTrack;
-	                        if (!currentTrack) {
-	                            responseMessage = 'لا يوجد شيء يعمل الآن.';
-	                        } else {
-	                            try {
-	                                const { liked } = await likes.toggle(interaction.user.id, currentTrack);
-	                                responseMessage = liked
-	                                    ? `تم حفظ **${currentTrack.info.title || 'الأغنية'}** في لايكاتك.`
-	                                    : `تم حذف **${currentTrack.info.title || 'الأغنية'}** من لايكاتك.`;
-	                                if (!requesterId || interaction.user.id === requesterId) {
-	                                    await editPanel(liked);
-	                                }
-	                            } catch (err) {
-	                                console.error('[Likes] toggle failed:', err?.message || err);
-	                                responseMessage = 'تعذر حفظ اللايك الآن.';
+                            if (interaction.customId === 'like') {
+                                const currentTrack = player.currentTrack;
+                                if (!currentTrack) {
+                                    responseMessage = 'لا يوجد شيء يعمل الآن.';
+                                } else {
+                                    try {
+                                        const { liked } = await likes.toggle(interaction.user.id, currentTrack);
+                                        responseMessage = liked
+                                            ? `تم حفظ **${currentTrack.info.title || 'الأغنية'}** في لايكاتك.`
+                                            : `تم حذف **${currentTrack.info.title || 'الأغنية'}** من لايكاتك.`;
+                                        if (!requesterId || interaction.user.id === requesterId) {
+                                            await editPanel(liked);
+                                        }
+                                    } catch (err) {
+                                        console.error('[Likes] toggle failed:', err?.message || err);
+                                        responseMessage = 'تعذر حفظ اللايك الآن.';
                             }
                         }
                     }
