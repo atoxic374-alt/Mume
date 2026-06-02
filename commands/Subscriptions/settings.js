@@ -10,7 +10,8 @@ const {
     ModalBuilder,
     TextInputBuilder,
     TextInputStyle,
-    ChannelType
+    ChannelType,
+    ComponentType
 } = require('discord.js');
 const { owners } = require('../../config');
 const { runningBots } = require('../../music');
@@ -18,7 +19,7 @@ const { getDisplay, setDisplay } = require('../../utils/display');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
 const MUSIC_EMOJIS = require('../../utils/musicEmojis');
-const { getEmbedColor } = require('../../utils/embedColor');
+const { getEmbedColor, refreshEmbedColor } = require('../../utils/embedColor');
 
 module.exports = {
     name: 'set',
@@ -28,6 +29,20 @@ module.exports = {
         const isAdmin = owners.includes(userId);
         const isGuildOwner = message.guild?.ownerId === userId;
         const mid = message.id;
+
+        function disableRows(rows = []) {
+            return rows.map(row => {
+                const next = new ActionRowBuilder();
+                next.addComponents(row.components.map(component => {
+                    const type = component.data?.type || component.type;
+                    if (type === ComponentType.Button) return ButtonBuilder.from(component).setDisabled(true);
+                    if (type === ComponentType.StringSelect) return StringSelectMenuBuilder.from(component).setDisabled(true);
+                    if (type === ComponentType.ChannelSelect) return ChannelSelectMenuBuilder.from(component).setDisabled(true);
+                    return component;
+                }));
+                return next;
+            });
+        }
 
         // 1. Find user's subscriptions
         let tokens = store.get('tokens') || [];
@@ -78,9 +93,14 @@ module.exports = {
             };
 	        }
 
-	        function getSelectedTokens() {
+	        function isWaitingReplacement(t) {
+	            return t?.awaitingReplacement || t?.invalidTokenNotifiedAt || t?.invalidBotId;
+	        }
+
+	        function getSelectedTokens(options = {}) {
 	            tokens = store.get('tokens') || [];
-	            return tokens.filter(t => t.code === selectedCode);
+	            const selected = tokens.filter(t => t.code === selectedCode);
+	            return options.includeWaiting ? selected : selected.filter(t => !isWaitingReplacement(t));
 	        }
 
 	        function isVoiceChannel(channel) {
@@ -88,6 +108,12 @@ module.exports = {
 	        }
 
 	        function chatSummary(selectedTokens = getSelectedTokens()) {
+	            if (selectedTokens.length === 0) {
+	                return {
+	                    label: '`غير محدد`',
+	                    details: 'لا توجد بوتات نشطة حالياً داخل هذا الاشتراك.',
+	                };
+	            }
 	            const configured = selectedTokens.map(t => t.chat).filter(Boolean);
 	            const unique = [...new Set(configured)];
 	            if (unique.length === 0) {
@@ -105,6 +131,17 @@ module.exports = {
 	            return {
 	                label: '`إعدادات مختلفة`',
 	                details: `يوجد **${unique.length}** شات مختلف داخل نفس الاشتراك.`,
+	            };
+	        }
+
+	        function backToVoiceSummary(selectedTokens = getSelectedTokens({ includeWaiting: true })) {
+	            const enabled = selectedTokens.filter(t => t.backToVoice !== 'off').length;
+	            const total = selectedTokens.length;
+	            if (!total) return { enabled: false, label: '`OFF`', details: 'لا توجد بوتات نشطة حالياً.' };
+	            return {
+	                enabled: enabled > 0,
+	                label: enabled === total ? '`ON`' : enabled === 0 ? '`OFF`' : '`Mixed`',
+	                details: `مفعل في **${enabled}/${total}** بوت.`,
 	            };
 	        }
 
@@ -518,7 +555,7 @@ module.exports = {
 
 	            distCollector.on('end', (_, reason) => {
 	                if (activeDistributionCollector === distCollector) activeDistributionCollector = null;
-	                if (reason === 'time') mainMsg.edit({ components: [] }).catch(() => {});
+	                if (reason === 'time') mainMsg.edit({ components: disableRows(mainMsg.components) }).catch(() => {});
 	            });
 	        }
 
@@ -540,11 +577,14 @@ module.exports = {
                     components.push(new ActionRowBuilder().addComponents(selectMenu));
                 } 
                 else if (currentPanel === 'MAIN') {
-                    const subTokens = tokens.filter(t => t.code === selectedCode);
+                    const allSubTokens = getSelectedTokens({ includeWaiting: true });
+                    const subTokens = getSelectedTokens();
                     const timeData = store.get('time') || [];
                     const subInfo = timeData.find(t => t.code === selectedCode);
                     const display = getDisplay(selectedCode);
                     const chat = chatSummary(subTokens);
+                    const backVoice = backToVoiceSummary(allSubTokens);
+                    const waitingCount = allSubTokens.length - subTokens.length;
                     const voiceStats = subTokens.reduce((acc, t) => {
                         const info = getBotVoiceInfo(t);
                         if (!info.bot) acc.offline++;
@@ -558,12 +598,13 @@ module.exports = {
                         .setTitle(`Subscription Settings — ${selectedCode}`)
                         .setDescription('تحكم سريع ومنظم في البوتات، العرض، الغرف، والمنصة.')
                         .addFields(
-                            { name: 'Owner', value: `<@${subInfo?.user || subTokens[0]?.client}>`, inline: true },
-                            { name: 'Bots', value: `\`${subTokens.length}\``, inline: true },
-                            { name: 'Server', value: `\`${subTokens[0]?.Server || 'غير محدد'}\``, inline: true },
+                            { name: 'Owner', value: `<@${subInfo?.user || subTokens[0]?.client || allSubTokens[0]?.client}>`, inline: true },
+                            { name: 'Bots', value: `\`${subTokens.length}\`${waitingCount ? `\nWaiting: \`${waitingCount}\`` : ''}`, inline: true },
+                            { name: 'Server', value: `\`${subTokens[0]?.Server || allSubTokens[0]?.Server || 'غير محدد'}\``, inline: true },
                             { name: 'Expires', value: subInfo?.expirationTime ? `<t:${Math.floor(subInfo.expirationTime / 1000)}:R>` : 'غير معروف', inline: true },
                             { name: 'Display', value: `الأزرار: **${display.buttons ? 'مفعلة' : 'معطلة'}**\nالإيمبد: **${display.embeds ? 'مفعل' : 'معطل'}**`, inline: true },
                             { name: 'Platform', value: `\`${display.platform}\``, inline: true },
+                            { name: 'Back to Voice', value: `${backVoice.label}\n${backVoice.details}`, inline: true },
                             { name: 'Command Chat', value: `${chat.label}\n${chat.details}`, inline: false },
                             { name: 'Voice Status', value: `بروم: **${voiceStats.inRoom}**\nخامل: **${voiceStats.idle}**\nخارج السيرفر: **${voiceStats.outside}**\nغير متصل: **${voiceStats.offline}**`, inline: false }
                         )
@@ -572,10 +613,15 @@ module.exports = {
                     embeds.push(embed);
 
                     const row1 = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_appearance`).setLabel('Appearance').setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_rooms`).setLabel('Rooms').setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_display`).setLabel('Display').setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_platform`).setLabel('Platform').setStyle(ButtonStyle.Secondary)
+                        new StringSelectMenuBuilder()
+                            .setCustomId(`stg_${mid}_main_menu`)
+                            .setPlaceholder('Select settings section')
+                            .addOptions([
+                                { label: 'Appearance', value: 'APPEARANCE', description: 'تغيير الصورة، البنر، والحالة لكل البوتات' },
+                                { label: 'Rooms', value: 'ROOMS', description: 'الغرف، التوزيع الذكي، الروابط، وشات الأوامر' },
+                                { label: 'Display', value: 'DISPLAY', description: 'تفعيل أو تعطيل الأزرار والإيمبد' },
+                                { label: 'Platform', value: 'PLATFORM', description: 'اختيار منصة البحث والتشغيل' },
+                            ])
                     );
                     const row2 = new ActionRowBuilder().addComponents(
                         new ButtonBuilder().setCustomId(`stg_${mid}_close`).setLabel('Close').setStyle(ButtonStyle.Danger)
@@ -649,16 +695,25 @@ module.exports = {
                 }
 	                else if (currentPanel === 'ROOMS') {
 	                    const chat = chatSummary();
+	                    const backVoice = backToVoiceSummary();
 	                    const embed = new EmbedBuilder()
 	                        .setTitle(`Room Settings — ${selectedCode}`)
-	                        .setDescription(`راقب البوتات، وزّعها، وحدد شات استقبال الأوامر.\n\n**شات الأوامر:** ${chat.label}\n${chat.details}`)
+	                        .setDescription(
+	                            `راقب البوتات، وزّعها، وحدد شات استقبال الأوامر.\n\n` +
+	                            `**شات الأوامر:** ${chat.label}\n${chat.details}\n\n` +
+	                            `**Back to Voice:** ${backVoice.label}\n${backVoice.details}`
+	                        )
 	                        .setColor(getEmbedColor(client));
                     embeds.push(embed);
 
 	                    const row1 = new ActionRowBuilder().addComponents(
 	                        new ButtonBuilder().setCustomId(`stg_${mid}_voice_status`).setLabel('Voice Status').setStyle(ButtonStyle.Secondary),
 	                        new ButtonBuilder().setCustomId(`stg_${mid}_distribute`).setLabel('Smart Distribution').setStyle(ButtonStyle.Secondary),
-	                        new ButtonBuilder().setCustomId(`stg_${mid}_moveidle`).setLabel('Move Idle').setStyle(ButtonStyle.Secondary)
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_moveidle`).setLabel('Move Idle').setStyle(ButtonStyle.Secondary),
+	                        new ButtonBuilder()
+	                            .setCustomId(`stg_${mid}_toggle_back_voice`)
+	                            .setLabel(`Back to Voice: ${backVoice.enabled ? 'ON' : 'OFF'}`)
+	                            .setStyle(backVoice.enabled ? ButtonStyle.Success : ButtonStyle.Danger)
 	                    );
 	                    const row2 = new ActionRowBuilder().addComponents(
 	                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_chat`).setLabel('Command Chat').setStyle(ButtonStyle.Secondary),
@@ -711,8 +766,13 @@ module.exports = {
                 return updatePanel(i);
             }
 
+            if (i.customId === `stg_${mid}_main_menu`) {
+                currentPanel = i.values[0];
+                return updatePanel(i);
+            }
+
             if (i.customId === `stg_${mid}_close`) {
-                collector.stop();
+                collector.stop('closed');
                 return i.update({ content: '✅ تم إغلاق القائمة.', embeds: [], components: [] });
             }
 
@@ -854,6 +914,17 @@ module.exports = {
                 return;
             }
 
+            if (i.customId === `stg_${mid}_toggle_back_voice`) {
+                tokens = store.get('tokens') || [];
+                const selected = tokens.filter(t => t.code === selectedCode);
+                const currentlyEnabled = selected.some(t => t.backToVoice !== 'off');
+                selected.forEach(t => {
+                    t.backToVoice = currentlyEnabled ? 'off' : 'on';
+                });
+                store.set('tokens', tokens);
+                return updatePanel(i);
+            }
+
 	            if (i.customId === `stg_${mid}_voice_status`) {
 	                // Voice status sub-panel logic
 	                await handleVoiceStatus(i);
@@ -886,7 +957,10 @@ module.exports = {
                 
                 const results = await Promise.allSettled(subTokens.map(async t => {
                     const bot = runningBots.get(t.token);
-                    if (bot) await bot.user.setAvatar(url);
+                    if (bot) {
+                        await bot.user.setAvatar(url);
+                        refreshEmbedColor(bot).catch(() => {});
+                    }
                 }));
 
                 const success = results.filter(r => r.status === 'fulfilled').length;
@@ -996,8 +1070,11 @@ module.exports = {
 	            }
 	        };
 	        client.on('interactionCreate', modalHandler);
-	        collector.on('end', () => {
+	        collector.on('end', (_, reason) => {
 	            client.off('interactionCreate', modalHandler);
+	            if (reason !== 'closed') {
+	                mainMsg.edit({ components: disableRows(mainMsg.components) }).catch(() => {});
+	            }
 	        });
 
 	        async function handleVoiceStatus(interaction) {
@@ -1103,6 +1180,10 @@ module.exports = {
 	                    return showMoveIdleModal(i);
 	                }
 	            });
+
+	            vsCollector.on('end', (_, reason) => {
+	                if (reason === 'time') mainMsg.edit({ components: disableRows(mainMsg.components) }).catch(() => {});
+	            });
 	        }
 
         // ════════════════════════════════════════════════════════════════
@@ -1142,22 +1223,19 @@ module.exports = {
                 const end   = Math.min(start + PAGE_SIZE, filtered.length);
                 const slice = filtered.slice(start, end);
 
-                // نرسم كل بوت: رقمه الأصلي | منشن | حالة | رابط
                 const lines = slice.map(({ t, globalIdx }) => {
                     const info     = getBotVoiceInfo(t);
                     const clientId = getClientId(t.token);
-                    const mention  = info.bot ? `<@${info.bot.user.id}>` : '`—`';
-                    const link     = clientId
-                        ? `[دعوة](https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot)`
-                        : '`لا يوجد ID`';
-
-                    // مؤشر السيرفر
-                    const serverBadge = info.inServer
-                        ? '`✅ سيرفر`'
-                        : (info.bot ? '`🌐 خارج`' : '`🚫 أوفلاين`');
-
+                    const botName = info.bot?.user?.username || t.invalidBotName || `Bot ${globalIdx + 1}`;
+                    const invite = clientId
+                        ? `[Invite Bot](https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot)`
+                        : '`No Link`';
+                    const target = info.inServer ? '`In server`' : invite;
+                    const status = info.inServer
+                        ? (info.inRoom ? `Voice: <#${info.channelId}>` : 'Voice: `Idle`')
+                        : (info.bot ? 'Status: `Outside Server`' : 'Status: `Offline`');
                     const num = String(globalIdx + 1).padStart(3, ' ');
-                    return `\`${num}\` ${mention}  ${info.statusText}  ${serverBadge}  ${link}`;
+                    return `\`${num}\` **${botName}**\n     → ${target}\n     ${status}`;
                 });
 
                 const embed = new EmbedBuilder()
@@ -1165,7 +1243,7 @@ module.exports = {
                     .setDescription(
                         `> **الفلتر:** ${FILTER_LABELS[lpFilter]}  |  **النتائج:** ${filtered.length} بوت\n` +
                         `\u200b\n` +
-                        (lines.length ? lines.join('\n') : '*لا توجد بوتات في هذه الفئة.*')
+                        (lines.length ? lines.join('\n\n') : '*لا توجد بوتات في هذه الفئة.*')
                     )
                     .setColor(getEmbedColor(client))
                     .setFooter({ text: `صفحة ${lpPage + 1} / ${totalPages}  •  ${code}` });
@@ -1251,7 +1329,7 @@ module.exports = {
             });
 
             lpCollector.on('end', (_, reason) => {
-                if (reason === 'time') mainMsg.edit({ components: [] }).catch(() => {});
+                if (reason === 'time') mainMsg.edit({ components: disableRows(mainMsg.components) }).catch(() => {});
             });
         }
     }

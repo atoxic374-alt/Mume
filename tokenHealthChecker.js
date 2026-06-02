@@ -20,7 +20,7 @@ async function fetchBotInfo(token) {
             resolve(null);
         }, 8000);
 
-        client.once('ready', () => {
+        client.once('clientReady', () => {
             clearTimeout(timeout);
             const info = {
                 id:       client.user.id,
@@ -52,8 +52,6 @@ async function validateToken(token) {
     });
 }
 
-const NO_STOCK_NOTICE_INTERVAL = 12 * 60 * 60 * 1000;
-
 async function resolveBotName(mainClient, botId, runningName) {
     if (runningName) return runningName;
     if (!botId) return null;
@@ -63,10 +61,9 @@ async function resolveBotName(mainClient, botId, runningName) {
 }
 
 function shouldSendNoStockNotice(entry, oldBotId) {
-    const now = Date.now();
     const sameInvalidBot = entry.invalidBotId === oldBotId;
     const lastNotice = Number(entry.invalidTokenNotifiedAt || 0);
-    return !sameInvalidBot || !lastNotice || now - lastNotice >= NO_STOCK_NOTICE_INTERVAL;
+    return !sameInvalidBot || !lastNotice;
 }
 
 // ── Notify subscription owner with a clean embed ──────────────────────────────
@@ -178,15 +175,32 @@ async function checkAndReplaceTokens(mainClient) {
                     runningBots?.get(entry.token)?.user?.username || null
                 );
 
+                const stopInvalidClient = async () => {
+                    const oldClient = runningBots?.get(entry.token);
+                    if (oldClient) {
+                        await oldClient.destroy().catch(() => {});
+                        runningBots.delete(entry.token);
+                    }
+                };
+
                 // ── استبدال من المخزون ────────────────────────────────────
                 if (botsArray.length === 0) {
                     console.error(`[TokenChecker] No replacement bots — sub ${entry.code}`);
+                    await stopInvalidClient();
 
-                    if (!shouldSendNoStockNotice(entry, oldBotId)) return;
-                    await notifyNoStock(mainClient, entry, oldBotName);
+                    if (!shouldSendNoStockNotice(entry, oldBotId)) {
+                        if (!entry.awaitingReplacement) {
+                            entry.awaitingReplacement = true;
+                            changed = true;
+                        }
+                        return;
+                    }
+                    await notifyNoStock(mainClient, entry, oldBotName || entry.invalidBotName);
 
                     entry.invalidBotId = oldBotId || null;
+                    entry.invalidBotName = oldBotName || null;
                     entry.invalidTokenNotifiedAt = Date.now();
+                    entry.awaitingReplacement = true;
                     changed = true;
                     return;
                 }
@@ -206,17 +220,28 @@ async function checkAndReplaceTokens(mainClient) {
 
                 if (!newBotInfo) {
                     console.error(`[TokenChecker] No valid replacement bots — sub ${entry.code}`);
-                    if (!shouldSendNoStockNotice(entry, oldBotId)) return;
-                    await notifyNoStock(mainClient, entry, oldBotName);
+                    await stopInvalidClient();
+                    if (!shouldSendNoStockNotice(entry, oldBotId)) {
+                        if (!entry.awaitingReplacement) {
+                            entry.awaitingReplacement = true;
+                            changed = true;
+                        }
+                        return;
+                    }
+                    await notifyNoStock(mainClient, entry, oldBotName || entry.invalidBotName);
                     entry.invalidBotId = oldBotId || null;
+                    entry.invalidBotName = oldBotName || null;
                     entry.invalidTokenNotifiedAt = Date.now();
+                    entry.awaitingReplacement = true;
                     changed = true;
                     return;
                 }
 
                 entry.token = newBot.token;
                 delete entry.invalidBotId;
+                delete entry.invalidBotName;
                 delete entry.invalidTokenNotifiedAt;
+                delete entry.awaitingReplacement;
                 changed = true;
 
                 console.log(`[TokenChecker] Replaced token for sub ${entry.code} → new bot ${newBotInfo?.name || '?'} (${newBotInfo?.id || '?'})`);

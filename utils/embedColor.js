@@ -1,6 +1,6 @@
 'use strict';
 
-const { PNG } = require('pngjs');
+const { createCanvas, loadImage } = require('@napi-rs/canvas');
 const { Colors: fallbackColor } = require('../config');
 
 const COLOR_CACHE_TTL = 6 * 60 * 60 * 1000;
@@ -54,31 +54,40 @@ function avatarUrlFrom(source) {
     return null;
 }
 
-function dominantColorFromPng(buffer) {
-    const png = PNG.sync.read(buffer);
+function dominantColorFromPixels(data) {
     const bins = new Map();
+    let fallbackBin = null;
 
-    for (let i = 0; i < png.data.length; i += 4) {
-        const alpha = png.data[i + 3];
+    for (let i = 0; i < data.length; i += 4) {
+        const alpha = data[i + 3];
         if (alpha < 128) continue;
 
-        const r = png.data[i];
-        const g = png.data[i + 1];
-        const b = png.data[i + 2];
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
         const max = Math.max(r, g, b);
         const min = Math.min(r, g, b);
         const saturation = max - min;
         const brightness = max / 255;
+        const isNeutral = saturation < 24;
+        const isTooDark = max < 38;
+        const isTooLight = min > 232;
 
-        // Prefer visually meaningful avatar colors over large white/gray areas.
-        const weight = (1 + saturation / 128) * (0.65 + brightness * 0.35);
+        const neutralWeight = isNeutral ? 0.18 : 1;
+        const brightnessWeight = brightness < 0.2 ? 0.25 : brightness > 0.92 ? 0.35 : 1;
+        const weight = (1 + saturation / 72) * neutralWeight * brightnessWeight;
         const key = `${r >> 3}:${g >> 3}:${b >> 3}`;
         const bin = bins.get(key) || { weight: 0, r: 0, g: 0, b: 0 };
         bin.weight += weight;
         bin.r += r * weight;
         bin.g += g * weight;
         bin.b += b * weight;
-        bins.set(key, bin);
+
+        if (!isTooDark && !isTooLight && !isNeutral) {
+            bins.set(key, bin);
+        }
+
+        if (!fallbackBin || bin.weight > fallbackBin.weight) fallbackBin = bin;
     }
 
     let best = null;
@@ -86,6 +95,7 @@ function dominantColorFromPng(buffer) {
         if (!best || bin.weight > best.weight) best = bin;
     }
 
+    if (!best || best.weight <= 0) best = fallbackBin;
     if (!best || best.weight <= 0) return null;
     const r = Math.round(best.r / best.weight);
     const g = Math.round(best.g / best.weight);
@@ -93,15 +103,25 @@ function dominantColorFromPng(buffer) {
     return (r << 16) + (g << 8) + b;
 }
 
+async function dominantColorFromImage(buffer) {
+    const image = await loadImage(buffer);
+    const size = 96;
+    const canvas = createCanvas(size, size);
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(image, 0, 0, size, size);
+    const { data } = ctx.getImageData(0, 0, size, size);
+    return dominantColorFromPixels(data);
+}
+
 async function fetchAvatarColor(url) {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`avatar fetch failed: ${response.status}`);
 
     const type = response.headers.get('content-type') || '';
-    if (!type.includes('png')) throw new Error(`unsupported avatar type: ${type || 'unknown'}`);
+    if (!/^image\//i.test(type)) throw new Error(`unsupported avatar type: ${type || 'unknown'}`);
 
     const buffer = Buffer.from(await response.arrayBuffer());
-    return dominantColorFromPng(buffer);
+    return dominantColorFromImage(buffer);
 }
 
 async function refreshEmbedColor(source) {

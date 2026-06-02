@@ -20,6 +20,32 @@ function fmt(ms) {
         : `${m}:${String(s % 60).padStart(2,'0')}`;
 }
 
+async function ensurePlayer(client, message) {
+    if (!client.poru) throw new Error('Music player is not ready.');
+
+    let player = client.poru.players.get(message.guild.id);
+    if (player) {
+        player.textChannel = message.channel.id;
+        return player;
+    }
+
+    const memberVoice = message.member?.voice?.channel;
+    const botVoice = message.guild.members?.me?.voice?.channel;
+    if (!memberVoice) throw new Error('Join your voice room first.');
+    if (botVoice && botVoice.id !== memberVoice.id) throw new Error('Join the same voice room as the bot.');
+
+    const voiceChannel = botVoice || memberVoice;
+    player = await client.poru.createConnection({
+        guildId: message.guild.id,
+        voiceChannel: voiceChannel.id,
+        textChannel: message.channel.id,
+        deaf: true,
+        autoPlay: false,
+    });
+    player.autoplay = false;
+    return player;
+}
+
 module.exports = {
     name: 'mylikes',
     aliases: ['لايكاتي', 'likes', 'liked'],
@@ -49,10 +75,10 @@ module.exports = {
                 })
                 .setDescription(
                     total === 0
-                        ? '> No liked songs yet.\n> Play a track and press ❤️ to save it.'
-                        : `> **${total}** tracks saved  ·  page **${page + 1}** of **${pages}**\n\u200b\n` + lines.join('\n\n')
+                        ? '> **No liked songs yet.**\n> شغّل أغنية واضغط لايك لحفظها هنا.'
+                        : `> **${total}** saved tracks  ·  page **${page + 1}** of **${pages}**\n> اختر أغنية أو عدة أغاني لإضافتها للطابور.\n\u200b\n` + lines.join('\n\n')
                 )
-                .setFooter({ text: `Use the menu below to queue selected tracks` });
+                .setFooter({ text: 'Liked songs are queued in the current voice session' });
         }
 
         // ── Rows ──────────────────────────────────────────────────────────
@@ -130,12 +156,15 @@ module.exports = {
             if (i.customId === `ml_next_${message.id}`)  { page++; return re(i); }
             if (i.customId === `ml_close_${message.id}`) { col.stop('closed'); return i.update({ components: [] }); }
 
-            const player = client.poru?.players?.get(message.guild.id);
-
             // ── Play All ─────────────────────────────────────────────────
             if (i.customId === `ml_all_${message.id}`) {
                 await i.deferUpdate();
-                if (!player) return i.followUp({ content: '> No active player in this server.', ephemeral: true });
+                let player;
+                try {
+                    player = await ensurePlayer(client, message);
+                } catch (err) {
+                    return i.followUp({ content: `> ${err.message}`, ephemeral: true });
+                }
                 if (!allCache) allCache = await getAll().catch(() => []);
                 if (!allCache.length) return;
 
@@ -156,7 +185,12 @@ module.exports = {
             // ── Queue Selected ───────────────────────────────────────────
             if (i.customId === `ml_queue_${message.id}`) {
                 await i.deferUpdate();
-                if (!player) return i.followUp({ content: '> No active player in this server.', ephemeral: true });
+                let player;
+                try {
+                    player = await ensurePlayer(client, message);
+                } catch (err) {
+                    return i.followUp({ content: `> ${err.message}`, ephemeral: true });
+                }
                 if (!allCache) allCache = await getAll().catch(() => []);
 
                 const idxs   = i.values.map(Number);

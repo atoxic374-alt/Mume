@@ -78,7 +78,7 @@ require('./manager.js');
         console.log(err.stack ? err.stack : err);
       });
 
-client.once('ready', () => {
+client.once('clientReady', () => {
     refreshEmbedColor(client).catch(() => {});
     const { checkAndReplaceTokens } = require('./tokenHealthChecker');
     setTimeout(() => checkAndReplaceTokens(client), 15000);
