@@ -390,7 +390,7 @@ function buildTextProgressBar(position, duration, length = 20) {
     return '─'.repeat(filled) + '🔴' + '─'.repeat(length - filled);
 }
 
-function buildInlineProgressBar(position, duration, length = 22) {
+function buildInlineProgressBar(position, duration, length = 22, meta = '') {
     const total = Number(duration || 0);
     const current = Math.max(0, Number(position || 0));
     const ratio = total > 0 ? Math.min(1, current / total) : 0;
@@ -400,7 +400,8 @@ function buildInlineProgressBar(position, duration, length = 22) {
     const timeNow   = shortDuration(current);
     const timeTotal = shortDuration(total);
     // ANSI \u001b[37m ≈ #bfbfc7 (extracted from target image), \u001b[2;30m = dark empty bar
-    const line = `\u001b[37m${timeNow}  ${filledBar}\u001b[0m\u001b[1;37m●\u001b[0m\u001b[2;30m${emptyBar}\u001b[0m\u001b[37m  ${timeTotal}\u001b[0m`;
+    const metaPart = meta ? `\u001b[2;37m  ${meta}\u001b[0m` : '';
+    const line = `\u001b[37m${timeNow}  ${filledBar}\u001b[0m\u001b[1;37m●\u001b[0m\u001b[2;30m${emptyBar}\u001b[0m\u001b[37m  ${timeTotal}\u001b[0m${metaPart}`;
     return `\`\`\`ansi\n${line}\n\`\`\``;
 }
 
@@ -473,16 +474,13 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
         section.setThumbnailAccessory(new ThumbnailBuilder().setURL(artworkUrl));
     }
 
-    const barLine = buildInlineProgressBar(currentTime, totalTime);
-    const infoLine = `-# \`🔁 ${loopMode}\`  \`🔊 ${volume}%\`  \`👤 ${requesterName}\``;
+    const meta = `🔁 ${loopMode}  🔊 ${volume}%  👤 ${requesterName}`;
+    const barLine = buildInlineProgressBar(currentTime, totalTime, 22, meta);
 
     const container = new ContainerBuilder()
         .addSectionComponents(section)
         .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(barLine),
-        )
-        .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(infoLine),
         );
 
     if (interactiveRows.length) {
