@@ -586,20 +586,15 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
             position: currentTime,
             duration: totalTime,
             color: progressColor,
-            currentLabel: '',
-            durationLabel: '',
-            width: 800,
-            height: 28,
+            currentLabel: shortDuration(currentTime),
+            durationLabel: shortDuration(totalTime),
+            width: 1000,
+            height: 68,
             variant: 'discordCompact',
         });
 
-        const timeDisplay = `-# \`${shortDuration(currentTime)}\` / \`${shortDuration(totalTime)}\``;
-
         const container = new ContainerBuilder()
             .addSectionComponents(section)
-            .addTextDisplayComponents(
-                new TextDisplayBuilder().setContent(timeDisplay),
-            )
             .addMediaGalleryComponents(
                 new MediaGalleryBuilder().addItems(
                     new MediaGalleryItemBuilder()

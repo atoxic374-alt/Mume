@@ -83,17 +83,18 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
 
     if (variant === 'discordCompact') {
         // Single-row: [currentTime] [====●────────────] [totalTime]
-        ctx.font = '600 18px sans-serif';
+        // Large dimensions so text stays readable after Discord scales the image down
+        ctx.font = '600 38px sans-serif';
         ctx.textBaseline = 'middle';
 
         const cy = height / 2;
-        const railH = 8;
+        const railH = 14;
         const railY = Math.round(cy - railH / 2);
         const radius = railH / 2;
-        const knobRadius = 8;
+        const knobRadius = 20;
 
-        const currentW = currentLabel ? Math.ceil(ctx.measureText(currentLabel).width) + 14 : 0;
-        const durationW = durationLabel ? Math.ceil(ctx.measureText(durationLabel).width) + 14 : 0;
+        const currentW = currentLabel ? Math.ceil(ctx.measureText(currentLabel).width) + 20 : 0;
+        const durationW = durationLabel ? Math.ceil(ctx.measureText(durationLabel).width) + 20 : 0;
         const railX = currentW;
         const railW = Math.max(40, width - railX - durationW);
         const fillW = railW * ratio;
