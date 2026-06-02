@@ -37,7 +37,7 @@ const MUSIC_EMOJIS = require('./utils/musicEmojis');
 const { getEmbedColor, refreshEmbedColor } = require('./utils/embedColor');
 const statusStore = require('./statusStore');
 const { tintAttachmentPayload } = require('./utils/tintedThumbnail');
-const { buildProgressBarAttachment, normalizeColorNumber } = require('./utils/progressBar');
+const { buildProgressBarAttachment } = require('./utils/progressBar');
 
 const runningBots = new Collection();
 const botLastActivity = new Map();
@@ -185,7 +185,7 @@ function shortDuration(ms) {
     return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
 }
 
-function createMusicControlButtons(paused = false, liked = false) {
+function createMusicControlButtons(paused = false, liked = false, { includeLike = true, dangerStop = true } = {}) {
     const row1 = new ActionRowBuilder()
         .addComponents(
             new ButtonBuilder()
@@ -195,7 +195,7 @@ function createMusicControlButtons(paused = false, liked = false) {
             new ButtonBuilder()
                 .setCustomId('stop')
                 .setEmoji('⏹')
-                .setStyle(ButtonStyle.Danger),
+                .setStyle(dangerStop ? ButtonStyle.Danger : ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('pause')
                 .setEmoji(paused ? '▶️' : MUSIC_EMOJIS.pause)
@@ -223,18 +223,24 @@ function createMusicControlButtons(paused = false, liked = false) {
                 .setCustomId('volume_up')
                 .setEmoji(MUSIC_EMOJIS.volumeUp)
                 .setStyle(ButtonStyle.Secondary),
+        );
+
+    if (includeLike) {
+        row2.addComponents(
             new ButtonBuilder()
                 .setCustomId('like')
                 .setEmoji(liked ? '💔' : '❤️')
                 .setStyle(liked ? ButtonStyle.Danger : ButtonStyle.Secondary),
         );
+    }
+
     return [row1, row2];
 }
 
-function buildMusicComponents({ liked = false, paused = false, artistTracks = [], selectedFilter = 'clear', selectedArtistIndex = null, showControls = true }) {
+function buildMusicComponents({ liked = false, paused = false, artistTracks = [], selectedFilter = 'clear', selectedArtistIndex = null, showControls = true, compactControls = false }) {
     const rows = [];
 
-    if (showControls && artistTracks.length > 0) {
+    if (showControls && !compactControls && artistTracks.length > 0) {
         const artistMenu = new StringSelectMenuBuilder()
             .setCustomId('np_artist')
             .setPlaceholder('أفضل 5 أغاني لنفس الفنان')
@@ -247,7 +253,7 @@ function buildMusicComponents({ liked = false, paused = false, artistTracks = []
         rows.push(new ActionRowBuilder().addComponents(artistMenu));
     }
 
-    if (showControls) {
+    if (showControls && !compactControls) {
         const activeFilterName = FILTER_NAMES[selectedFilter] || FILTER_NAMES.clear;
         const filterMenu = new StringSelectMenuBuilder()
             .setCustomId('np_filter')
@@ -258,7 +264,10 @@ function buildMusicComponents({ liked = false, paused = false, artistTracks = []
         rows.push(new ActionRowBuilder().addComponents(filterMenu));
     }
 
-    if (showControls) rows.push(...createMusicControlButtons(paused, liked));
+    if (showControls) rows.push(...createMusicControlButtons(paused, liked, {
+        includeLike: !compactControls,
+        dangerStop: !compactControls,
+    }));
 
     return rows.slice(0, 5);
 }
@@ -448,6 +457,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     const loopMode = player.loop === 'TRACK' ? 'ON' : 'OFF';
     const volume = player.volume || 100;
     const artworkUrl = trackArtworkUrl(track, TrueMusic);
+    const compactPlayLayout = options.compactPlayLayout === true;
 
     const interactiveRows = options.includeControls && settings.buttons
         ? buildMusicComponents({
@@ -457,6 +467,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
             selectedFilter: options.selectedFilter || player.data?.activeFilter || 'clear',
             selectedArtistIndex: options.selectedArtistIndex ?? null,
             showControls: true,
+            compactControls: compactPlayLayout,
         })
         : [];
 
@@ -472,6 +483,43 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
 
     if (artworkUrl) {
         section.setThumbnailAccessory(new ThumbnailBuilder().setURL(artworkUrl));
+    }
+
+    if (compactPlayLayout) {
+        const progress = buildProgressBarAttachment({
+            position: currentTime,
+            duration: totalTime,
+            color: '#b5bac1',
+            currentLabel: shortDuration(currentTime),
+            width: 640,
+            height: 32,
+            variant: 'discordCompact',
+        });
+
+        const container = new ContainerBuilder()
+            .addSectionComponents(section)
+            .addMediaGalleryComponents(
+                new MediaGalleryBuilder().addItems(
+                    new MediaGalleryItemBuilder()
+                        .setURL(`attachment://${progress.name}`)
+                        .setDescription('Playback progress'),
+                ),
+            )
+            .addTextDisplayComponents(
+                new TextDisplayBuilder().setContent(shortDuration(totalTime)),
+            );
+
+        if (interactiveRows.length) {
+            container.addActionRowComponents(...interactiveRows);
+        }
+
+        return {
+            flags: MessageFlags.IsComponentsV2,
+            components: [container],
+            files: [{ attachment: progress.attachment, name: progress.name }],
+            attachments: [],
+            allowedMentions: { parse: [] },
+        };
     }
 
     const meta = `🔁 ${loopMode}  🔊 ${volume}%  👤 ${requesterName}`;
@@ -1840,6 +1888,7 @@ module.exports = {
             artistTracks: [],
             selectedFilter,
             selectedArtistIndex: null,
+            compactPlayLayout: true,
         };
 
         const payload = buildNowPlayingV2Payload(TrueMusic, tokenObj2, player, { author: requester }, {
@@ -1848,6 +1897,7 @@ module.exports = {
             includeControls: true,
             liked: alreadyLiked,
             selectedFilter,
+            compactPlayLayout: true,
         });
 
         const msg = await channel.send(payload).catch(() => null);
@@ -1878,6 +1928,7 @@ module.exports = {
                     artistTracks: ui3.artistTracks || [],
                     selectedFilter: ui3.selectedFilter || player.data.activeFilter || 'clear',
                     selectedArtistIndex: ui3.selectedArtistIndex ?? null,
+                    compactPlayLayout: ui3.compactPlayLayout === true,
                 });
                 await msg.edit(payload3).catch(() => {});
             } catch (err) {
@@ -1904,6 +1955,7 @@ module.exports = {
                     artistTracks,
                     selectedFilter: player.data.ui.selectedFilter,
                     selectedArtistIndex: player.data.ui.selectedArtistIndex,
+                    compactPlayLayout: true,
                 });
                 await msg.edit(payload).catch(() => {});
             }
@@ -2767,6 +2819,7 @@ module.exports = {
                             artistTracks: ui.artistTracks || [],
                             selectedFilter: ui.selectedFilter || player.data.activeFilter || 'clear',
                             selectedArtistIndex: ui.selectedArtistIndex ?? null,
+                            compactPlayLayout: ui.compactPlayLayout === true,
                         });
                         if (targetInteraction && !targetInteraction.deferred && !targetInteraction.replied) {
                             await targetInteraction.deferUpdate().catch(() => {});

@@ -67,7 +67,7 @@ function fillRoundedRect(ctx, x, y, width, height, radius) {
     ctx.fill();
 }
 
-function buildProgressBarAttachment({ position = 0, duration = 0, color, currentLabel = '', durationLabel = '', width = 860, height = 58 } = {}) {
+function buildProgressBarAttachment({ position = 0, duration = 0, color, currentLabel = '', durationLabel = '', width = 860, height = 58, variant = 'default' } = {}) {
     const base = colorParts(color);
     const light = mixColor(base, { r: 255, g: 255, b: 255 }, 0.10);
     const dark = mixColor(base, { r: 0, g: 0, b: 0 }, 0.30);
@@ -80,6 +80,51 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.clearRect(0, 0, width, height);
+
+    if (variant === 'discordCompact') {
+        const labelGap = currentLabel ? 72 : 0;
+        const railX = currentLabel ? labelGap : 4;
+        const railW = width - railX - 10;
+        const railH = 6;
+        const railY = Math.round((height - railH) / 2);
+        const radius = railH / 2;
+        const knobRadius = 6;
+        const fillW = railW * ratio;
+        const knobX = railX + fillW;
+        const knobY = railY + railH / 2;
+
+        if (currentLabel) {
+            ctx.font = '600 18px sans-serif';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = 'rgba(181,186,193,0.98)';
+            ctx.textAlign = 'left';
+            ctx.fillText(currentLabel, 0, height / 2);
+        }
+
+        ctx.fillStyle = 'rgba(58,60,64,0.86)';
+        fillRoundedRect(ctx, railX, railY, railW, railH, radius);
+
+        if (fillW > 0.5) {
+            ctx.fillStyle = 'rgba(181,186,193,0.96)';
+            fillRoundedRect(ctx, railX, railY, fillW, railH, radius);
+        }
+
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.28)';
+        ctx.shadowBlur = 2;
+        ctx.fillStyle = 'rgba(243,244,248,0.98)';
+        ctx.beginPath();
+        ctx.arc(knobX, knobY, knobRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        const bucket = durationMs > 0 ? Math.round(ratio * 1000) : 0;
+        return {
+            attachment: canvas.toBuffer('image/png'),
+            name: `progress-compact-${base.hex}-${bucket}.png`,
+            ratio,
+        };
+    }
 
     const railX = currentLabel ? 96 : 24;
     const railW = width - railX - (durationLabel ? 96 : 24);
