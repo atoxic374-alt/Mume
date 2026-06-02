@@ -12,7 +12,16 @@ const {
     StringSelectMenuBuilder,
     ActivityType,
     Options,
-    ComponentType
+    ComponentType,
+    ContainerBuilder,
+    SectionBuilder,
+    TextDisplayBuilder,
+    ThumbnailBuilder,
+    MediaGalleryBuilder,
+    MediaGalleryItemBuilder,
+    SeparatorBuilder,
+    SeparatorSpacingSize,
+    MessageFlags,
 } = require('discord.js');
 
 const fs = require('fs');
@@ -20,7 +29,6 @@ const { Poru } = require('poru');
 
 const { owners, TwitchUrl, statuses } = require(`${process.cwd()}/config`);
 const { getVoiceConnection } = require('@discordjs/voice');
-const duratiform = require('duratiform');
 
 const store = require('./utils/store');
 const likes = require('./utils/likes');
@@ -29,6 +37,7 @@ const MUSIC_EMOJIS = require('./utils/musicEmojis');
 const { getEmbedColor, refreshEmbedColor } = require('./utils/embedColor');
 const statusStore = require('./statusStore');
 const { tintAttachmentPayload } = require('./utils/tintedThumbnail');
+const { buildProgressBarAttachment, normalizeColorNumber } = require('./utils/progressBar');
 
 const runningBots = new Collection();
 const botLastActivity = new Map();
@@ -39,59 +48,120 @@ const collection = new Collection();
 const FILTER_NAMES = {
     clear: 'بدون فلتر',
     bassboost: 'Bass Boost',
+    bassboost2: 'Bass Boost+',
     nightcore: 'Nightcore',
+    spedup: 'Sped Up',
+    slowmode: 'Slow Mode',
+    deep: 'Deep Voice',
+    highpitch: 'High Pitch',
     '8d': '8D Audio',
     vaporwave: 'Vaporwave',
     karaoke: 'Karaoke',
     tremolo: 'Tremolo',
     vibrato: 'Vibrato',
     lowpass: 'Low Pass',
+    muffled: 'Muffled',
     channelmix: 'Channel Mix',
+    treble: 'Treble Boost',
+    pop: 'Pop EQ',
+    electronic: 'Electronic EQ',
+    soft: 'Soft EQ',
 };
 
 const FILTER_OPTIONS = [
     { label: 'إيقاف الفلاتر', value: 'clear', description: 'إزالة جميع الفلاتر', emoji: '⬛' },
     { label: 'Bass Boost', value: 'bassboost', description: 'جهير أوضح بدون تشويه', emoji: '🔊' },
+    { label: 'Bass Boost+', value: 'bassboost2', description: 'جهير أقوى وواضح', emoji: '📢' },
     { label: 'Nightcore', value: 'nightcore', description: 'سرعة ونبرة أعلى', emoji: '🌙' },
+    { label: 'Sped Up', value: 'spedup', description: 'تسريع خفيف بدون رفع مبالغ', emoji: '⏩' },
+    { label: 'Slow Mode', value: 'slowmode', description: 'إبطاء ناعم للأغنية', emoji: '⏬' },
+    { label: 'Deep Voice', value: 'deep', description: 'نبرة أعمق وأثقل', emoji: '⬇️' },
+    { label: 'High Pitch', value: 'highpitch', description: 'نبرة عالية وسريعة', emoji: '⬆️' },
     { label: '8D Audio', value: '8d', description: 'حركة صوتية خفيفة', emoji: '🌀' },
     { label: 'Vaporwave', value: 'vaporwave', description: 'أبطأ وأنعم', emoji: '🌊' },
     { label: 'Karaoke', value: 'karaoke', description: 'تقليل الصوت البشري', emoji: '🎤' },
     { label: 'Tremolo', value: 'tremolo', description: 'اهتزاز مستوى الصوت', emoji: '〰️' },
     { label: 'Vibrato', value: 'vibrato', description: 'اهتزاز النبرة', emoji: '📳' },
     { label: 'Low Pass', value: 'lowpass', description: 'صوت أنعم', emoji: '🔉' },
+    { label: 'Muffled', value: 'muffled', description: 'صوت مكتوم وواضح الفرق', emoji: '🔇' },
     { label: 'Channel Mix', value: 'channelmix', description: 'مزج خفيف للقنوات', emoji: '🔀' },
+    { label: 'Treble Boost', value: 'treble', description: 'إبراز الأصوات العالية', emoji: '✨' },
+    { label: 'Pop EQ', value: 'pop', description: 'موازنة مناسبة للأغاني العامة', emoji: '🎶' },
+    { label: 'Electronic EQ', value: 'electronic', description: 'إيقاع وحدّة أكثر', emoji: '⚡' },
+    { label: 'Soft EQ', value: 'soft', description: 'صوت أهدأ وأنظف', emoji: '☁️' },
 ];
 
 const BASE_FILTERS = {
     volume: 1.0,
     equalizer: [],
-    karaoke: undefined,
-    timescale: undefined,
-    tremolo: undefined,
-    vibrato: undefined,
-    rotation: undefined,
-    distortion: undefined,
-    channelMix: undefined,
-    lowPass: undefined,
+    karaoke: null,
+    timescale: null,
+    tremolo: null,
+    vibrato: null,
+    rotation: null,
+    distortion: null,
+    channelMix: null,
+    lowPass: null,
 };
 
 const FILTER_PRESETS = {
     clear: {},
     bassboost: {
         equalizer: [
-            { band: 0, gain: 0.16 }, { band: 1, gain: 0.14 }, { band: 2, gain: 0.10 },
-            { band: 3, gain: 0.06 }, { band: 4, gain: 0.03 }, { band: 5, gain: 0.00 },
-            { band: 6, gain: -0.02 },
+            { band: 0, gain: 0.28 }, { band: 1, gain: 0.24 }, { band: 2, gain: 0.18 },
+            { band: 3, gain: 0.11 }, { band: 4, gain: 0.05 }, { band: 5, gain: 0.00 },
+            { band: 6, gain: -0.03 }, { band: 7, gain: -0.04 },
+        ],
+    },
+    bassboost2: {
+        equalizer: [
+            { band: 0, gain: 0.40 }, { band: 1, gain: 0.34 }, { band: 2, gain: 0.26 },
+            { band: 3, gain: 0.15 }, { band: 4, gain: 0.06 }, { band: 5, gain: -0.02 },
+            { band: 6, gain: -0.05 }, { band: 7, gain: -0.06 },
         ],
     },
     nightcore: { timescale: { speed: 1.12, pitch: 1.10, rate: 1.0 } },
+    spedup: { timescale: { speed: 1.16, pitch: 1.02, rate: 1.05 } },
+    slowmode: { timescale: { speed: 0.86, pitch: 0.98, rate: 0.92 } },
+    deep: { timescale: { speed: 0.96, pitch: 0.82, rate: 1.0 } },
+    highpitch: { timescale: { speed: 1.06, pitch: 1.35, rate: 1.02 } },
     '8d': { rotation: { rotationHz: 0.14 } },
     vaporwave: { timescale: { speed: 0.92, pitch: 0.90, rate: 1.0 } },
     karaoke: { karaoke: { level: 0.35, monoLevel: 0.35, filterBand: 220.0, filterWidth: 90.0 } },
     tremolo: { tremolo: { frequency: 3.5, depth: 0.25 } },
     vibrato: { vibrato: { frequency: 4.5, depth: 0.25 } },
     lowpass: { lowPass: { smoothing: 5.0 } },
+    muffled: { lowPass: { smoothing: 13.0 }, equalizer: [{ band: 10, gain: -0.12 }, { band: 11, gain: -0.16 }, { band: 12, gain: -0.20 }] },
     channelmix: { channelMix: { leftToLeft: 0.85, leftToRight: 0.15, rightToLeft: 0.15, rightToRight: 0.85 } },
+    treble: {
+        equalizer: [
+            { band: 5, gain: 0.05 }, { band: 6, gain: 0.08 }, { band: 7, gain: 0.11 },
+            { band: 8, gain: 0.13 }, { band: 9, gain: 0.15 }, { band: 10, gain: 0.13 },
+            { band: 11, gain: 0.10 }, { band: 12, gain: 0.07 },
+        ],
+    },
+    pop: {
+        equalizer: [
+            { band: 0, gain: 0.10 }, { band: 1, gain: 0.08 }, { band: 2, gain: 0.04 },
+            { band: 5, gain: 0.05 }, { band: 6, gain: 0.07 }, { band: 8, gain: 0.06 },
+            { band: 10, gain: 0.04 },
+        ],
+    },
+    electronic: {
+        equalizer: [
+            { band: 0, gain: 0.16 }, { band: 1, gain: 0.12 }, { band: 2, gain: 0.07 },
+            { band: 6, gain: 0.08 }, { band: 7, gain: 0.10 }, { band: 8, gain: 0.12 },
+            { band: 10, gain: 0.10 },
+        ],
+        timescale: { speed: 1.03, pitch: 1.0, rate: 1.0 },
+    },
+    soft: {
+        equalizer: [
+            { band: 0, gain: -0.03 }, { band: 1, gain: -0.02 }, { band: 8, gain: -0.05 },
+            { band: 9, gain: -0.07 }, { band: 10, gain: -0.08 }, { band: 11, gain: -0.10 },
+        ],
+        lowPass: { smoothing: 7.0 },
+    },
 };
 
 function displaySettings(tokenObj) {
@@ -259,6 +329,156 @@ function musicPayload(tokenObj, { title, description, fields = [], components = 
     }
 
     return payload;
+}
+
+function cleanInlineText(value, fallback = 'Unknown', maxLength = 120) {
+    const text = String(value || fallback).replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim() || fallback;
+    return text.length > maxLength ? `${text.slice(0, Math.max(1, maxLength - 3))}...` : text;
+}
+
+function escapeMarkdownLinkText(value, maxLength = 100) {
+    return cleanInlineText(value, 'Unknown', maxLength)
+        .replace(/\\/g, '\\\\')
+        .replace(/\[/g, '\\[')
+        .replace(/\]/g, '\\]')
+        .replace(/\(/g, '\\(')
+        .replace(/\)/g, '\\)');
+}
+
+function isHttpUrl(value) {
+    return /^https?:\/\//i.test(String(value || '').trim());
+}
+
+function trackArtworkUrl(track, client) {
+    const info = track?.info || {};
+    const candidates = [
+        info.artworkUrl,
+        info.thumbnail,
+        info.image,
+        info.uri?.includes('i.ytimg.com') ? info.uri : null,
+    ];
+
+    const identifier = String(info.identifier || '').trim();
+    const source = String(info.sourceName || '').toLowerCase();
+    if (identifier && (source.includes('youtube') || /youtu\.?be/i.test(String(info.uri || '')))) {
+        candidates.push(`https://img.youtube.com/vi/${identifier}/hqdefault.jpg`);
+    }
+
+    const found = candidates.find(isHttpUrl);
+    if (found) return found;
+    return client.user?.displayAvatarURL?.({ extension: 'png', size: 256 }) || null;
+}
+
+function buildTextProgressBar(position, duration, length = 20) {
+    const total = Number(duration || 0);
+    if (total <= 0) return '─'.repeat(10) + '🔴' + '─'.repeat(10);
+    const current = Math.max(0, Number(position || 0));
+    const filled = Math.max(0, Math.min(length, Math.floor((current / total) * length)));
+    return '─'.repeat(filled) + '🔴' + '─'.repeat(length - filled);
+}
+
+function buildNowPlayingFallbackPayload(tokenObj, player, requester) {
+    const current = player.currentTrack.info;
+    const loopMode = player.loop === 'TRACK' ? 'ON' : 'OFF';
+    const volume = player.volume || 100;
+    const currentTime = player.position || 0;
+    const totalTime = current.length || 0;
+    const titleText = current.uri ? `[${current.title || 'Unknown'}](${current.uri})` : (current.title || 'Unknown');
+    const requesterName = requester?.displayName || requester?.globalName || requester?.username || requester?.tag || 'Unknown';
+
+    return musicPayload(tokenObj, {
+        title: 'Now Playing',
+        description:
+            `**Title:** ${titleText}\n` +
+            `**Loop:** \`${loopMode}\` | **Volume:** \`${volume}%\`\n` +
+            `**Requester:** \`${requesterName}\`\n\n` +
+            `\`\`\`► ${buildTextProgressBar(currentTime, totalTime)}\`\`\`\n` +
+            `\`[${shortDuration(currentTime)} / ${shortDuration(totalTime)}]\``,
+    });
+}
+
+function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message) {
+    const current = player.currentTrack.info;
+    const settings = displaySettings(tokenObj);
+    if (!settings.embeds) {
+        return buildNowPlayingFallbackPayload(tokenObj, player, current.requester || message.author);
+    }
+
+    const embedColor = getEmbedColor(TrueMusic);
+    const accentColor = normalizeColorNumber(embedColor);
+    const currentTime = Math.max(0, Number(player.position || 0));
+    const totalTime = Math.max(0, Number(current.length || 0));
+    const progress = buildProgressBarAttachment({
+        position: currentTime,
+        duration: totalTime,
+        color: accentColor,
+    });
+    const progressFile = {
+        attachment: progress.attachment,
+        name: progress.name,
+    };
+    const title = cleanInlineText(current.title, 'Unknown track', 96);
+    const author = cleanInlineText(current.author, 'Unknown artist', 72);
+    const uri = isHttpUrl(current.uri) ? current.uri : null;
+    const titleLine = uri ? `[${escapeMarkdownLinkText(title, 96)}](${uri})` : title;
+    const requester = current.requester || message.author;
+    const requesterName = cleanInlineText(
+        requester?.displayName || requester?.globalName || requester?.username || requester?.tag,
+        'Unknown',
+        64,
+    );
+    const loopMode = player.loop === 'TRACK' ? 'ON' : 'OFF';
+    const volume = player.volume || 100;
+    const percent = totalTime > 0 ? `${Math.round(progress.ratio * 100)}%` : 'Live';
+    const artworkUrl = trackArtworkUrl(player.currentTrack, TrueMusic);
+    const section = new SectionBuilder()
+        .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                [
+                    `### ${titleLine}`,
+                    `**Artist:** ${author}`,
+                    `**Requester:** ${requesterName}`,
+                ].join('\n'),
+            ),
+        );
+
+    if (artworkUrl) {
+        section.setThumbnailAccessory(new ThumbnailBuilder().setURL(artworkUrl));
+    }
+
+    const progressGallery = new MediaGalleryBuilder()
+        .addItems(
+            new MediaGalleryItemBuilder()
+                .setURL(`attachment://${progressFile.name}`)
+                .setDescription('Now playing progress'),
+        );
+
+    const container = new ContainerBuilder()
+        .setAccentColor(accentColor)
+        .addSectionComponents(section)
+        .addSeparatorComponents(
+            new SeparatorBuilder()
+                .setDivider(true)
+                .setSpacing(SeparatorSpacingSize.Small),
+        )
+        .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                `**${shortDuration(currentTime)} / ${shortDuration(totalTime)}**  •  \`${percent}\``,
+            ),
+        )
+        .addMediaGalleryComponents(progressGallery)
+        .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                `**Loop:** \`${loopMode}\`  |  **Volume:** \`${volume}%\``,
+            ),
+        );
+
+    return {
+        flags: MessageFlags.IsComponentsV2,
+        components: [container],
+        files: [progressFile],
+        allowedMentions: { parse: [] },
+    };
 }
 
 function platformDisplay(source) {
@@ -445,6 +665,26 @@ function normalizeArabicSearch(value) {
         .trim();
 }
 
+const SEARCH_STOP_WORDS = new Set([
+    'official', 'audio', 'video', 'lyrics', 'lyric', 'remix', 'cover', 'live', 'hd', '4k',
+    'music', 'song', 'track', 'visualizer', 'remastered', 'feat', 'ft', 'prod',
+    'اغنيه', 'اغنية', 'رسمي', 'الرسمية', 'كلمات', 'فيديو', 'صوتي', 'موسيقي',
+]);
+
+function normalizeSearchText(value) {
+    return normalizeArabicSearch(String(value || '').toLowerCase())
+        .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function searchTokens(value) {
+    return normalizeSearchText(value)
+        .split(' ')
+        .map(token => token.trim())
+        .filter(token => token.length > 1 && !SEARCH_STOP_WORDS.has(token));
+}
+
 function buildSearchVariants(query) {
     const raw = String(query || '').replace(/\s+/g, ' ').trim();
     const normalized = normalizeArabicSearch(raw);
@@ -474,7 +714,81 @@ function dedupeTracks(tracks = []) {
     return unique;
 }
 
-async function resolveSmartTracks(poru, query, source, limit = 20) {
+function scoreTrackForQuery(track, query) {
+    const tokens = searchTokens(query);
+    if (!tokens.length) return { score: 1, coverage: 1, phraseHit: true };
+
+    const info = track?.info || {};
+    const title = normalizeSearchText(info.title);
+    const author = normalizeSearchText(info.author);
+    const combined = `${title} ${author}`.trim();
+    const phrase = normalizeSearchText(query);
+    const titleWords = new Set(title.split(' ').filter(Boolean));
+    const authorWords = new Set(author.split(' ').filter(Boolean));
+    let score = 0;
+    let matched = 0;
+    let phraseHit = false;
+
+    if (phrase.length > 1) {
+        if (title.includes(phrase)) {
+            score += 70;
+            phraseHit = true;
+        } else if (combined.includes(phrase)) {
+            score += 45;
+            phraseHit = true;
+        }
+    }
+
+    for (const token of tokens) {
+        if (titleWords.has(token)) {
+            score += 22;
+            matched++;
+        } else if (title.includes(token)) {
+            score += 16;
+            matched++;
+        } else if (authorWords.has(token)) {
+            score += 12;
+            matched++;
+        } else if (author.includes(token)) {
+            score += 8;
+            matched++;
+        } else if (combined.includes(token)) {
+            score += 5;
+            matched++;
+        }
+    }
+
+    const coverage = matched / tokens.length;
+    score += coverage * 35;
+    if (matched === tokens.length) score += 24;
+    if (!matched && !phraseHit) score -= 80;
+
+    const duration = Number(info.length || 0);
+    if (duration > 0 && duration < 35000) score -= 6;
+    if (duration > 0 && duration > 20 * 60 * 1000) score -= 4;
+
+    return { score, coverage, phraseHit };
+}
+
+function rankTracksForQuery(tracks, query, { strict = false } = {}) {
+    const unique = dedupeTracks(tracks);
+    const tokens = searchTokens(query);
+    if (!tokens.length) return unique;
+
+    const minScore = strict ? (tokens.length === 1 ? 24 : 34) : 8;
+    const minCoverage = strict ? (tokens.length <= 2 ? 1 : 0.55) : 0.25;
+
+    const ranked = unique
+        .map((track, index) => ({ track, index, ...scoreTrackForQuery(track, query) }))
+        .filter(item => item.score >= minScore && (item.phraseHit || item.coverage >= minCoverage))
+        .sort((a, b) => (b.score - a.score) || (a.index - b.index))
+        .map(item => item.track);
+
+    if (strict) return ranked;
+    return ranked.length ? ranked : unique;
+}
+
+async function resolveSmartTracks(poru, query, source, limit = 20, options = {}) {
     if (isProbablyUrl(query)) {
         const result = await poru.resolve({ query });
         return dedupeTracks(result?.tracks || []).slice(0, limit);
@@ -494,7 +808,7 @@ async function resolveSmartTracks(poru, query, source, limit = 20) {
         }
     }
 
-    return dedupeTracks(tracks).slice(0, limit);
+    return rankTracksForQuery(tracks, query, { strict: options.strict }).slice(0, limit);
 }
 
 function compactTrackStatusTitle(title) {
@@ -1323,28 +1637,46 @@ module.exports = {
 
 
     // ── Helper: apply audio filter preset ──────────────────────────────
+    function filterPayloadFor(name) {
+        const selected = FILTER_PRESETS[name] ? name : 'clear';
+        return {
+            selected,
+            filters: { ...BASE_FILTERS, ...FILTER_PRESETS[selected] },
+        };
+    }
+
+    function assertLavalinkFilterResponse(response) {
+        if (!response) throw new Error('Lavalink did not return a player response');
+        if (response.error || Number(response.status) >= 400) {
+            throw new Error(response.message || response.error || `Lavalink filter error ${response.status}`);
+        }
+    }
+
+    function syncPlayerFilters(player, filters) {
+        if (!player?.filters) return;
+        player.filters.volume = filters.volume;
+        player.filters.equalizer = filters.equalizer || [];
+        player.filters.karaoke = filters.karaoke || undefined;
+        player.filters.timescale = filters.timescale || undefined;
+        player.filters.tremolo = filters.tremolo || undefined;
+        player.filters.vibrato = filters.vibrato || undefined;
+        player.filters.rotation = filters.rotation || undefined;
+        player.filters.distortion = filters.distortion || undefined;
+        player.filters.channelMix = filters.channelMix || undefined;
+        player.filters.lowPass = filters.lowPass || undefined;
+    }
+
     async function applyFilter(player, name) {
         if (!player?.node?.rest) throw new Error('player is not connected');
-        const selected = FILTER_PRESETS[name] ? name : 'clear';
-        const filters = { ...BASE_FILTERS, ...FILTER_PRESETS[selected] };
+        const { selected, filters } = filterPayloadFor(name);
 
-        await player.node.rest.updatePlayer({
+        const response = await player.node.rest.updatePlayer({
             guildId: player.guildId,
             data: { filters },
         });
+        assertLavalinkFilterResponse(response);
 
-        if (player.filters) {
-            player.filters.volume = filters.volume;
-            player.filters.equalizer = filters.equalizer || [];
-            player.filters.karaoke = filters.karaoke || undefined;
-            player.filters.timescale = filters.timescale || undefined;
-            player.filters.tremolo = filters.tremolo || undefined;
-            player.filters.vibrato = filters.vibrato || undefined;
-            player.filters.rotation = filters.rotation || undefined;
-            player.filters.distortion = filters.distortion || undefined;
-            player.filters.channelMix = filters.channelMix || undefined;
-            player.filters.lowPass = filters.lowPass || undefined;
-        }
+        syncPlayerFilters(player, filters);
 
         player.data.activeFilter = selected;
         return selected;
@@ -1653,32 +1985,16 @@ module.exports = {
                 let clientVoice = message.guild.members?.me?.voice?.channel;
                 if (!memberVoice || !clientVoice || memberVoice.id !== clientVoice.id) return;
 
-                const current = player.currentTrack.info;
-                const loopMode = player.loop === 'TRACK' ? 'ON' : 'OFF';
-                const volume = player.volume || 100;
-                const currentTime = player.position;
-                const totalTime = current.length;
-
-                if (totalTime <= 0) {
-                    console.error('Invalid total time');
-                    return;
+                try {
+                    return await message.channel.send(buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message));
+                } catch (error) {
+                    console.warn(`[NowPlayingV2] failed, using fallback: ${error?.message || error}`);
+                    return message.channel.send(buildNowPlayingFallbackPayload(
+                        tokenObj,
+                        player,
+                        player.currentTrack.info?.requester || message.author,
+                    ));
                 }
-
-                const progressBarLength = 20;
-                const progress = Math.floor((currentTime / totalTime) * progressBarLength);
-                const validProgress = Math.max(0, Math.min(progress, progressBarLength));
-
-                const progressBar = '─'.repeat(validProgress) + '🔴' + '─'.repeat(progressBarLength - validProgress);
-
-                return message.channel.send(musicPayload(tokenObj, {
-                    title: 'Now Playing',
-                    description:
-                        `**Title:** ${current.title}\n` +
-                        `**Loop:** \`${loopMode}\` | **Volume:** \`${volume}\`\n` +
-                        `**Requester:** \`${message.author.tag}\`\n\n` +
-                        `\`\`\`► ${progressBar}\`\`\`\n` +
-                        `\`[${duratiform.format(currentTime, 'mm:ss')} / ${duratiform.format(totalTime, 'mm:ss')}]\``,
-                }));
             }
             else if (cmdsArray.loop.includes(command)) {
                 let player = TrueMusic.poru.players.get(message.guild.id);
@@ -1760,6 +2076,11 @@ module.exports = {
                     const text = value || 'Unknown';
                     return text.length > max ? `${text.slice(0, max - 1)}…` : text;
                 };
+                const queueTrackLink = (track, max = 66) => {
+                    const title = escapeMarkdownLinkText(track?.info?.title || 'Unknown', max);
+                    const url = isHttpUrl(track?.info?.uri) ? track.info.uri : null;
+                    return url ? `**[${title}](${url})**` : `**${title}**`;
+                };
 	                const duration = (track) => shortDuration(track?.info?.length);
 	                const totalPages = () => Math.max(1, Math.ceil(player.queue.length / itemsPerPage));
 	                const pageTracks = () => {
@@ -1770,17 +2091,11 @@ module.exports = {
 
 	                const buildQueueDescription = () => {
 	                    const nowPlayingTrack = currentTrackForRender();
-	                    const currentTitle = trimTitle(nowPlayingTrack?.info?.title, 80);
-	                    const currentUrl = nowPlayingTrack?.info?.uri;
-	                    const currentLine = currentUrl
-	                        ? `> **[${currentTitle}](${currentUrl})**  ·  \`${duration(nowPlayingTrack)}\``
-	                        : `> **${currentTitle}**  ·  \`${duration(nowPlayingTrack)}\``;
+	                    const currentLine = `> ${queueTrackLink(nowPlayingTrack, 80)}  ·  \`${duration(nowPlayingTrack)}\``;
                     const queuedLines = pageTracks().map((track, i) => {
                         const absolute = page * itemsPerPage + i + 1;
-                        const title = trimTitle(track.info.title);
-                        const url = track.info.uri;
-                        const label = url ? `**[${title}](${url})**` : `**${title}**`;
-                        return `\`${String(absolute).padStart(2, '0')}\`  ${label}\n     \`${duration(track)}\`  ·  ${track.info.author || 'Unknown'}`;
+                        const author = cleanInlineText(track.info.author, 'Unknown', 48);
+                        return `**${String(absolute).padStart(2, '0')}.** ${queueTrackLink(track)}\n> \`${duration(track)}\`  •  ${author}`;
                     });
 
                     return [
@@ -2134,6 +2449,8 @@ module.exports = {
                     controlRow(false),
                 ];
 
+                const hasMoreSearchResults = () => searchOffset + currentTracks.length < allSearchTracks.length;
+
                 const buildTrackRows = (tracks) => [
                     new ActionRowBuilder().addComponents(
                         new StringSelectMenuBuilder()
@@ -2145,7 +2462,7 @@ module.exports = {
                                 description: `${shortDuration(track.info.length)} - ${(track.info.author || 'Unknown').slice(0, 50)}`.slice(0, 99),
                             })))
                     ),
-                    controlRow(true, true),
+                    controlRow(true, hasMoreSearchResults()),
                 ];
 
                 const sourceMessage = await message.channel.send(musicPayload(tokenObj, {
@@ -2190,7 +2507,7 @@ module.exports = {
 	                        }));
 
 	                        try {
-	                            allSearchTracks = await resolveSmartTracks(TrueMusic.poru, searchQuery, selectedSource, 60);
+	                            allSearchTracks = await resolveSmartTracks(TrueMusic.poru, searchQuery, selectedSource, 60, { strict: true });
 	                            currentTracks = allSearchTracks.slice(searchOffset, searchOffset + 10);
 
 	                            if (currentTracks.length === 0) {
@@ -2203,7 +2520,7 @@ module.exports = {
 
 	                            return sourceMessage.edit(musicPayload(tokenObj, {
 	                                title: 'Search Results',
-	                                description: `النتائج من ${platformDisplay(selectedSource)} · بدون تكرار.\nاختر أغنية، أو اضغط **Continue Search** لنتائج أخرى.`,
+	                                description: `النتائج من ${platformDisplay(selectedSource)} · مرتبة حسب صلة البحث وبدون تكرار.\nاختر أغنية من القائمة.`,
 	                                components: buildTrackRows(currentTracks),
 	                            }));
                         } catch (err) {
@@ -2238,7 +2555,7 @@ module.exports = {
                         currentTracks = allSearchTracks.slice(searchOffset, searchOffset + 10);
                         return interaction.update(musicPayload(tokenObj, {
                             title: 'Search Results',
-                            description: `نتائج جديدة من ${platformDisplay(selectedSource)}.\nتم استبدال القائمة السابقة.`,
+                            description: `نتائج إضافية من ${platformDisplay(selectedSource)} · مطابقة للبحث.\nتم استبدال القائمة السابقة.`,
                             components: buildTrackRows(currentTracks),
                         }));
                     }

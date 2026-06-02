@@ -21,6 +21,25 @@ function fmt(ms) {
         : `${m}:${String(s % 60).padStart(2,'0')}`;
 }
 
+function cleanText(value, fallback = 'Unknown', max = 80) {
+    const text = String(value || fallback).replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim() || fallback;
+    return text.length > max ? `${text.slice(0, Math.max(1, max - 1))}…` : text;
+}
+
+function escapeLinkText(value, max = 80) {
+    return cleanText(value, 'Unknown', max)
+        .replace(/\\/g, '\\\\')
+        .replace(/\[/g, '\\[')
+        .replace(/\]/g, '\\]')
+        .replace(/\(/g, '\\(')
+        .replace(/\)/g, '\\)');
+}
+
+function trackLink(title, uri, max = 70) {
+    const label = escapeLinkText(title, max);
+    return uri ? `**[${label}](${uri})**` : `**${label}**`;
+}
+
 async function ensurePlayer(client, message) {
     if (!client.poru) throw new Error('Music player is not ready.');
 
@@ -106,18 +125,19 @@ function buildQueueEmbed(client, message, player, added, label) {
     const current = player.currentTrack;
     const upcoming = Array.from(player.queue || []).slice(0, 10);
     const lines = upcoming.map((track, index) => {
-        const title = (track.info?.title || 'Unknown').slice(0, 54);
-        const author = (track.info?.author || 'Unknown').slice(0, 40);
-        return `\`${String(index + 1).padStart(2, '0')}\` **${title}**\n     \`${fmt(track.info?.length)}\` · ${author}`;
+        const number = String(index + 1).padStart(2, '0');
+        const author = cleanText(track.info?.author, 'Unknown', 42);
+        return `**${number}.** ${trackLink(track.info?.title, track.info?.uri, 58)}\n> \`${fmt(track.info?.length)}\`  •  ${author}`;
     });
 
     return new EmbedBuilder()
         .setColor(getEmbedColor(client))
         .setTitle('Queue Updated')
         .setDescription([
-            `> **${added}** track${added === 1 ? '' : 's'} added from **${label}**.`,
-            current ? `> Now: **${(current.info?.title || 'Unknown').slice(0, 70)}**` : '> Playback will start now.',
+            `> Queued **${added}** liked track${added === 1 ? '' : 's'} from **${label}**.`,
+            current ? `> Now Playing: ${trackLink(current.info?.title, current.info?.uri, 70)}` : '> Playback will start now.',
             '',
+            '**Next Up**',
             lines.length ? lines.join('\n\n') : '> No upcoming songs after the current track.',
         ].join('\n'))
         .setFooter({ text: `Requested by ${message.author.displayName}` });
@@ -139,9 +159,8 @@ module.exports = {
             const start = page * PAGE;
 
             const lines = rows.map((r, i) => {
-                const n     = String(start + i + 1).padStart(3, ' ');
-                const title = r.title.length > 48 ? r.title.slice(0, 45) + '…' : r.title;
-                return `\`${n}\` **[${title}](${r.uri})** \`${fmt(r.duration)}\`\n       ↳ ${r.author || '—'}`;
+                const number = String(start + i + 1).padStart(2, '0');
+                return `**${number}.** ${trackLink(r.title, r.uri, 62)}\n> \`${fmt(r.duration)}\`  •  ${cleanText(r.author, '—', 46)}`;
             });
 
             return new EmbedBuilder()
@@ -200,6 +219,11 @@ module.exports = {
             );
         }
 
+        function buildComponents(rows, total) {
+            const sr = buildSelect(rows, page * PAGE);
+            return [buildNav(total), ...(sr ? [sr] : [])];
+        }
+
         // ── Render ────────────────────────────────────────────────────────
         let { rows, total } = await getData().catch(() => ({ rows: [], total: 0 }));
         const selRow = buildSelect(rows, page * PAGE);
@@ -219,10 +243,9 @@ module.exports = {
         async function re(i) {
             const d = await getData().catch(() => ({ rows: [], total: 0 }));
             rows = d.rows; total = d.total;
-            const sr = buildSelect(rows, page * PAGE);
             await i.update({
                 embeds: [buildEmbed(rows, total)],
-                components: [buildNav(total), ...(sr ? [sr] : [])],
+                components: buildComponents(rows, total),
             });
         }
 
@@ -233,15 +256,21 @@ module.exports = {
 
             // ── Play All ─────────────────────────────────────────────────
             if (i.customId === `ml_all_${message.id}`) {
-                await i.deferUpdate();
+                await i.deferReply({ ephemeral: true });
+                await i.editReply({ content: '> Loading liked tracks...' }).catch(() => {});
+                await msg.edit({ components: disableComponents(msg.components) }).catch(() => {});
                 let player;
                 try {
                     player = await ensurePlayer(client, message);
                 } catch (err) {
-                    return i.followUp({ content: `> ${err.message}`, ephemeral: true });
+                    await msg.edit({ components: buildComponents(rows, total) }).catch(() => {});
+                    return i.editReply({ content: `> ${err.message}` });
                 }
                 const allRows = await getAll().catch(() => []);
-                if (!allRows.length) return i.followUp({ content: '> لا توجد لايكات محفوظة.', ephemeral: true });
+                if (!allRows.length) {
+                    await msg.edit({ components: buildComponents(rows, total) }).catch(() => {});
+                    return i.editReply({ content: '> لا توجد لايكات محفوظة.' });
+                }
 
                 const tracks = await resolveLikedRows(client, allRows, message.author);
                 for (const track of tracks) player.queue.add(track);
@@ -250,36 +279,42 @@ module.exports = {
 
                 await msg.edit({
                     embeds: [buildEmbed(rows, total), buildQueueEmbed(client, message, player, tracks.length, 'Play All')],
-                    components: [buildNav(total), ...(buildSelect(rows, page * PAGE) ? [buildSelect(rows, page * PAGE)] : [])],
+                    components: buildComponents(rows, total),
                 }).catch(() => {});
-                return i.followUp({ content: `> Queued **${tracks.length}** liked tracks`, ephemeral: true });
+                return i.editReply({ content: `> Queued **${tracks.length}** liked tracks` });
             }
 
             // ── Queue Selected ───────────────────────────────────────────
             if (i.customId === `ml_queue_${message.id}`) {
-                await i.deferUpdate();
+                await i.deferReply({ ephemeral: true });
+                await i.editReply({ content: '> Loading selected liked tracks...' }).catch(() => {});
+                await msg.edit({ components: disableComponents(msg.components) }).catch(() => {});
                 let player;
                 try {
                     player = await ensurePlayer(client, message);
                 } catch (err) {
-                    return i.followUp({ content: `> ${err.message}`, ephemeral: true });
+                    await msg.edit({ components: buildComponents(rows, total) }).catch(() => {});
+                    return i.editReply({ content: `> ${err.message}` });
                 }
                 const allRows = await getAll().catch(() => []);
 
                 const idxs   = i.values.map(Number);
                 const selectedRows = idxs.map(x => allRows[x]).filter(Boolean);
+                if (!selectedRows.length) {
+                    await msg.edit({ components: buildComponents(rows, total) }).catch(() => {});
+                    return i.editReply({ content: '> لم تعد الاختيارات متاحة.' });
+                }
                 const tracks = await resolveLikedRows(client, selectedRows, message.author);
 
                 for (const track of tracks) player.queue.add(track);
                 await bumpQueueVersion(player, 'likes_selected');
                 if (!player.isPlaying && !player.isPaused && player.queue.length) await player.play().catch(() => {});
 
-                const sr = buildSelect(rows, page * PAGE);
                 await msg.edit({
                     embeds: [buildEmbed(rows, total), buildQueueEmbed(client, message, player, tracks.length, 'Selected Likes')],
-                    components: [buildNav(total), ...(sr ? [sr] : [])],
+                    components: buildComponents(rows, total),
                 }).catch(() => {});
-                return i.followUp({ content: `> Queued **${tracks.length}** track${tracks.length !== 1 ? 's' : ''}`, ephemeral: true });
+                return i.editReply({ content: `> Queued **${tracks.length}** liked tracks` });
             }
         });
 
