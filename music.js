@@ -552,7 +552,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     const accentColor = normalizeColorNumber(embedColor);
     const useEmbedAccent = options.useEmbedAccent === true;
     const showProgressLabels = options.showProgressLabels === true;
-    const progressColor = useEmbedAccent ? accentColor : (options.progressColor || '#b5bac1');
+    const progressColor = accentColor || normalizeColorNumber('#b5bac1');
     const showDisabledNowPlayingInfo = compactPlayLayout && options.includeControls && !settings.buttons;
 
     const interactiveRows = options.includeControls && settings.buttons
