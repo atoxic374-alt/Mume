@@ -552,7 +552,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     const accentColor = normalizeColorNumber(embedColor);
     const useEmbedAccent = options.useEmbedAccent === true;
     const showProgressLabels = options.showProgressLabels === true;
-    const progressColor = normalizeColorNumber('#b5bac1');
+    const progressColor = useEmbedAccent ? accentColor : normalizeColorNumber(options.progressColor || '#9d9ad1');
     const showDisabledNowPlayingInfo = compactPlayLayout && options.includeControls && !settings.buttons;
 
     const interactiveRows = options.includeControls && settings.buttons
@@ -1111,7 +1111,7 @@ async function resolveSmartTracks(poru, query, source, limit = 20, options = {})
     return rankTracksForQuery(tracks, query, { strict: options.strict }).slice(0, limit);
 }
 
-const PLAY_PROGRESS_WIDTH = 440;
+const PLAY_PROGRESS_WIDTH = 400;
 const GENERIC_LABEL_WORDS_PATTERN = /\b(?:records?|recordings?|label|music|musics|official|channel|productions?|producer|publisher|publishing|studios?|entertainment|media|network|group|company|distribution|distributor|digital|sound|audio|video|tv|vevo|youtube)\b|ري?كورد(?:ز)?|ميوزك|موسيقي|موسيقى|قناه|قناة|رسمي|رسميه|الرسمية|شركة|شركه|انتاج|الانتاج|للانتاج|للإنتاج|توزيع|ناشر|نشر|استوديو|ستوديو|ميديا|شبكه|شبكة|جروب|مجموعة|قروب|ساوند|صوت|تلفزيون|يوتيوب/i;
 const KNOWN_LABEL_NAMES = [
     'rotana', 'rotana music', 'rotana audio', 'rotana video', 'rotana records',

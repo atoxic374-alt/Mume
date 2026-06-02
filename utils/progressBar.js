@@ -89,18 +89,26 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         const durationW = durationLabel ? Math.ceil(ctx.measureText(durationLabel).width) + 14 : 18;
         const railX = currentW;
         const railW = Math.max(40, width - railX - durationW);
-        const railH = 9;
+        const railH = 7;
         const railY = Math.round((height - railH) / 2);
         const radius = railH / 2;
-        const knobRadius = 8;
+        const knobRadius = 6;
         const fillW = railW * ratio;
         const knobX = railX + fillW;
         const knobY = railY + railH / 2;
+        const drawLabel = (text, x, align) => {
+            ctx.save();
+            ctx.textAlign = align;
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+            ctx.strokeText(text, x, height / 2);
+            ctx.fillStyle = 'rgba(218,219,226,0.99)';
+            ctx.fillText(text, x, height / 2);
+            ctx.restore();
+        };
 
         if (currentLabel) {
-            ctx.fillStyle = 'rgba(159,159,167,0.98)';
-            ctx.textAlign = 'left';
-            ctx.fillText(currentLabel, 0, height / 2);
+            drawLabel(currentLabel, 0, 'left');
         }
 
         ctx.fillStyle = 'rgba(50,50,52,0.96)';
@@ -113,7 +121,7 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
 
         ctx.save();
         ctx.shadowColor = 'rgba(0,0,0,0.28)';
-        ctx.shadowBlur = 2;
+        ctx.shadowBlur = 1.5;
         ctx.fillStyle = 'rgba(254,255,253,0.99)';
         ctx.beginPath();
         ctx.arc(knobX, knobY, knobRadius, 0, Math.PI * 2);
@@ -127,15 +135,16 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         ctx.stroke();
 
         if (durationLabel) {
-            ctx.fillStyle = 'rgba(159,159,167,0.98)';
-            ctx.textAlign = 'right';
-            ctx.fillText(durationLabel, width, height / 2);
+            drawLabel(durationLabel, width, 'right');
         }
 
         const bucket = durationMs > 0 ? Math.round(ratio * 1000) : 0;
+        const labelKey = `${currentLabel || 'x'}-${durationLabel || 'x'}`
+            .replace(/[^a-z0-9]+/gi, '')
+            .slice(0, 24) || 'labels';
         return {
             attachment: canvas.toBuffer('image/png'),
-            name: `progress-compact-${base.hex}-${bucket}.png`,
+            name: `progress-compact-v3-${base.hex}-${width}x${height}-${bucket}-${labelKey}.png`,
             ratio,
         };
     }
