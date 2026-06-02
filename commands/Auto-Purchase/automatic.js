@@ -70,8 +70,8 @@ module.exports = {
         components: components,
       };
 
-      if (fs.existsSync(`${process.cwd()}/settings/image/Auto.png`)) {
-        options.files = ["settings/image/Auto.png"];
+      if (fs.existsSync(`${process.cwd()}/assets/image/Auto.png`)) {
+        options.files = ["assets/image/Auto.png"];
       }
 
       await message.channel.send(options);

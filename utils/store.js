@@ -8,7 +8,7 @@ const FILES = {
   time:     './settings/time.json',
   host:     './settings/host.json',
   display:  './settings/display.json',
-  emojis:   './settings/emojis.json',
+  emojis:   './assets/emojis.json',
   history:  './settings/history.json',
   database: './settings/database.json',
 };

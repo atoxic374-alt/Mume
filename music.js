@@ -841,7 +841,7 @@ module.exports = {
                         );
                     return message.channel.send({
                         embeds: [embed],
-                        files: ['./settings/image/icons/Error.png']
+                        files: ['./assets/image/icons/Error.png']
                     });
                 }
 
@@ -878,7 +878,7 @@ module.exports = {
                             .setDescription(`*No results found for* : **${song}**`);
                         return message.reply({
                             embeds: [embed],
-                            files: ['./settings/image/icons/Error.png']
+                            files: ['./assets/image/icons/Error.png']
                         });
                     }
 
@@ -900,7 +900,7 @@ module.exports = {
 
                         message.reply({
                             embeds: [embed],
-                            files: ['./settings/image/icons/NowPlaying.png']
+                            files: ['./assets/image/icons/NowPlaying.png']
                         });
 
                         for (const track of res.tracks) {
@@ -930,7 +930,7 @@ module.exports = {
 
                             return message.reply({
                                 embeds: [embed],
-                                files: ['./settings/image/icons/AddSong.png']
+                                files: ['./assets/image/icons/AddSong.png']
                             });
                         }
                     }
@@ -957,7 +957,7 @@ module.exports = {
                         const replyData = {
                             embeds: [embed],
                             content: `🎶 **${TrueMusic.user.displayName}**`,
-                            files: ['./settings/image/icons/NowPlaying.png']
+                            files: ['./assets/image/icons/NowPlaying.png']
                         };
 
                         if (tokenObj.buttons === 'on') {
@@ -976,7 +976,7 @@ module.exports = {
                         .setDescription('An error occurred while searching for the song.');
                     message.reply({
                         embeds: [embed],
-                        files: ['./settings/image/icons/error.png']
+                        files: ['./assets/image/icons/error.png']
                     });
                 }
             }
@@ -991,7 +991,7 @@ module.exports = {
 
                     return message.reply({
                         embeds: [embed],
-                        files: ['./settings/image/icons/Error.png']
+                        files: ['./assets/image/icons/Error.png']
                     });
                 }
 
@@ -1053,7 +1053,7 @@ module.exports = {
                         .setDescription(`*No music is currently playing.*`);
                     return message.reply({
                         embeds: [embed],
-                        files: ['./settings/image/icons/Error.png']
+                        files: ['./assets/image/icons/Error.png']
                     });
                 }
 
@@ -1068,7 +1068,7 @@ module.exports = {
 
                 return message.reply({
                     embeds: [embed],
-                    files: [`./settings/image/icons/${newLoopMode === "TRACK" ? 'LoopON.png' : 'LoopOFF.png'}`]
+                    files: [`./assets/image/icons/${newLoopMode === "TRACK" ? 'LoopON.png' : 'LoopOFF.png'}`]
                 });
             }
 
@@ -1107,7 +1107,7 @@ module.exports = {
                         .setDescription(`*No songs are currently in the queue.*`);
                     return message.reply({
                         embeds: [embed],
-                        files: ['./settings/image/icons/Error.png']
+                        files: ['./assets/image/icons/Error.png']
                     });
                 }
 
@@ -1119,7 +1119,7 @@ module.exports = {
                         .setDescription(`*No song is currently playing.*`);
                     return message.reply({
                         embeds: [embed],
-                        files: ['./settings/image/icons/Error.png']
+                        files: ['./assets/image/icons/Error.png']
                     });
                 }
 
@@ -1200,7 +1200,7 @@ module.exports = {
                         .setDescription(`*No music is currently playing.*`);
                     return message.reply({
                         embeds: [embed],
-                        files: ['./settings/image/icons/Error.png']
+                        files: ['./assets/image/icons/Error.png']
                     });
                 }
 
@@ -1220,7 +1220,7 @@ module.exports = {
 
                     return message.reply({
                         embeds: [embed],
-                        files: ['./settings/image/icons/Skip.png']
+                        files: ['./assets/image/icons/Skip.png']
                     });
                 } else {
                     const skippedTrack = currentTrack;
@@ -1233,7 +1233,7 @@ module.exports = {
 
                     return message.reply({
                         embeds: [embed],
-                        files: ['./settings/image/icons/Skip.png']
+                        files: ['./assets/image/icons/Skip.png']
                     });
                 }
             }
@@ -1250,7 +1250,7 @@ module.exports = {
                         .setDescription(`*No music is currently playing.*`);
                     return message.reply({
                         embeds: [embed],
-                        files: ['./settings/image/icons/Error.png']
+                        files: ['./assets/image/icons/Error.png']
                     });
                 }
 
@@ -1270,7 +1270,7 @@ module.exports = {
                         .setDescription(`**Current volume: ${currentVolume}%**`);
                     return message.reply({
                         embeds: [embed],
-                        files: ['./settings/image/icons/Volumeup.png']
+                        files: ['./assets/image/icons/Volumeup.png']
                     });
                 }
 
@@ -1281,7 +1281,7 @@ module.exports = {
                         .setDescription('*Please provide a valid volume level between* **0%** *and* **130%**');
                     return message.reply({
                         embeds: [embed],
-                        files: ['./settings/image/icons/Error.png']
+                        files: ['./assets/image/icons/Error.png']
                     });
                 }
 
@@ -1294,7 +1294,7 @@ module.exports = {
 
                 return message.reply({
                     embeds: [embed],
-                    files: [`./settings/image/icons/${volume < currentVolume ? 'Volumedowwn' : 'Volumeup'}.png`]
+                    files: [`./assets/image/icons/${volume < currentVolume ? 'Volumedowwn' : 'Volumeup'}.png`]
                 });
             } else if (cmdsArray.seek.includes(command)) {
                 const player = TrueMusic.poru.players.get(message.guild.id);
@@ -1306,7 +1306,7 @@ module.exports = {
                         .setDescription(`*No music is currently playing.*`);
                     return message.reply({
                         embeds: [embed],
-                        files: ['./settings/image/icons/Error.png']
+                        files: ['./assets/image/icons/Error.png']
                     });
                 }
 
@@ -1326,7 +1326,7 @@ module.exports = {
 
                     return message.reply({
                         embeds: [embed],
-                        files: ['./settings/image/icons/seek.png']
+                        files: ['./assets/image/icons/seek.png']
                     });
                 }
 
@@ -1350,7 +1350,7 @@ module.exports = {
 
                     return message.reply({
                         embeds: [embed],
-                        files: ['./settings/image/icons/seek.png']
+                        files: ['./assets/image/icons/seek.png']
                     });
                 }
 
@@ -1483,7 +1483,7 @@ module.exports = {
                         .setDescription(`*No music is currently playing.*`);
                     return message.reply({
                         embeds: [embed],
-                        files: ['./settings/image/icons/Error.png']
+                        files: ['./assets/image/icons/Error.png']
                     });
                 }
 
@@ -1501,7 +1501,7 @@ module.exports = {
 
                 return message.reply({
                     embeds: [embed],
-                    files: ['./settings/image/icons/AutoPlay.png']
+                    files: ['./assets/image/icons/AutoPlay.png']
                 });
             }
 
