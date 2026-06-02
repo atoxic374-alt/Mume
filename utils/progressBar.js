@@ -82,62 +82,54 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
     ctx.clearRect(0, 0, width, height);
 
     if (variant === 'discordCompact') {
-        // Two-row layout (matches Discord native audio player):
-        //   Row 1 (top ~62%): [currentTime]  [════●═══════════════]
-        //   Row 2 (bot ~38%): [totalTime]
-        // Large font so text stays readable after Discord scales down
-        ctx.font = '600 38px sans-serif';
+        ctx.font = '700 20px sans-serif';
         ctx.textBaseline = 'middle';
 
-        const row1H = Math.round(height * 0.62);
-        const row2H = height - row1H;
-        const cy1   = row1H / 2;
-        const cy2   = row1H + row2H / 2;
+        const currentW = currentLabel ? Math.ceil(ctx.measureText(currentLabel).width) + 16 : 18;
+        const durationW = durationLabel ? Math.ceil(ctx.measureText(durationLabel).width) + 14 : 18;
+        const railX = currentW;
+        const railW = Math.max(40, width - railX - durationW);
+        const railH = 9;
+        const railY = Math.round((height - railH) / 2);
+        const radius = railH / 2;
+        const knobRadius = 8;
+        const fillW = railW * ratio;
+        const knobX = railX + fillW;
+        const knobY = railY + railH / 2;
 
-        const railH      = 14;
-        const railY      = Math.round(cy1 - railH / 2);
-        const radius     = railH / 2;
-        const knobRadius = 20;
-
-        const currentW = currentLabel  ? Math.ceil(ctx.measureText(currentLabel).width)  + 24 : 0;
-        const railX    = currentW;
-        const railW    = Math.max(40, width - railX - 8);
-        const fillW    = railW * ratio;
-        const knobX    = railX + fillW;
-        const knobY    = cy1;
-
-        // Row 1 — current time (left of bar)
         if (currentLabel) {
             ctx.fillStyle = 'rgba(159,159,167,0.98)';
             ctx.textAlign = 'left';
-            ctx.fillText(currentLabel, 0, cy1);
+            ctx.fillText(currentLabel, 0, height / 2);
         }
 
-        // Empty rail — #323234
         ctx.fillStyle = 'rgba(50,50,52,0.96)';
         fillRoundedRect(ctx, railX, railY, railW, railH, radius);
 
-        // Filled portion — #9d9ad1 purple/lavender
         if (fillW > 0.5) {
-            ctx.fillStyle = 'rgba(157,154,209,0.98)';
+            ctx.fillStyle = rgba(base, 0.98);
             fillRoundedRect(ctx, railX, railY, fillW, railH, radius);
         }
 
-        // Knob — white
         ctx.save();
-        ctx.shadowColor = 'rgba(0,0,0,0.32)';
-        ctx.shadowBlur   = 3;
-        ctx.fillStyle    = 'rgba(254,253,255,0.97)';
+        ctx.shadowColor = 'rgba(0,0,0,0.28)';
+        ctx.shadowBlur = 2;
+        ctx.fillStyle = 'rgba(254,255,253,0.99)';
         ctx.beginPath();
         ctx.arc(knobX, knobY, knobRadius, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
 
-        // Row 2 — total time (below bar, left-aligned)
+        ctx.strokeStyle = rgba(light, 0.78);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(knobX, knobY, knobRadius - 0.5, 0, Math.PI * 2);
+        ctx.stroke();
+
         if (durationLabel) {
             ctx.fillStyle = 'rgba(159,159,167,0.98)';
-            ctx.textAlign = 'left';
-            ctx.fillText(durationLabel, 0, cy2);
+            ctx.textAlign = 'right';
+            ctx.fillText(durationLabel, width, height / 2);
         }
 
         const bucket = durationMs > 0 ? Math.round(ratio * 1000) : 0;
