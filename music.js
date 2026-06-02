@@ -794,24 +794,48 @@ function buildQueueDescription(player, page = 0, itemsPerPage = 8) {
     const totalPages = Math.max(1, Math.ceil(player.queue.length / itemsPerPage));
     const safePage = Math.max(0, Math.min(page, totalPages - 1));
     const pageTracks = player.queue.slice(safePage * itemsPerPage, (safePage + 1) * itemsPerPage);
-    const queueTrackLink = (track, max = 66) => {
+
+    const queueTrackLink = (track, max = 62) => {
         const title = escapeMarkdownLinkText(track?.info?.title || 'Unknown', max);
         const url = isHttpUrl(track?.info?.uri) ? track.info.uri : null;
-        return url ? `**[${title}](${url})**` : `**${title}**`;
+        return url ? `[${title}](${url})` : title;
     };
+
     const dur = (track) => shortDuration(track?.info?.length);
     const nowPlaying = player.currentTrack;
-    const currentLine = `> ${queueTrackLink(nowPlaying, 80)}  ·  \`${dur(nowPlaying)}\``;
+
+    // Total queue duration
+    const totalMs = player.queue.reduce((sum, t) => sum + (t?.info?.length || 0), 0);
+    const totalDurStr = shortDuration(totalMs);
+
+    // Now Playing section
+    const npAuthor = cleanInlineText(nowPlaying?.info?.author, '', 40);
+    const npLine = [
+        `**${queueTrackLink(nowPlaying, 72)}**`,
+        npAuthor ? `\`${dur(nowPlaying)}\`  ·  ${npAuthor}` : `\`${dur(nowPlaying)}\``,
+    ].join('\n> ');
+
+    // Queue entries
     const queuedLines = pageTracks.map((track, i) => {
         const absolute = safePage * itemsPerPage + i + 1;
-        const author = cleanInlineText(track.info.author, 'Unknown', 48);
-        return `**${String(absolute).padStart(2, '0')}.** ${queueTrackLink(track)}\n> \`${dur(track)}\`  •  ${author}`;
+        const author = cleanInlineText(track.info?.author, '', 36);
+        const numStr = String(absolute).padStart(2, '0');
+        const titleLine = `\`${numStr}\`  **${queueTrackLink(track)}**`;
+        const metaLine  = author
+            ? `\`${dur(track)}\`  ·  ${author}`
+            : `\`${dur(track)}\``;
+        return `${titleLine}\n└ ${metaLine}`;
     });
+
+    const upcomingHeader = player.queue.length > 0
+        ? `**Upcoming**  ·  ${player.queue.length} track${player.queue.length === 1 ? '' : 's'}  ·  ${totalDurStr} total  ·  page ${safePage + 1}/${totalPages}`
+        : '**Upcoming**';
+
     return [
         '**Now Playing**',
-        currentLine,
+        `> ${npLine}`,
         '',
-        `**Upcoming Songs**  ·  \`${player.queue.length}\` tracks  ·  page **${safePage + 1}/${totalPages}**`,
+        upcomingHeader,
         queuedLines.length ? queuedLines.join('\n\n') : '> No queued songs.',
     ].join('\n');
 }
@@ -2679,10 +2703,13 @@ module.exports = {
                 const itemsPerPage = 8;
                 let page = 0;
 
+                        const getThumb = () => trackArtworkUrl(player.currentTrack, TrueMusic);
+
                         const queueMessage = await message.reply(musicPayload(tokenObj, {
-                            title: `${message.guild.name} Queue`,
+                            title: `🎶  ${message.guild.name}`,
                             description: buildQueueDescription(player, page, itemsPerPage),
                             components: buildQueueComponents(player, tokenObj, message.id, page, itemsPerPage),
+                            thumbnail: getThumb(),
                         })).catch(console.error);
 
                         if (!queueMessage || !displaySettings(tokenObj).buttons) return;
@@ -2692,10 +2719,11 @@ module.exports = {
                         const filter = interaction => interaction.user.id === message.author.id && interaction.customId.startsWith(`queue_${message.id}_`);
                         const collector = queueMessage.createMessageComponentCollector({ filter, time: 120000 });
 
-                        const renderQueue = (interaction, title = `${message.guild.name} Queue`) => interaction.update(musicPayload(tokenObj, {
+                        const renderQueue = (interaction, title = `🎶  ${message.guild.name}`) => interaction.update(musicPayload(tokenObj, {
                             title,
                             description: buildQueueDescription(player, page, itemsPerPage),
                             components: buildQueueComponents(player, tokenObj, message.id, page, itemsPerPage),
+                            thumbnail: getThumb(),
                         }));
 
                         collector.on('collect', async interaction => {
