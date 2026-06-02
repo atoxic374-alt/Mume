@@ -469,22 +469,41 @@ function platformEmojiKey(source) {
     return value || 'ytsearch';
 }
 
-function buildNowPlayingMetaRow(tokenObj, currentTime, totalTime, refId = 'np', track = null) {
+function buildNowPlayingMetaRow(tokenObj, currentTime, totalTime, refId = 'np', track = null, player = null, options = {}) {
     const platform = track?.info?.sourceName || displaySettings(tokenObj).platform;
     const emojiKey = platformEmojiKey(platform);
-    return new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
+    const buttons = [];
+    if (options.platform !== false) {
+        buttons.push(new ButtonBuilder()
             .setCustomId(`${refId}_platform`)
             .setLabel(`Platform: ${compactPlatformName(platform)}`.slice(0, 80))
             .setEmoji(MUSIC_EMOJIS.platforms[emojiKey] || '🎵')
             .setStyle(ButtonStyle.Secondary)
-            .setDisabled(true),
-        new ButtonBuilder()
+            .setDisabled(true));
+    }
+    if (options.time !== false) {
+        buttons.push(new ButtonBuilder()
             .setCustomId(`${refId}_time`)
             .setLabel(`${shortDuration(currentTime)} / ${shortDuration(totalTime)}`.slice(0, 80))
             .setStyle(ButtonStyle.Secondary)
-            .setDisabled(true),
-    );
+            .setDisabled(true));
+    }
+    if (options.volume) {
+        buttons.push(new ButtonBuilder()
+            .setCustomId(`${refId}_volume`)
+            .setLabel(`VOLUME: ${Math.max(0, Number(player?.volume || 100))}%`.slice(0, 80))
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(true));
+    }
+    if (options.loop) {
+        const loopValue = player?.loop === 'TRACK' ? 'ON' : 'OFF';
+        buttons.push(new ButtonBuilder()
+            .setCustomId(`${refId}_loop`)
+            .setLabel(`LOOP: ${loopValue}`)
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(true));
+    }
+    return new ActionRowBuilder().addComponents(...buttons.slice(0, 5));
 }
 
 function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options = {}) {
@@ -514,6 +533,9 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     const compactPlayLayout = options.compactPlayLayout === true;
     const embedColor = getEmbedColor(TrueMusic);
     const accentColor = normalizeColorNumber(embedColor);
+    const useEmbedAccent = options.useEmbedAccent === true;
+    const showProgressLabels = options.showProgressLabels === true;
+    const progressColor = useEmbedAccent ? accentColor : '#b5bac1';
 
     const interactiveRows = options.includeControls && settings.buttons
         ? buildMusicComponents({
@@ -545,14 +567,15 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
         const progress = buildProgressBarAttachment({
             position: currentTime,
             duration: totalTime,
-            color: accentColor,
-            width: 680,
-            height: 32,
+            color: progressColor,
+            currentLabel: showProgressLabels ? shortDuration(currentTime) : '',
+            durationLabel: showProgressLabels ? shortDuration(totalTime) : '',
+            width: showProgressLabels ? 660 : 620,
+            height: showProgressLabels ? 36 : 32,
             variant: 'discordCompact',
         });
 
         const container = new ContainerBuilder()
-            .setAccentColor(accentColor)
             .addSectionComponents(section)
             .addMediaGalleryComponents(
                 new MediaGalleryBuilder().addItems(
@@ -560,8 +583,26 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
                         .setURL(`attachment://${progress.name}`)
                         .setDescription('Playback progress'),
                 ),
-            )
-            .addActionRowComponents(buildNowPlayingMetaRow(tokenObj, currentTime, totalTime, 'np', track));
+            );
+
+        if (useEmbedAccent) container.setAccentColor(accentColor);
+
+        if (options.showInfoRow === true) {
+            container.addActionRowComponents(buildNowPlayingMetaRow(
+                tokenObj,
+                currentTime,
+                totalTime,
+                'np',
+                track,
+                player,
+                {
+                    platform: options.infoPlatform !== false,
+                    time: options.infoTime !== false,
+                    volume: options.infoVolume === true,
+                    loop: options.infoLoop === true,
+                },
+            ));
+        }
 
         if (interactiveRows.length) {
             container.addActionRowComponents(...interactiveRows);
@@ -580,11 +621,11 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     const barLine = buildInlineProgressBar(currentTime, totalTime, 22, meta);
 
     const container = new ContainerBuilder()
-        .setAccentColor(accentColor)
         .addSectionComponents(section)
         .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(barLine),
         );
+    if (useEmbedAccent) container.setAccentColor(accentColor);
 
     if (interactiveRows.length) {
         container
@@ -1106,6 +1147,9 @@ async function finalizePlayerUi(player, options = {}) {
                 selectedFilter: ui.selectedFilter || player?.data?.activeFilter || 'clear',
                 selectedArtistIndex: ui.selectedArtistIndex ?? null,
                 compactPlayLayout: ui.compactPlayLayout !== false,
+                showProgressLabels: true,
+                showInfoRow: false,
+                useEmbedAccent: false,
                 positionOverride: finalPosition,
                 durationOverride: totalTime,
             });
@@ -2013,6 +2057,9 @@ module.exports = {
             liked: alreadyLiked,
             selectedFilter,
             compactPlayLayout: true,
+            showProgressLabels: true,
+            showInfoRow: false,
+            useEmbedAccent: false,
         });
 
         const msg = await channel.send(payload).catch(() => null);
@@ -2036,7 +2083,7 @@ module.exports = {
             }
             try {
                 const tokenObj3 = (store.get('tokens') || []).find(t => t.token === token);
-                const ui3 = player.data.ui || {};
+	                const ui3 = player.data.ui || {};
 	                const alreadyLiked3 = await likes.isLiked(
 	                    player.currentTrack?.info?.requester?.id || '',
 	                    player.currentTrack || track,
@@ -2044,15 +2091,18 @@ module.exports = {
 	                ui3.liked = alreadyLiked3;
 	                player.data.ui = ui3;
 	                const payload3 = buildNowPlayingV2Payload(TrueMusic, tokenObj3, player, { author: player.currentTrack?.info?.requester }, {
-                    track: player.currentTrack || track,
-                    requester: player.currentTrack?.info?.requester || requester,
-                    includeControls: true,
-                    liked: alreadyLiked3,
-                    artistTracks: ui3.artistTracks || [],
-                    selectedFilter: ui3.selectedFilter || player.data.activeFilter || 'clear',
-                    selectedArtistIndex: ui3.selectedArtistIndex ?? null,
-                    compactPlayLayout: ui3.compactPlayLayout === true,
-                });
+	                    track: player.currentTrack || track,
+	                    requester: player.currentTrack?.info?.requester || requester,
+	                    includeControls: true,
+	                    liked: alreadyLiked3,
+	                    artistTracks: ui3.artistTracks || [],
+	                    selectedFilter: ui3.selectedFilter || player.data.activeFilter || 'clear',
+	                    selectedArtistIndex: ui3.selectedArtistIndex ?? null,
+	                    compactPlayLayout: ui3.compactPlayLayout === true,
+	                    showProgressLabels: true,
+	                    showInfoRow: false,
+	                    useEmbedAccent: false,
+	                });
                 await msg.edit(payload3).catch(() => {});
             } catch (err) {
                 console.error('[ProgressUpdate] failed:', err?.message || err);
@@ -2074,12 +2124,15 @@ module.exports = {
                     track,
                     requester,
                     includeControls: true,
-                    liked: alreadyLiked,
-                    artistTracks,
-                    selectedFilter: player.data.ui.selectedFilter,
-                    selectedArtistIndex: player.data.ui.selectedArtistIndex,
-                    compactPlayLayout: true,
-                });
+	                    liked: alreadyLiked,
+	                    artistTracks,
+	                    selectedFilter: player.data.ui.selectedFilter,
+	                    selectedArtistIndex: player.data.ui.selectedArtistIndex,
+	                    compactPlayLayout: true,
+	                    showProgressLabels: true,
+	                    showInfoRow: false,
+	                    useEmbedAccent: false,
+	                });
                 await msg.edit(payload).catch(() => {});
             }
         } catch (err) {
@@ -2328,6 +2381,10 @@ module.exports = {
                         requester,
                         includeControls: false,
                         compactPlayLayout: true,
+                        useEmbedAccent: true,
+                        showInfoRow: true,
+                        infoVolume: true,
+                        infoLoop: true,
                     }));
                 } catch (error) {
                     console.warn(`[NowPlayingV2] failed, using fallback: ${error?.message || error}`);
@@ -2943,14 +3000,17 @@ module.exports = {
 	                        player.data.ui = ui;
 	                        const payload = buildNowPlayingV2Payload(TrueMusic, tokenObj, player, { author: interaction.user }, {
 	                            track: player.currentTrack,
-                            requester: player.currentTrack?.info?.requester || interaction.user,
-                            includeControls: true,
-                            liked,
-                            artistTracks: ui.artistTracks || [],
-                            selectedFilter: ui.selectedFilter || player.data.activeFilter || 'clear',
-                            selectedArtistIndex: ui.selectedArtistIndex ?? null,
-                            compactPlayLayout: ui.compactPlayLayout === true,
-                        });
+	                            requester: player.currentTrack?.info?.requester || interaction.user,
+	                            includeControls: true,
+	                            liked,
+	                            artistTracks: ui.artistTracks || [],
+	                            selectedFilter: ui.selectedFilter || player.data.activeFilter || 'clear',
+	                            selectedArtistIndex: ui.selectedArtistIndex ?? null,
+	                            compactPlayLayout: ui.compactPlayLayout === true,
+	                            showProgressLabels: true,
+	                            showInfoRow: false,
+	                            useEmbedAccent: false,
+	                        });
                         if (targetInteraction && !targetInteraction.deferred && !targetInteraction.replied) {
                             await targetInteraction.deferUpdate().catch(() => {});
                         }
