@@ -17,14 +17,12 @@ const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
 
 module.exports = {
-    name: 'settings',
-    aliases: ['إعدادات', 'اعدادات'],
+    name: 'set',
+    aliases: ['settings', 'إعدادات', 'اعدادات'],
     async execute(client, message, args) {
         const userId = message.author.id;
         const isAdmin = owners.includes(userId);
         const mid = message.id;
-
-        if (!check(userId, 'settings')) return;
 
         // 1. Find user's subscriptions
         let tokens = store.get('tokens') || [];

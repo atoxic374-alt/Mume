@@ -88,8 +88,12 @@ module.exports = {
 
         TrueMusic.poru = new Poru(TrueMusic, hostConfig, {
             defaultPlatform: 'ytsearch',
-            reconnectTries: 5,
-            reconnectTimeout: 5000,
+            reconnectTries: 8,
+            reconnectTimeout: 3000,
+            resumeKey: `ens-${token.slice(-10)}`,
+            resumeTimeout: 90,
+            autoResume: true,
+            bypassChecks: false,
         });
 
         // ✅ Required for Lavalink/Poru voice handshake (VOICE_STATE_UPDATE / VOICE_SERVER_UPDATE)
@@ -270,7 +274,7 @@ module.exports = {
                         const button1 = new ButtonBuilder()
                             .setLabel('Support Server')
                             .setStyle('Link')
-                            .setURL('discord.gg/ens');
+                            .setURL('https://discord.gg/ens');
 
                         const row1 = new ActionRowBuilder().addComponents(button1);
                         const helpEmbed = new EmbedBuilder()
@@ -602,31 +606,37 @@ module.exports = {
 
     // ── Helper: apply audio filter preset ──────────────────────────────
     async function applyFilter(player, name) {
-        await player.filters.clearFilters();
-        if (name === 'clear') return;
         const f = player.filters;
+        // أولاً نصفّر كل الفلاتر ثم نطبّق الجديد في طلب واحد
+        if (name === 'clear') {
+            await f.clearFilters();
+            return;
+        }
+        // نصفّر بدون await (غير محظور) ثم نطبّق الفلتر الجديد فوراً
+        f.clearFilters().catch(() => {});
         switch (name) {
             case 'bassboost':
                 await f.setEqualizer([
-                    { band: 0, gain: 0.3 }, { band: 1, gain: 0.25 }, { band: 2, gain: 0.2 },
-                    { band: 3, gain: 0.15 }, { band: 4, gain: 0.1 }, { band: 5, gain: 0.05 }
+                    { band: 0, gain: 0.35 }, { band: 1, gain: 0.30 }, { band: 2, gain: 0.25 },
+                    { band: 3, gain: 0.20 }, { band: 4, gain: 0.15 }, { band: 5, gain: 0.08 },
+                    { band: 6, gain: 0.02 }, { band: 7, gain: -0.02 }
                 ]); break;
             case 'nightcore':
-                await f.setTimescale({ speed: 1.2, pitch: 1.2, rate: 1.0 }); break;
+                await f.setTimescale({ speed: 1.25, pitch: 1.3, rate: 1.0 }); break;
             case '8d':
-                await f.setRotation({ rotationHz: 0.2 }); break;
+                await f.setRotation({ rotationHz: 0.25 }); break;
             case 'vaporwave':
-                await f.setTimescale({ speed: 0.85, pitch: 0.85, rate: 1.0 }); break;
+                await f.setTimescale({ speed: 0.8, pitch: 0.8, rate: 1.0 }); break;
             case 'karaoke':
                 await f.setKaraoke({ level: 1.0, monoLevel: 1.0, filterBand: 220.0, filterWidth: 100.0 }); break;
             case 'tremolo':
-                await f.setTremolo({ frequency: 4.0, depth: 0.7 }); break;
+                await f.setTremolo({ frequency: 4.0, depth: 0.75 }); break;
             case 'vibrato':
-                await f.setVibrato({ frequency: 6.0, depth: 0.5 }); break;
+                await f.setVibrato({ frequency: 7.0, depth: 0.6 }); break;
             case 'distortion':
-                await f.setDistortion({ sinOffset: 0, sinScale: 1, cosOffset: 1, cosScale: 0.5, tanOffset: 0, tanScale: 1, offset: 0, scale: 1.2 }); break;
+                await f.setDistortion({ sinOffset: 0, sinScale: 1, cosOffset: 1, cosScale: 0.6, tanOffset: 0, tanScale: 1, offset: 0, scale: 1.3 }); break;
             case 'lowpass':
-                await f.setLowPass({ smoothing: 20 }); break;
+                await f.setLowPass({ smoothing: 15 }); break;
             case 'channelmix':
                 await f.setChannelMix({ leftToLeft: 0.5, leftToRight: 0.5, rightToLeft: 0.5, rightToRight: 0.5 }); break;
         }
@@ -686,33 +696,48 @@ module.exports = {
         if (!msg) return;
 
         const guildId = player.guildId;
-        const collector = msg.createMessageComponentCollector({ time: 90000 });
+        // لا نحدد وقت — المنيوهات تبقى موجودة طوال التشغيل
+        const collector = msg.createMessageComponentCollector({ idle: 7200000 });
 
         collector.on('collect', async i => {
             if (i.user.id !== requester.id) {
                 return i.reply({ content: 'هذه القائمة ليست لك.', ephemeral: true }).catch(() => {});
             }
-            await i.deferUpdate().catch(() => {});
             const guildPlayer = TrueMusic.poru.players.get(guildId);
 
             if (i.customId.startsWith('art_')) {
+                await i.deferUpdate().catch(() => {});
                 if (!guildPlayer) return;
                 const t = artistTracks[parseInt(i.values[0])];
                 if (!t) return;
                 t.info.requester = i.user;
                 guildPlayer.queue.add(t);
                 if (!guildPlayer.isPlaying && !guildPlayer.isPaused) guildPlayer.play();
-                channel.send({ content: `▶️ **${t.info.title}** — أُضيفت للقائمة` })
-                    .then(m => setTimeout(() => m.delete().catch(() => {}), 5000)).catch(() => {});
+                i.followUp({ content: `> Added **${t.info.title}** to queue`, ephemeral: true }).catch(() => {});
+
             } else if (i.customId.startsWith('flt_')) {
+                await i.deferUpdate().catch(() => {});
                 if (!guildPlayer) return;
-                await applyFilter(guildPlayer, i.values[0]).catch(() => {});
-                channel.send({ content: `✅ تم تطبيق **${filterNames[i.values[0]] || i.values[0]}**` })
-                    .then(m => setTimeout(() => m.delete().catch(() => {}), 4000)).catch(() => {});
+                const filterName = i.values[0];
+                try {
+                    await applyFilter(guildPlayer, filterName);
+                    const label = filterNames[filterName] || filterName;
+                    i.followUp({
+                        content: filterName === 'clear'
+                            ? '> Filters cleared'
+                            : `> Filter applied — **${label}**`,
+                        ephemeral: true
+                    }).catch(() => {});
+                } catch {
+                    i.followUp({ content: '> Failed to apply filter', ephemeral: true }).catch(() => {});
+                }
             }
         });
 
-        collector.on('end', () => msg.delete().catch(() => {}));
+        // لا نحذف الرسالة عند انتهاء الـ collector — فقط نعطّل الأزرار
+        collector.on('end', () => {
+            msg.edit({ components: [] }).catch(() => {});
+        });
     }
 
     // ── trackStart: fetch artist top songs + show menus ─────────────────
