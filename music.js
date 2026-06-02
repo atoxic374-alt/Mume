@@ -37,7 +37,7 @@ const MUSIC_EMOJIS = require('./utils/musicEmojis');
 const { getEmbedColor, refreshEmbedColor } = require('./utils/embedColor');
 const statusStore = require('./statusStore');
 const { tintAttachmentPayload } = require('./utils/tintedThumbnail');
-const { buildProgressBarAttachment } = require('./utils/progressBar');
+const { buildProgressBarAttachment, normalizeColorNumber } = require('./utils/progressBar');
 
 const runningBots = new Collection();
 const botLastActivity = new Map();
@@ -185,13 +185,18 @@ function shortDuration(ms) {
     return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
 }
 
-function createMusicControlButtons(paused = false, liked = false, { includeLike = true, dangerStop = true } = {}) {
+function createMusicControlButtons(paused = false, liked = false, { includeLike = true, dangerStop = true, likeInPrevSlot = false } = {}) {
     const row1 = new ActionRowBuilder()
         .addComponents(
-            new ButtonBuilder()
-                .setCustomId('prev')
-                .setEmoji('⏮')
-                .setStyle(ButtonStyle.Secondary),
+            likeInPrevSlot
+                ? new ButtonBuilder()
+                    .setCustomId('like')
+                    .setEmoji(liked ? '💔' : '❤️')
+                    .setStyle(liked ? ButtonStyle.Danger : ButtonStyle.Secondary)
+                : new ButtonBuilder()
+                    .setCustomId('prev')
+                    .setEmoji('⏮')
+                    .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('stop')
                 .setEmoji('⏹')
@@ -225,7 +230,7 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
                 .setStyle(ButtonStyle.Secondary),
         );
 
-    if (includeLike) {
+    if (includeLike && !likeInPrevSlot) {
         row2.addComponents(
             new ButtonBuilder()
                 .setCustomId('like')
@@ -240,7 +245,7 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
 function buildMusicComponents({ liked = false, paused = false, artistTracks = [], selectedFilter = 'clear', selectedArtistIndex = null, showControls = true, compactControls = false }) {
     const rows = [];
 
-    if (showControls && !compactControls && artistTracks.length > 0) {
+    if (showControls && artistTracks.length > 0) {
         const artistMenu = new StringSelectMenuBuilder()
             .setCustomId('np_artist')
             .setPlaceholder('أفضل 5 أغاني لنفس الفنان')
@@ -253,7 +258,7 @@ function buildMusicComponents({ liked = false, paused = false, artistTracks = []
         rows.push(new ActionRowBuilder().addComponents(artistMenu));
     }
 
-    if (showControls && !compactControls) {
+    if (showControls) {
         const activeFilterName = FILTER_NAMES[selectedFilter] || FILTER_NAMES.clear;
         const filterMenu = new StringSelectMenuBuilder()
             .setCustomId('np_filter')
@@ -265,8 +270,9 @@ function buildMusicComponents({ liked = false, paused = false, artistTracks = []
     }
 
     if (showControls) rows.push(...createMusicControlButtons(paused, liked, {
-        includeLike: !compactControls,
+        includeLike: true,
         dangerStop: !compactControls,
+        likeInPrevSlot: compactControls,
     }));
 
     return rows.slice(0, 5);
@@ -434,6 +440,53 @@ function buildNowPlayingFallbackPayload(tokenObj, player, requester) {
     });
 }
 
+function compactPlatformName(source) {
+    const value = String(source || '').toLowerCase();
+    if (value === 'auto') return 'Smart Search';
+    if (value === 'ytsearch') return 'YouTube';
+    if (value === 'youtube') return 'YouTube';
+    if (value === 'ytmsearch') return 'YouTube Music';
+    if (value === 'youtubemusic') return 'YouTube Music';
+    if (value === 'scsearch') return 'SoundCloud';
+    if (value === 'soundcloud') return 'SoundCloud';
+    if (value === 'spsearch') return 'Spotify';
+    if (value === 'spotify') return 'Spotify';
+    if (value === 'amsearch') return 'Apple Music';
+    if (value === 'applemusic') return 'Apple Music';
+    if (value === 'dzsearch') return 'Deezer';
+    if (value === 'deezer') return 'Deezer';
+    return source || 'YouTube';
+}
+
+function platformEmojiKey(source) {
+    const value = String(source || '').toLowerCase();
+    if (value === 'youtube') return 'ytsearch';
+    if (value === 'youtubemusic') return 'ytmsearch';
+    if (value === 'soundcloud') return 'scsearch';
+    if (value === 'spotify') return 'spsearch';
+    if (value === 'applemusic') return 'amsearch';
+    if (value === 'deezer') return 'dzsearch';
+    return value || 'ytsearch';
+}
+
+function buildNowPlayingMetaRow(tokenObj, currentTime, totalTime, refId = 'np', track = null) {
+    const platform = track?.info?.sourceName || displaySettings(tokenObj).platform;
+    const emojiKey = platformEmojiKey(platform);
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`${refId}_platform`)
+            .setLabel(`Platform: ${compactPlatformName(platform)}`.slice(0, 80))
+            .setEmoji(MUSIC_EMOJIS.platforms[emojiKey] || '🎵')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(true),
+        new ButtonBuilder()
+            .setCustomId(`${refId}_time`)
+            .setLabel(`${shortDuration(currentTime)} / ${shortDuration(totalTime)}`.slice(0, 80))
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(true),
+    );
+}
+
 function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options = {}) {
     const track = options.track || player.currentTrack;
     const current = track.info;
@@ -442,8 +495,9 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
         return buildNowPlayingFallbackPayload(tokenObj, player, options.requester || current.requester || message?.author);
     }
 
-    const currentTime = Math.max(0, Number(player.position || 0));
-    const totalTime = Math.max(0, Number(current.length || 0));
+    const totalTime = Math.max(0, Number(options.durationOverride ?? current.length ?? 0));
+    const rawCurrentTime = Math.max(0, Number(options.positionOverride ?? player.position ?? 0));
+    const currentTime = totalTime > 0 ? Math.min(rawCurrentTime, totalTime) : rawCurrentTime;
     const title = cleanInlineText(current.title, 'Unknown track', 96);
     const author = cleanInlineText(current.author, 'Unknown artist', 72);
     const uri = isHttpUrl(current.uri) ? current.uri : null;
@@ -458,6 +512,8 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     const volume = player.volume || 100;
     const artworkUrl = trackArtworkUrl(track, TrueMusic);
     const compactPlayLayout = options.compactPlayLayout === true;
+    const embedColor = getEmbedColor(TrueMusic);
+    const accentColor = normalizeColorNumber(embedColor);
 
     const interactiveRows = options.includeControls && settings.buttons
         ? buildMusicComponents({
@@ -489,15 +545,14 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
         const progress = buildProgressBarAttachment({
             position: currentTime,
             duration: totalTime,
-            color: '#b5bac1',
-            currentLabel: shortDuration(currentTime),
-            durationLabel: shortDuration(totalTime),
+            color: accentColor,
             width: 680,
             height: 32,
             variant: 'discordCompact',
         });
 
         const container = new ContainerBuilder()
+            .setAccentColor(accentColor)
             .addSectionComponents(section)
             .addMediaGalleryComponents(
                 new MediaGalleryBuilder().addItems(
@@ -505,7 +560,8 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
                         .setURL(`attachment://${progress.name}`)
                         .setDescription('Playback progress'),
                 ),
-            );
+            )
+            .addActionRowComponents(buildNowPlayingMetaRow(tokenObj, currentTime, totalTime, 'np', track));
 
         if (interactiveRows.length) {
             container.addActionRowComponents(...interactiveRows);
@@ -524,6 +580,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     const barLine = buildInlineProgressBar(currentTime, totalTime, 22, meta);
 
     const container = new ContainerBuilder()
+        .setAccentColor(accentColor)
         .addSectionComponents(section)
         .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(barLine),
@@ -1022,18 +1079,46 @@ async function updatePlaybackVoiceStatus(client, tokenObj, player, track = null)
     }
 }
 
-async function finalizePlayerUi(player) {
+async function finalizePlayerUi(player, options = {}) {
     if (player?.data?.progressInterval) {
         clearInterval(player.data.progressInterval);
         player.data.progressInterval = null;
     }
     const msg = player?.data?.nowPlayingMessage;
     if (msg?.components?.length) {
-        await msg.edit({ components: disableComponents(msg.components) }).catch(() => {});
+        const context = player?.data?.nowPlayingContext;
+        const track = options.track || player?.currentTrack || player?.previousTrack || player?.data?.lastTrack || context?.track;
+        const client = context?.client;
+        if (client && track?.info) {
+            const tokenObj = (store.get('tokens') || []).find(t => t.token === context.token);
+            const totalTime = Math.max(0, Number(options.durationOverride ?? track.info.length ?? 0));
+            const currentPosition = Math.max(0, Number(player?.position || player?.data?.lastPosition || 0));
+            const finalPosition = options.complete && totalTime > 0
+                ? totalTime
+                : (totalTime > 0 ? Math.min(currentPosition, totalTime) : currentPosition);
+            const ui = player?.data?.ui || {};
+            const payload = buildNowPlayingV2Payload(client, tokenObj, player, { author: track.info.requester || context.requester }, {
+                track,
+                requester: track.info.requester || context.requester,
+                includeControls: true,
+                liked: !!ui.liked,
+                artistTracks: ui.artistTracks || [],
+                selectedFilter: ui.selectedFilter || player?.data?.activeFilter || 'clear',
+                selectedArtistIndex: ui.selectedArtistIndex ?? null,
+                compactPlayLayout: ui.compactPlayLayout !== false,
+                positionOverride: finalPosition,
+                durationOverride: totalTime,
+            });
+            payload.components = disableComponents(payload.components);
+            await msg.edit(payload).catch(() => {});
+        } else {
+            await msg.edit({ components: disableComponents(msg.components) }).catch(() => {});
+        }
     }
     if (player?.data) {
         player.data.nowPlayingMessage = null;
         player.data.nowPlayingToken = null;
+        player.data.nowPlayingContext = null;
         player.data.ui = null;
     }
 }
@@ -1747,18 +1832,33 @@ module.exports = {
 
     TrueMusic.poru.on('trackError', async (player, track, data) => {
         console.warn(`[TrackError] ${data?.type || 'unknown'} ${data?.reason || data?.exception?.message || ''}`.trim());
+        if (data?.type === 'TrackStuckEvent') {
+            ensurePlayerData(player);
+            const stuckTrack = track || player.currentTrack || player.data.lastTrack;
+            const identity = trackIdentity(stuckTrack);
+            const lastRecoveryAt = Number(player.data.stuckRecoveryAt || 0);
+            const sameRecentTrack = player.data.stuckRecoveryIdentity === identity && Date.now() - lastRecoveryAt < 30_000;
+            if (stuckTrack && identity && !sameRecentTrack && typeof player.queue?.unshift === 'function') {
+                player.queue.unshift(stuckTrack);
+                player.data.stuckRecoveryIdentity = identity;
+                player.data.stuckRecoveryAt = Date.now();
+                player.data.stuckResumePosition = Math.max(0, Number(player.position || player.data.lastPosition || 0) - 2000);
+                console.warn(`[TrackStuck] Requeued stuck track for recovery at ${player.data.stuckResumePosition}ms`);
+                return;
+            }
+        }
         await finalizePlayerUi(player);
         await bumpQueueVersion(player, 'track_error');
         setTimeout(() => recoverPlayerPlayback(player, 'track_error').catch(() => {}), 2500);
     });
 
     TrueMusic.poru.on('trackEnd', async (player, track, data) => {
-      await finalizePlayerUi(player);
+      await finalizePlayerUi(player, { complete: true, track });
       await bumpQueueVersion(player, `track_end:${data?.reason || 'unknown'}`);
             });
 
             TrueMusic.poru.on("queueEnd", async (player) => {
-              await finalizePlayerUi(player);
+              await finalizePlayerUi(player, { complete: true });
               await bumpQueueVersion(player, 'queue_end');
               const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
               await updatePlaybackVoiceStatus(TrueMusic, tokenObj2, player, null);
@@ -1855,11 +1955,27 @@ module.exports = {
             TrueMusic.poru.on('trackStart', async (player, track) => {
         await bumpQueueVersion(player, 'track_start');
         ensurePlayerData(player);
+        const stuckRecoveryIdentity = player.data.stuckRecoveryIdentity;
+        const stuckResumePosition = Math.max(0, Number(player.data.stuckResumePosition || 0));
+        const shouldResumeStuckTrack = stuckRecoveryIdentity && stuckRecoveryIdentity === trackIdentity(track);
                 player.data.lastTrack = track;
         player.data.trackStartedAt = Date.now();
         player.data.lastProgressAt = Date.now();
         player.data.lastPosition = 0;
         player.data.recoveryAttempts = 0;
+        if (shouldResumeStuckTrack) {
+            delete player.data.stuckRecoveryIdentity;
+            delete player.data.stuckRecoveryAt;
+            delete player.data.stuckResumePosition;
+            if (stuckResumePosition > 0) {
+                setTimeout(() => {
+                    const stillSameTrack = player.currentTrack && trackIdentity(player.currentTrack) === trackIdentity(track);
+                    if (!stillSameTrack) return;
+                    const seek = typeof player.seekTo === 'function' ? player.seekTo.bind(player) : player.seek?.bind(player);
+                    if (seek) Promise.resolve(seek(stuckResumePosition)).catch(() => {});
+                }, 1200);
+            }
+        }
 
                 const requester = track.info?.requester;
         const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
@@ -1887,6 +2003,7 @@ module.exports = {
             selectedFilter,
             selectedArtistIndex: null,
             compactPlayLayout: true,
+            liked: alreadyLiked,
         };
 
         const payload = buildNowPlayingV2Payload(TrueMusic, tokenObj2, player, { author: requester }, {
@@ -1903,6 +2020,12 @@ module.exports = {
 
         player.data.nowPlayingMessage = msg;
         player.data.nowPlayingToken = track?.track || track?.info?.identifier || track?.info?.title || null;
+        player.data.nowPlayingContext = {
+            client: TrueMusic,
+            token,
+            track,
+            requester,
+        };
 
         if (player.data.progressInterval) clearInterval(player.data.progressInterval);
         player.data.progressInterval = setInterval(async () => {
@@ -1914,11 +2037,13 @@ module.exports = {
             try {
                 const tokenObj3 = (store.get('tokens') || []).find(t => t.token === token);
                 const ui3 = player.data.ui || {};
-                const alreadyLiked3 = await likes.isLiked(
-                    player.currentTrack?.info?.requester?.id || '',
-                    player.currentTrack || track,
-                ).catch(() => false);
-                const payload3 = buildNowPlayingV2Payload(TrueMusic, tokenObj3, player, { author: player.currentTrack?.info?.requester }, {
+	                const alreadyLiked3 = await likes.isLiked(
+	                    player.currentTrack?.info?.requester?.id || '',
+	                    player.currentTrack || track,
+	                ).catch(() => false);
+	                ui3.liked = alreadyLiked3;
+	                player.data.ui = ui3;
+	                const payload3 = buildNowPlayingV2Payload(TrueMusic, tokenObj3, player, { author: player.currentTrack?.info?.requester }, {
                     track: player.currentTrack || track,
                     requester: player.currentTrack?.info?.requester || requester,
                     includeControls: true,
@@ -2197,7 +2322,13 @@ module.exports = {
                 if (!memberVoice || !clientVoice || memberVoice.id !== clientVoice.id) return;
 
                 try {
-                    return await message.channel.send(buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message));
+                    const requester = player.currentTrack.info?.requester || message.author;
+                    return await message.channel.send(buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, {
+                        track: player.currentTrack,
+                        requester,
+                        includeControls: false,
+                        compactPlayLayout: true,
+                    }));
                 } catch (error) {
                     console.warn(`[NowPlayingV2] failed, using fallback: ${error?.message || error}`);
                     return message.channel.send(buildNowPlayingFallbackPayload(
@@ -2799,18 +2930,19 @@ module.exports = {
                                 return replyEphemeral('لا يوجد شيء يعمل الآن.');
                             }
 
-                            const activePanelId = player.data?.nowPlayingMessage?.id;
-                            if (activePanelId && interaction.message?.id !== activePanelId) {
-                                await interaction.message?.edit({ components: disableComponents(interaction.message.components) }).catch(() => {});
-                                return replyEphemeral('انتهت صلاحية لوحة التحكم لأن الأغنية تغيّرت.');
-                            }
+	                            const activePanelId = player.data?.nowPlayingMessage?.id;
+	                            if (activePanelId && interaction.message?.id !== activePanelId) {
+	                                return replyEphemeral('انتهت صلاحية لوحة التحكم لأن الأغنية تغيّرت.');
+	                            }
 
                             const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
-                    const ui = player.data.ui || {};
-                    const requesterId = ui.requesterId || player.currentTrack?.info?.requester?.id || player.currentTrack?.info?.requester;
-                    const editPanel = async (liked = false, targetInteraction = null) => {
-                        const payload = buildNowPlayingV2Payload(TrueMusic, tokenObj, player, { author: interaction.user }, {
-                            track: player.currentTrack,
+	                    const ui = player.data.ui || {};
+	                    const requesterId = ui.requesterId || player.currentTrack?.info?.requester?.id || player.currentTrack?.info?.requester;
+	                    const editPanel = async (liked = false, targetInteraction = null) => {
+	                        ui.liked = liked;
+	                        player.data.ui = ui;
+	                        const payload = buildNowPlayingV2Payload(TrueMusic, tokenObj, player, { author: interaction.user }, {
+	                            track: player.currentTrack,
                             requester: player.currentTrack?.info?.requester || interaction.user,
                             includeControls: true,
                             liked,
@@ -2835,13 +2967,13 @@ module.exports = {
                                     const selectedTrack = ui.artistTracks?.[selectedIndex];
                                     if (!selectedTrack) return replyEphemeral('لم أجد الأغنية المختارة.');
 
-                                    const queuedTrack = { ...selectedTrack, info: { ...selectedTrack.info, requester: interaction.user } };
-                                    player.queue.add(queuedTrack);
-                                    await bumpQueueVersion(player, 'artist_menu_add');
-                                    ui.selectedArtistIndex = null;
-                                    player.data.ui = ui;
+	                                    const queuedTrack = { ...selectedTrack, info: { ...selectedTrack.info, requester: interaction.user } };
+	                                    player.queue.add(queuedTrack);
+	                                    await bumpQueueVersion(player, 'artist_menu_add');
+		                                    ui.selectedArtistIndex = null;
+		                                    player.data.ui = ui;
 
-                                    const liked = await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false);
+	                                    const liked = await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false);
                                     await editPanel(liked, interaction);
 
                                     await safePlay(player);
@@ -2853,10 +2985,11 @@ module.exports = {
                             const filterName = interaction.values[0];
                             try {
                                         const applied = await applyFilter(player, filterName);
-                                        ui.selectedFilter = applied;
-                                        ui.selectedArtistIndex = null;
-                                        player.data.ui = ui;
-                                await editPanel(await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false));
+	                                        ui.selectedFilter = applied;
+	                                        ui.selectedArtistIndex = null;
+	                                        ui.liked = await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false);
+	                                        player.data.ui = ui;
+	                                await editPanel(ui.liked);
                                 const label = FILTER_NAMES[applied] || applied;
                                 return replyEphemeral(applied === 'clear' ? 'تم إيقاف الفلاتر.' : `تم تطبيق **${label}**.`);
                             } catch (err) {

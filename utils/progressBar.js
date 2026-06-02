@@ -85,14 +85,15 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         ctx.font = '600 18px sans-serif';
         ctx.textBaseline = 'middle';
 
-        const currentW = currentLabel ? Math.ceil(ctx.measureText(currentLabel).width) + 16 : 4;
-        const durationW = durationLabel ? Math.ceil(ctx.measureText(durationLabel).width) + 14 : 10;
+        const hasLabels = !!(currentLabel || durationLabel);
+        const currentW = currentLabel ? Math.ceil(ctx.measureText(currentLabel).width) + 16 : 18;
+        const durationW = durationLabel ? Math.ceil(ctx.measureText(durationLabel).width) + 14 : 18;
         const railX = currentW;
         const railW = Math.max(40, width - railX - durationW);
-        const railH = 6;
-        const railY = Math.round((height - railH) / 2);
+        const railH = hasLabels ? 7 : 8;
+        const railY = hasLabels ? Math.round((height - railH) / 2) : Math.max(5, Math.round((height - railH) / 2) - 2);
         const radius = railH / 2;
-        const knobRadius = 6;
+        const knobRadius = hasLabels ? 6.5 : 7;
         const fillW = railW * ratio;
         const knobX = railX + fillW;
         const knobY = railY + railH / 2;

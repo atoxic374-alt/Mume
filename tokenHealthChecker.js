@@ -152,6 +152,7 @@ async function checkAndReplaceTokens(mainClient) {
 
         let changed = false;
         const replacementsToStart = [];
+        const invalidTokensToRemove = new Set();
         const batchSize = 5;
 
         // جلب runningBots لمعرفة اسم البوت القديم لو كان شغّالاً
@@ -168,7 +169,7 @@ async function checkAndReplaceTokens(mainClient) {
                 const isValid = await validateToken(entry.token);
                 if (isValid) return; // ✅ سليم — تجاوز
 
-                console.warn(`[TokenChecker] Invalid token detected — sub ${entry.code} owner ${entry.client}`);
+                console.log(`[TokenChecker] Invalid token detected — sub ${entry.code} owner ${entry.client}`);
 
                 // ── معلومات البوت القديم ──────────────────────────────────
                 const oldBotId = extractBotId(entry.token);
@@ -188,22 +189,9 @@ async function checkAndReplaceTokens(mainClient) {
 
                 // ── استبدال من المخزون ────────────────────────────────────
                 if (botsArray.length === 0) {
-                    console.error(`[TokenChecker] No replacement bots — sub ${entry.code}`);
+                    console.log(`[TokenChecker] Removed invalid token for sub ${entry.code} — no replacement stock`);
                     await stopInvalidClient();
-
-                    if (!shouldSendNoStockNotice(entry, oldBotId)) {
-                        if (!entry.awaitingReplacement) {
-                            entry.awaitingReplacement = true;
-                            changed = true;
-                        }
-                        return;
-                    }
-                    await notifyNoStock(mainClient, entry, oldBotName || entry.invalidBotName);
-
-                    entry.invalidBotId = oldBotId || null;
-                    entry.invalidBotName = oldBotName || null;
-                    entry.invalidTokenNotifiedAt = Date.now();
-                    entry.awaitingReplacement = true;
+                    invalidTokensToRemove.add(entry.token);
                     changed = true;
                     return;
                 }
@@ -222,20 +210,9 @@ async function checkAndReplaceTokens(mainClient) {
                 }
 
                 if (!newBotInfo) {
-                    console.error(`[TokenChecker] No valid replacement bots — sub ${entry.code}`);
+                    console.log(`[TokenChecker] Removed invalid token for sub ${entry.code} — no valid replacement token`);
                     await stopInvalidClient();
-                    if (!shouldSendNoStockNotice(entry, oldBotId)) {
-                        if (!entry.awaitingReplacement) {
-                            entry.awaitingReplacement = true;
-                            changed = true;
-                        }
-                        return;
-                    }
-                    await notifyNoStock(mainClient, entry, oldBotName || entry.invalidBotName);
-                    entry.invalidBotId = oldBotId || null;
-                    entry.invalidBotName = oldBotName || null;
-                    entry.invalidTokenNotifiedAt = Date.now();
-                    entry.awaitingReplacement = true;
+                    invalidTokensToRemove.add(oldToken);
                     changed = true;
                     return;
                 }
@@ -260,6 +237,10 @@ async function checkAndReplaceTokens(mainClient) {
 
                 await notifyOwner(mainClient, entry, oldBotName, newBotInfo);
             }));
+        }
+
+        if (invalidTokensToRemove.size > 0) {
+            tokensArray = tokensArray.filter(entry => !invalidTokensToRemove.has(entry.token));
         }
 
         if (changed) {

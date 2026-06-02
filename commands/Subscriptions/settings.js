@@ -221,8 +221,8 @@ module.exports = {
 	            return embed;
 	        }
 
-	        async function getDistributionChannels(firstId, lastId) {
-	            const channels = await message.guild.channels.fetch();
+		        async function getDistributionChannels(firstId, lastId) {
+		            const channels = await message.guild.channels.fetch();
 	            const voiceChannels = channels
 	                .filter(c => isVoiceChannel(c))
 	                .sort((a, b) => a.position - b.position)
@@ -237,11 +237,54 @@ module.exports = {
 	            const targetChannels = voiceChannels.filter(c => c.position >= minPosition && c.position <= maxPosition);
 	            if (targetChannels.length === 0) throw new Error('لا توجد رومات صوتية في المدى المحدد.');
 
-	            return targetChannels;
-	        }
+		            return targetChannels;
+		        }
 
-	        async function executeSmartDistribution(interaction, state) {
-	            const targets = distributionTargets(state.scope);
+		        function wait(ms) {
+		            return new Promise(resolve => setTimeout(resolve, ms));
+		        }
+
+		        async function waitForBotVoiceChannel(guild, bot, channelId, timeoutMs = 15000) {
+		            const deadline = Date.now() + timeoutMs;
+		            while (Date.now() < deadline) {
+		                const currentChannelId = guild.members.me?.voice?.channelId
+		                    || guild.members.cache.get(bot.user.id)?.voice?.channelId;
+		                if (currentChannelId === channelId) return true;
+
+		                const me = await guild.members.fetchMe().catch(() => null);
+		                if (me?.voice?.channelId === channelId) return true;
+		                await wait(750);
+		            }
+		            return false;
+		        }
+
+		        async function setBotNameAndVerify(bot, targetName) {
+		            if (!targetName) return { required: false, ok: true, actual: bot.user?.username || 'Unknown' };
+		            const safeName = String(targetName).slice(0, 32);
+		            if (bot.user?.username === safeName) {
+		                return { required: true, ok: true, actual: bot.user.username, expected: safeName };
+		            }
+		            const updated = await bot.user.setUsername(safeName).catch(err => ({ error: err }));
+		            if (updated?.error) {
+		                return {
+		                    required: true,
+		                    ok: false,
+		                    actual: bot.user?.username || 'Unknown',
+		                    error: updated.error?.message || 'name change failed',
+		                };
+		            }
+
+		            const actual = updated?.username || bot.user?.username || 'Unknown';
+		            return {
+		                required: true,
+		                ok: actual === safeName,
+		                actual,
+		                expected: safeName,
+		            };
+		        }
+
+		        async function executeSmartDistribution(interaction, state) {
+		            const targets = distributionTargets(state.scope);
 	            if (targets.length === 0) {
 	                return interaction.update({
 	                    content: '',
@@ -261,11 +304,14 @@ module.exports = {
 	                components: [],
 	            });
 
-	            let success = 0;
-	            let failed = 0;
+		            let success = 0;
+		            let failed = 0;
+		            let nameSuccess = 0;
+		            let nameRequired = 0;
+		            const details = [];
 
-	            try {
-	                const targetChannels = await getDistributionChannels(state.firstChannelId, state.lastChannelId);
+		            try {
+		                const targetChannels = await getDistributionChannels(state.firstChannelId, state.lastChannelId);
 
 	                for (let idx = 0; idx < targets.length; idx++) {
 	                    const t = targets[idx];
@@ -290,16 +336,21 @@ module.exports = {
 	                        continue;
 	                    }
 
-	                    t.channel = targetChannel.id;
+		                    const targetName = state.mode === 'names'
+		                        ? targetChannel.name
+		                        : state.mode === 'numbers'
+		                            ? `${targetChannel.name} ${idx + 1}`
+		                            : null;
+		                    const nameResult = await setBotNameAndVerify(bot, targetName);
+		                    if (nameResult.required) {
+		                        nameRequired++;
+		                        if (nameResult.ok) nameSuccess++;
+		                    }
 
-	                    if (state.mode === 'names') {
-	                        await bot.user.setUsername(targetChannel.name).catch(() => {});
-	                    } else if (state.mode === 'numbers') {
-	                        await bot.user.setUsername(`${targetChannel.name} ${idx + 1}`).catch(() => {});
-	                    }
+		                    t.channel = targetChannel.id;
 
-	                    const existing = bot.poru.players.get(guild.id);
-	                    if (existing) {
+		                    const existing = bot.poru.players.get(guild.id);
+		                    if (existing) {
 	                        existing.textChannel = t.chat || existing.textChannel || targetChannel.id;
 	                        existing.data = existing.data || {};
 	                        if (t.chat) existing.data.lastTextChannel = t.chat;
@@ -316,13 +367,25 @@ module.exports = {
 	                            voiceChannel: targetChannel.id,
 	                            textChannel: t.chat || targetChannel.id,
 	                            deaf: true,
-	                            group: t.token,
-	                        });
-	                    }
-	                    success++;
-	                }
+		                            group: t.token,
+		                        });
+		                    }
 
-	                store.set('tokens', tokens);
+		                    const joined = await waitForBotVoiceChannel(guild, bot, targetChannel.id);
+		                    if (joined) {
+		                        success++;
+		                    } else {
+		                        failed++;
+		                    }
+
+		                    details.push([
+		                        `**${idx + 1}.** <@${bot.user.id}> → <#${targetChannel.id}>`,
+		                        `**Join:** ${joined ? '**نجح**' : '**فشل**'}`,
+		                        nameResult.required ? `**Name:** ${nameResult.ok ? '**تم**' : `**فشل** (${nameResult.actual})`}` : null,
+		                    ].filter(Boolean).join(' | '));
+		                }
+
+		                store.set('tokens', tokens);
 	                const scopeLabels = {
 	                    idle: 'الخاملين',
 	                    grouped: 'المتجمعين بفويس واحد',
@@ -333,27 +396,38 @@ module.exports = {
 	                    numbers: 'ترقيم البوتات',
 	                };
 
-	                await mainMsg.edit({
-	                    content: '',
-	                    embeds: [buildDistributionEmbed(
-	                        'Distribution Complete',
-	                        [
-	                            `**النطاق:** ${scopeLabels[state.scope] || state.scope}`,
-	                            `**الرومات:** <#${state.firstChannelId}> → <#${state.lastChannelId}>`,
-	                            `**الوضع:** ${modeLabels[state.mode] || state.mode}`,
-	                            `**نجح:** ${success}`,
-	                            failed ? `**فشل:** ${failed}` : null,
-	                        ].filter(Boolean).join('\n')
-	                    )],
-	                    components: [],
-	                });
-	            } catch (e) {
-	                await mainMsg.edit({
-	                    content: '',
-	                    embeds: [buildDistributionEmbed('Distribution Failed', e.message)],
-	                    components: [],
-	                });
-	            }
+		                const resultEmbed = buildDistributionEmbed(
+		                    'Distribution Confirmed',
+		                    [
+		                        `**المنظم:** <@${interaction.user.id}>`,
+		                        `**النطاق:** **${scopeLabels[state.scope] || state.scope}**`,
+		                        `**الرومات:** <#${state.firstChannelId}> → <#${state.lastChannelId}>`,
+		                        `**الوضع:** **${modeLabels[state.mode] || state.mode}**`,
+		                    ].join('\n'),
+		                    [
+		                        { name: 'Bots', value: `**المطلوب:** \`${targets.length}\`\n**دخل فعلياً:** \`${success}\`\n**فشل:** \`${failed}\``, inline: true },
+		                        { name: 'Names', value: nameRequired ? `**تغير الاسم:** \`${nameSuccess}/${nameRequired}\`` : '**بدون تغيير أسماء**', inline: true },
+		                        { name: 'Details', value: details.slice(0, 8).join('\n') || '**لا توجد تفاصيل.**', inline: false },
+		                    ],
+		                );
+		                if (details.length > 8) {
+		                    resultEmbed.addFields({ name: 'More', value: `**+${details.length - 8}** بوت إضافي.`, inline: false });
+		                }
+
+		                await mainMsg.edit({
+		                    content: `<@${interaction.user.id}>`,
+		                    embeds: [resultEmbed],
+		                    components: [],
+		                    allowedMentions: { users: [interaction.user.id] },
+		                });
+		            } catch (e) {
+		                await mainMsg.edit({
+		                    content: `<@${interaction.user.id}>`,
+		                    embeds: [buildDistributionEmbed('Distribution Failed', `**المنظم:** <@${interaction.user.id}>\n**الخطأ:** ${e.message}`)],
+		                    components: [],
+		                    allowedMentions: { users: [interaction.user.id] },
+		                });
+		            }
 
 	            setTimeout(() => updatePanel(), 5000);
 	        }
