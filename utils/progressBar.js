@@ -110,9 +110,9 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         ctx.fillStyle = 'rgba(50,50,52,0.96)';
         fillRoundedRect(ctx, railX, railY, railW, railH, radius);
 
-        // Filled portion — #9d9ad1 purple/lavender (exact from Discord native player)
+        // Filled portion — dynamic accent color (base)
         if (fillW > 0.5) {
-            ctx.fillStyle = 'rgba(157,154,209,0.98)';
+            ctx.fillStyle = rgba(base, 0.98);
             fillRoundedRect(ctx, railX, railY, fillW, railH, radius);
         }
 
