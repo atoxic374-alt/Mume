@@ -96,7 +96,8 @@ module.exports = {
     // انتظر 12 ثانية حتى يبدأ manager.js ويتصل Poru
     setTimeout(() => {
       printStatus();
-      setInterval(printStatus, 5 * 60 * 1000);
+      const statusLogInterval = Number(process.env.STATUS_LOG_INTERVAL_MS || 30 * 60 * 1000);
+      setInterval(printStatus, statusLogInterval);
     }, 12000);
 
     client.user.setPresence({

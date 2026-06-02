@@ -4,6 +4,7 @@ const {
     ButtonBuilder,
     ButtonStyle,
     StringSelectMenuBuilder,
+    ComponentType,
 } = require('discord.js');
 const { getLikes, getAllLikes } = require('../../utils/likes');
 const { getEmbedColor } = require('../../utils/embedColor');
@@ -26,6 +27,8 @@ async function ensurePlayer(client, message) {
     let player = client.poru.players.get(message.guild.id);
     if (player) {
         player.textChannel = message.channel.id;
+        player.data = player.data || {};
+        player.data.lastTextChannel = message.channel.id;
         return player;
     }
 
@@ -41,9 +44,83 @@ async function ensurePlayer(client, message) {
         textChannel: message.channel.id,
         deaf: true,
         autoPlay: false,
+        group: client.token,
     });
-    player.autoplay = false;
+    player.data = player.data || {};
+    player.data.autoPlay = false;
+    player.data.lastTextChannel = message.channel.id;
     return player;
+}
+
+function disableComponents(components = []) {
+    return components.map(row => {
+        const next = new ActionRowBuilder();
+        next.addComponents(row.components.map(component => {
+            const type = component.data?.type || component.type;
+            if (type === ComponentType.Button) return ButtonBuilder.from(component).setDisabled(true);
+            if (type === ComponentType.StringSelect) return StringSelectMenuBuilder.from(component).setDisabled(true);
+            return component;
+        }));
+        return next;
+    });
+}
+
+async function bumpQueueVersion(player, reason = 'likes_add') {
+    player.data = player.data || {};
+    player.data.queueVersion = (player.data.queueVersion || 0) + 1;
+    player.data.lastQueuePanelReason = reason;
+
+    const panels = player.data.queuePanels;
+    if (!panels?.size) return;
+
+    const entries = [...panels.values()];
+    panels.clear();
+    await Promise.allSettled(entries.map(({ message }) => {
+        if (!message?.components?.length) return null;
+        return message.edit({ components: disableComponents(message.components) }).catch(() => null);
+    }));
+}
+
+function cloneTrackForQueue(track, requester) {
+    return { ...track, info: { ...track.info, requester } };
+}
+
+async function resolveLikedRows(client, rows, requester) {
+    const tracks = [];
+    for (let b = 0; b < rows.length; b += 5) {
+        const batch = rows.slice(b, b + 5);
+        const resolved = await Promise.allSettled(batch.map(async row => {
+            const res = await client.poru.resolve({ query: row.uri });
+            const track = res?.tracks?.[0];
+            return track ? cloneTrackForQueue(track, requester) : null;
+        }));
+
+        for (const item of resolved) {
+            if (item.status === 'fulfilled' && item.value) tracks.push(item.value);
+        }
+    }
+    return tracks;
+}
+
+function buildQueueEmbed(client, message, player, added, label) {
+    const current = player.currentTrack;
+    const upcoming = Array.from(player.queue || []).slice(0, 10);
+    const lines = upcoming.map((track, index) => {
+        const title = (track.info?.title || 'Unknown').slice(0, 54);
+        const author = (track.info?.author || 'Unknown').slice(0, 40);
+        return `\`${String(index + 1).padStart(2, '0')}\` **${title}**\n     \`${fmt(track.info?.length)}\` · ${author}`;
+    });
+
+    return new EmbedBuilder()
+        .setColor(getEmbedColor(client))
+        .setTitle('Queue Updated')
+        .setDescription([
+            `> **${added}** track${added === 1 ? '' : 's'} added from **${label}**.`,
+            current ? `> Now: **${(current.info?.title || 'Unknown').slice(0, 70)}**` : '> Playback will start now.',
+            '',
+            lines.length ? lines.join('\n\n') : '> No upcoming songs after the current track.',
+        ].join('\n'))
+        .setFooter({ text: `Requested by ${message.author.displayName}` });
 }
 
 module.exports = {
@@ -139,8 +216,6 @@ module.exports = {
             time: 300000,
         });
 
-        let allCache = null;
-
         async function re(i) {
             const d = await getData().catch(() => ({ rows: [], total: 0 }));
             rows = d.rows; total = d.total;
@@ -165,21 +240,19 @@ module.exports = {
                 } catch (err) {
                     return i.followUp({ content: `> ${err.message}`, ephemeral: true });
                 }
-                if (!allCache) allCache = await getAll().catch(() => []);
-                if (!allCache.length) return;
+                const allRows = await getAll().catch(() => []);
+                if (!allRows.length) return i.followUp({ content: '> لا توجد لايكات محفوظة.', ephemeral: true });
 
-                let added = 0;
-                for (let b = 0; b < allCache.length; b += 5) {
-                    await Promise.allSettled(allCache.slice(b, b + 5).map(async r => {
-                        try {
-                            const res = await client.poru.resolve({ query: r.uri, source: 'ytsearch' });
-                            const t = res?.tracks?.[0];
-                            if (t) { t.info.requester = message.author; player.queue.add(t); added++; }
-                        } catch { }
-                    }));
-                }
-                if (!player.isPlaying && !player.isPaused) player.play();
-                return i.followUp({ content: `> Queued **${added}** liked tracks`, ephemeral: true });
+                const tracks = await resolveLikedRows(client, allRows, message.author);
+                for (const track of tracks) player.queue.add(track);
+                await bumpQueueVersion(player, 'likes_play_all');
+                if (!player.isPlaying && !player.isPaused && player.queue.length) await player.play().catch(() => {});
+
+                await msg.edit({
+                    embeds: [buildEmbed(rows, total), buildQueueEmbed(client, message, player, tracks.length, 'Play All')],
+                    components: [buildNav(total), ...(buildSelect(rows, page * PAGE) ? [buildSelect(rows, page * PAGE)] : [])],
+                }).catch(() => {});
+                return i.followUp({ content: `> Queued **${tracks.length}** liked tracks`, ephemeral: true });
             }
 
             // ── Queue Selected ───────────────────────────────────────────
@@ -191,21 +264,22 @@ module.exports = {
                 } catch (err) {
                     return i.followUp({ content: `> ${err.message}`, ephemeral: true });
                 }
-                if (!allCache) allCache = await getAll().catch(() => []);
+                const allRows = await getAll().catch(() => []);
 
                 const idxs   = i.values.map(Number);
-                const tracks = idxs.map(x => allCache[x]).filter(Boolean);
-                let added = 0;
+                const selectedRows = idxs.map(x => allRows[x]).filter(Boolean);
+                const tracks = await resolveLikedRows(client, selectedRows, message.author);
 
-                await Promise.allSettled(tracks.map(async r => {
-                    try {
-                        const res = await client.poru.resolve({ query: r.uri, source: 'ytsearch' });
-                        const t = res?.tracks?.[0];
-                        if (t) { t.info.requester = message.author; player.queue.add(t); added++; }
-                    } catch { }
-                }));
-                if (!player.isPlaying && !player.isPaused) player.play();
-                return i.followUp({ content: `> Queued **${added}** track${added !== 1 ? 's' : ''}`, ephemeral: true });
+                for (const track of tracks) player.queue.add(track);
+                await bumpQueueVersion(player, 'likes_selected');
+                if (!player.isPlaying && !player.isPaused && player.queue.length) await player.play().catch(() => {});
+
+                const sr = buildSelect(rows, page * PAGE);
+                await msg.edit({
+                    embeds: [buildEmbed(rows, total), buildQueueEmbed(client, message, player, tracks.length, 'Selected Likes')],
+                    components: [buildNav(total), ...(sr ? [sr] : [])],
+                }).catch(() => {});
+                return i.followUp({ content: `> Queued **${tracks.length}** track${tracks.length !== 1 ? 's' : ''}`, ephemeral: true });
             }
         });
 

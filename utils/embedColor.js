@@ -20,7 +20,7 @@ function normalizeDiscordCdnUrl(url) {
         const parsed = new URL(url);
         if (parsed.hostname.endsWith('discordapp.com') || parsed.hostname.endsWith('discord.com')) {
             parsed.pathname = parsed.pathname.replace(/\.(webp|jpg|jpeg|gif)$/i, '.png');
-            parsed.searchParams.set('size', '64');
+            parsed.searchParams.set('size', '256');
         }
         return parsed.toString();
     } catch {
@@ -37,7 +37,7 @@ function avatarUrlFrom(source) {
         return user.displayAvatarURL({
             extension: 'png',
             forceStatic: true,
-            size: 64,
+            size: 256,
         });
     }
 
@@ -45,7 +45,7 @@ function avatarUrlFrom(source) {
         return source.displayAvatarURL({
             extension: 'png',
             forceStatic: true,
-            size: 64,
+            size: 256,
         });
     }
 
@@ -54,38 +54,44 @@ function avatarUrlFrom(source) {
     return null;
 }
 
-function dominantColorFromPixels(data) {
+function dominantColorFromPixels(data, width, height) {
     const bins = new Map();
     let fallbackBin = null;
+    const cx = (width - 1) / 2;
+    const cy = (height - 1) / 2;
+    const radius = Math.min(width, height) / 2;
+    const radiusSq = radius * radius;
 
     for (let i = 0; i < data.length; i += 4) {
+        const pixel = i / 4;
+        const x = pixel % width;
+        const y = Math.floor(pixel / width);
+        const dx = x - cx;
+        const dy = y - cy;
+        if ((dx * dx) + (dy * dy) > radiusSq) continue;
+
         const alpha = data[i + 3];
-        if (alpha < 128) continue;
+        if (alpha < 96) continue;
 
         const r = data[i];
         const g = data[i + 1];
         const b = data[i + 2];
         const max = Math.max(r, g, b);
         const min = Math.min(r, g, b);
-        const saturation = max - min;
-        const brightness = max / 255;
-        const isNeutral = saturation < 24;
-        const isTooDark = max < 38;
-        const isTooLight = min > 232;
-
-        const neutralWeight = isNeutral ? 0.18 : 1;
-        const brightnessWeight = brightness < 0.2 ? 0.25 : brightness > 0.92 ? 0.35 : 1;
-        const weight = (1 + saturation / 72) * neutralWeight * brightnessWeight;
-        const key = `${r >> 3}:${g >> 3}:${b >> 3}`;
+        const saturation = max === 0 ? 0 : (max - min) / max;
+        const lightness = (max + min) / 510;
+        const isFlatExtreme = saturation < 0.08 && (lightness < 0.05 || lightness > 0.96);
+        const alphaWeight = alpha / 255;
+        const saturationWeight = 0.55 + saturation * 1.45;
+        const visibleWeight = 0.7 + Math.min(lightness, 1 - lightness) * 0.6;
+        const weight = alphaWeight * saturationWeight * visibleWeight * (isFlatExtreme ? 0.18 : 1);
+        const key = `${r >> 4}:${g >> 4}:${b >> 4}`;
         const bin = bins.get(key) || { weight: 0, r: 0, g: 0, b: 0 };
         bin.weight += weight;
         bin.r += r * weight;
         bin.g += g * weight;
         bin.b += b * weight;
-
-        if (!isTooDark && !isTooLight && !isNeutral) {
-            bins.set(key, bin);
-        }
+        bins.set(key, bin);
 
         if (!fallbackBin || bin.weight > fallbackBin.weight) fallbackBin = bin;
     }
@@ -105,12 +111,12 @@ function dominantColorFromPixels(data) {
 
 async function dominantColorFromImage(buffer) {
     const image = await loadImage(buffer);
-    const size = 96;
+    const size = 160;
     const canvas = createCanvas(size, size);
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     ctx.drawImage(image, 0, 0, size, size);
     const { data } = ctx.getImageData(0, 0, size, size);
-    return dominantColorFromPixels(data);
+    return dominantColorFromPixels(data, size, size);
 }
 
 async function fetchAvatarColor(url) {

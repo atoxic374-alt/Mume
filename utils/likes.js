@@ -14,8 +14,11 @@ const DB_PATH = path.join(process.cwd(), 'settings', 'likes.db');
 const db = new sqlite3.Database(DB_PATH, (err) => {
     if (err) console.error('[Likes] DB open error:', err.message);
 });
+const locks = new Map();
 
 db.serialize(() => {
+    db.run(`PRAGMA journal_mode = WAL`);
+    db.run(`PRAGMA busy_timeout = 5000`);
     db.run(`
         CREATE TABLE IF NOT EXISTS likes (
             userId   TEXT    NOT NULL,
@@ -29,6 +32,19 @@ db.serialize(() => {
     `);
     db.run(`CREATE INDEX IF NOT EXISTS idx_likes_userId ON likes(userId)`);
 });
+
+function withUserLock(userId, task) {
+    const key = String(userId || 'global');
+    const previous = locks.get(key) || Promise.resolve();
+    const next = previous
+        .catch(() => {})
+        .then(task)
+        .finally(() => {
+            if (locks.get(key) === next) locks.delete(key);
+        });
+    locks.set(key, next);
+    return next;
+}
 
 // ── Public API (all async via callbacks wrapped in Promises) ──────────────
 
@@ -44,7 +60,7 @@ function trackKey(track) {
  * Toggle like for a track. Returns { liked: true/false }
  */
 function toggle(userId, track) {
-    return new Promise((resolve, reject) => {
+    return withUserLock(userId, () => new Promise((resolve, reject) => {
         const info = track?.info || {};
         const uri = trackKey(track);
         const title = info.title || 'Unknown track';
@@ -72,7 +88,7 @@ function toggle(userId, track) {
                 );
             }
         });
-    });
+    }));
 }
 
 /**

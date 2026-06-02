@@ -162,6 +162,9 @@ async function checkAndReplaceTokens(mainClient) {
             const batch = tokensArray.slice(i, i + batchSize);
 
             await Promise.all(batch.map(async (entry) => {
+                const runningClient = runningBots?.get(entry.token);
+                if (runningClient?.isReady?.()) return;
+
                 const isValid = await validateToken(entry.token);
                 if (isValid) return; // ✅ سليم — تجاوز
 

@@ -299,15 +299,26 @@ module.exports = {
 	                    }
 
 	                    const existing = bot.poru.players.get(guild.id);
-	                    if (existing) existing.destroy();
-
-	                    await bot.poru.createConnection({
-	                        guildId: guild.id,
-	                        voiceChannel: targetChannel.id,
-	                        textChannel: t.chat || targetChannel.id,
-	                        deaf: true,
-	                        group: t.token,
-	                    });
+	                    if (existing) {
+	                        existing.textChannel = t.chat || existing.textChannel || targetChannel.id;
+	                        existing.data = existing.data || {};
+	                        if (t.chat) existing.data.lastTextChannel = t.chat;
+	                        try {
+	                            if (!existing.isConnected || existing.voiceChannel !== targetChannel.id) {
+	                                existing.setVoiceChannel(targetChannel.id, { deaf: true, mute: false });
+	                            }
+	                        } catch (err) {
+	                            if (!(err instanceof ReferenceError)) throw err;
+	                        }
+	                    } else {
+	                        await bot.poru.createConnection({
+	                            guildId: guild.id,
+	                            voiceChannel: targetChannel.id,
+	                            textChannel: t.chat || targetChannel.id,
+	                            deaf: true,
+	                            group: t.token,
+	                        });
+	                    }
 	                    success++;
 	                }
 
@@ -602,7 +613,7 @@ module.exports = {
                             { name: 'Bots', value: `\`${subTokens.length}\`${waitingCount ? `\nWaiting: \`${waitingCount}\`` : ''}`, inline: true },
                             { name: 'Server', value: `\`${subTokens[0]?.Server || allSubTokens[0]?.Server || 'غير محدد'}\``, inline: true },
                             { name: 'Expires', value: subInfo?.expirationTime ? `<t:${Math.floor(subInfo.expirationTime / 1000)}:R>` : 'غير معروف', inline: true },
-                            { name: 'Display', value: `الأزرار: **${display.buttons ? 'مفعلة' : 'معطلة'}**\nالإيمبد: **${display.embeds ? 'مفعل' : 'معطل'}**`, inline: true },
+                            { name: 'Display', value: `الأزرار: **${display.buttons ? 'مفعلة' : 'معطلة'}**\nالإيمبد: **${display.embeds ? 'مفعل' : 'معطل'}**\nStatus الروم: **${display.voiceStatus ? 'مفعل' : 'معطل'}**`, inline: true },
                             { name: 'Platform', value: `\`${display.platform}\``, inline: true },
                             { name: 'Back to Voice', value: `${backVoice.label}\n${backVoice.details}`, inline: true },
                             { name: 'Command Chat', value: `${chat.label}\n${chat.details}`, inline: false },
@@ -693,33 +704,54 @@ module.exports = {
                     );
                     components.push(row1, row2);
                 }
-	                else if (currentPanel === 'ROOMS') {
-	                    const chat = chatSummary();
-	                    const backVoice = backToVoiceSummary();
-	                    const embed = new EmbedBuilder()
-	                        .setTitle(`Room Settings — ${selectedCode}`)
-	                        .setDescription(
-	                            `راقب البوتات، وزّعها، وحدد شات استقبال الأوامر.\n\n` +
-	                            `**شات الأوامر:** ${chat.label}\n${chat.details}\n\n` +
-	                            `**Back to Voice:** ${backVoice.label}\n${backVoice.details}`
-	                        )
-	                        .setColor(getEmbedColor(client));
-                    embeds.push(embed);
+		                else if (currentPanel === 'ROOMS') {
+		                    const chat = chatSummary();
+		                    const backVoice = backToVoiceSummary();
+		                    const display = getDisplay(selectedCode);
+		                    const embed = new EmbedBuilder()
+		                        .setTitle(`Room Settings — ${selectedCode}`)
+		                        .setDescription(
+		                            `راقب البوتات، وزّعها، وحدد شات استقبال الأوامر.\n\n` +
+		                            `**شات الأوامر:** ${chat.label}\n${chat.details}\n\n` +
+		                            `**Back to Voice:** ${backVoice.label}\n${backVoice.details}\n\n` +
+		                            `**Voice Status:** \`${display.voiceStatus ? 'ON' : 'OFF'}\`  ${display.voiceStatusEmoji || '🎵'}\n` +
+		                            `عند تشغيل أغنية يتم تحديث Status الروم باسم مختصر للأغنية.`
+		                        )
+		                        .addFields({
+		                            name: 'ماذا تفعل الأزرار؟',
+		                            value: [
+		                                '**Voice Status:** يعرض مكان كل بوت: داخل روم، خامل، خارج السيرفر، أو غير متصل.',
+		                                '**Smart Distribution:** يوزع البوتات على نطاق رومات تختاره ويحافظ على ترتيبها.',
+		                                '**Move Idle:** يدخل البوتات الخاملة فقط إلى روم أو عدة رومات تحددها.',
+		                                '**Back to Voice:** يرجع البوت تلقائياً للروم المحدد إذا خرج أو انتقل.',
+		                                '**Status:** يفعّل أو يعطل كتابة اسم الأغنية المختصر على Status الروم.',
+		                                '**Command Chat:** يحدد الشات الذي يستقبل أوامر التشغيل.',
+		                                '**All Links / Outside Server:** يعرض روابط دعوة البوتات حسب حالتها.',
+		                            ].join('\n'),
+		                            inline: false,
+		                        })
+		                        .setColor(getEmbedColor(client));
+		                    embeds.push(embed);
 
-	                    const row1 = new ActionRowBuilder().addComponents(
-	                        new ButtonBuilder().setCustomId(`stg_${mid}_voice_status`).setLabel('Voice Status').setStyle(ButtonStyle.Secondary),
-	                        new ButtonBuilder().setCustomId(`stg_${mid}_distribute`).setLabel('Smart Distribution').setStyle(ButtonStyle.Secondary),
-	                        new ButtonBuilder().setCustomId(`stg_${mid}_moveidle`).setLabel('Move Idle').setStyle(ButtonStyle.Secondary),
-	                        new ButtonBuilder()
-	                            .setCustomId(`stg_${mid}_toggle_back_voice`)
-	                            .setLabel(`Back to Voice: ${backVoice.enabled ? 'ON' : 'OFF'}`)
-	                            .setStyle(backVoice.enabled ? ButtonStyle.Success : ButtonStyle.Danger)
-	                    );
-	                    const row2 = new ActionRowBuilder().addComponents(
-	                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_chat`).setLabel('Command Chat').setStyle(ButtonStyle.Secondary),
-	                        new ButtonBuilder().setCustomId(`stg_${mid}_links_all`).setLabel('All Links').setStyle(ButtonStyle.Secondary),
-	                        new ButtonBuilder().setCustomId(`stg_${mid}_links_out`).setLabel('Outside Server').setStyle(ButtonStyle.Secondary),
-	                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+		                    const row1 = new ActionRowBuilder().addComponents(
+		                        new ButtonBuilder().setCustomId(`stg_${mid}_voice_status`).setLabel('Voice Status').setStyle(ButtonStyle.Secondary),
+		                        new ButtonBuilder().setCustomId(`stg_${mid}_distribute`).setLabel('Smart Distribution').setStyle(ButtonStyle.Secondary),
+		                        new ButtonBuilder().setCustomId(`stg_${mid}_moveidle`).setLabel('Move Idle').setStyle(ButtonStyle.Secondary),
+		                        new ButtonBuilder()
+		                            .setCustomId(`stg_${mid}_toggle_back_voice`)
+		                            .setLabel(`Back to Voice: ${backVoice.enabled ? 'ON' : 'OFF'}`)
+		                            .setStyle(backVoice.enabled ? ButtonStyle.Success : ButtonStyle.Danger),
+		                        new ButtonBuilder()
+		                            .setCustomId(`stg_${mid}_toggle_voice_status`)
+		                            .setLabel(`Status: ${display.voiceStatus ? 'ON' : 'OFF'}`)
+		                            .setStyle(display.voiceStatus ? ButtonStyle.Success : ButtonStyle.Danger)
+		                    );
+		                    const row2 = new ActionRowBuilder().addComponents(
+		                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_chat`).setLabel('Command Chat').setStyle(ButtonStyle.Secondary),
+		                        new ButtonBuilder().setCustomId(`stg_${mid}_voice_status_emoji`).setLabel('Status Emoji').setStyle(ButtonStyle.Secondary),
+		                        new ButtonBuilder().setCustomId(`stg_${mid}_links_all`).setLabel('All Links').setStyle(ButtonStyle.Secondary),
+		                        new ButtonBuilder().setCustomId(`stg_${mid}_links_out`).setLabel('Outside Server').setStyle(ButtonStyle.Secondary),
+		                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
 	                    );
 	                    components.push(row1, row2);
 	                }
@@ -914,19 +946,55 @@ module.exports = {
                 return;
             }
 
-            if (i.customId === `stg_${mid}_toggle_back_voice`) {
-                tokens = store.get('tokens') || [];
-                const selected = tokens.filter(t => t.code === selectedCode);
-                const currentlyEnabled = selected.some(t => t.backToVoice !== 'off');
-                selected.forEach(t => {
+	            if (i.customId === `stg_${mid}_toggle_back_voice`) {
+	                tokens = store.get('tokens') || [];
+	                const selected = tokens.filter(t => t.code === selectedCode);
+	                const currentlyEnabled = selected.some(t => t.backToVoice !== 'off');
+	                selected.forEach(t => {
                     t.backToVoice = currentlyEnabled ? 'off' : 'on';
                 });
-                store.set('tokens', tokens);
-                return updatePanel(i);
-            }
+	                store.set('tokens', tokens);
+	                return updatePanel(i);
+	            }
 
-	            if (i.customId === `stg_${mid}_voice_status`) {
-	                // Voice status sub-panel logic
+	            if (i.customId === `stg_${mid}_toggle_voice_status`) {
+	                const cur = getDisplay(selectedCode);
+	                const newVal = !cur.voiceStatus;
+	                setDisplay(selectedCode, { voiceStatus: newVal });
+	                tokens = store.get('tokens') || [];
+	                const selected = tokens.filter(t => t.code === selectedCode);
+	                selected.forEach(t => {
+	                    if (t.code === selectedCode) t.voiceStatus = newVal ? 'on' : 'off';
+	                });
+	                store.set('tokens', tokens);
+	                if (!newVal) {
+	                    await Promise.allSettled(selected.map(async t => {
+	                        const bot = runningBots.get(t.token);
+	                        const channelId = bot?.guilds.cache.get(t.Server)?.members.me?.voice?.channelId;
+	                        if (bot?.rest && channelId) {
+	                            await bot.rest.put(`/channels/${channelId}/voice-status`, { body: { status: null } });
+	                        }
+	                    }));
+	                }
+	                return updatePanel(i);
+	            }
+
+	            if (i.customId === `stg_${mid}_voice_status_emoji`) {
+	                const modal = new ModalBuilder().setCustomId(`stg_mod_${mid}_voice_status_emoji`).setTitle('Voice Status Emoji');
+	                modal.addComponents(new ActionRowBuilder().addComponents(
+	                    new TextInputBuilder()
+	                        .setCustomId('emoji')
+	                        .setLabel('Emoji before track name')
+	                        .setPlaceholder('🎵 or <:music:123456789012345678>')
+	                        .setRequired(true)
+	                        .setStyle(TextInputStyle.Short)
+	                ));
+	                await i.showModal(modal);
+	                return;
+	            }
+
+		            if (i.customId === `stg_${mid}_voice_status`) {
+		                // Voice status sub-panel logic
 	                await handleVoiceStatus(i);
 	            }
 
@@ -968,9 +1036,9 @@ module.exports = {
                 setTimeout(() => updatePanel(), 3000);
             }
 
-            if (interaction.customId === `stg_mod_${mid}_status`) {
-                const text = interaction.fields.getTextInputValue('text');
-                await mainMsg.edit({ content: '⏳ جاري تغيير الحالة...', embeds: [], components: [] });
+	            if (interaction.customId === `stg_mod_${mid}_status`) {
+	                const text = interaction.fields.getTextInputValue('text');
+	                await mainMsg.edit({ content: '⏳ جاري تغيير الحالة...', embeds: [], components: [] });
                 
                 // Update tokens.json
                 tokens.forEach(t => { if (t.code === selectedCode) t.status = text; });
@@ -986,11 +1054,23 @@ module.exports = {
                     }
                 }));
 
-                await mainMsg.edit({ content: `✅ تم تحديث حالة ${results.length} بوت بنجاح.` });
-                setTimeout(() => updatePanel(), 3000);
-            }
+	                await mainMsg.edit({ content: `✅ تم تحديث حالة ${results.length} بوت بنجاح.` });
+	                setTimeout(() => updatePanel(), 3000);
+	            }
 
-            if (interaction.customId === `stg_mod_${mid}_banner`) {
+	            if (interaction.customId === `stg_mod_${mid}_voice_status_emoji`) {
+	                const emoji = interaction.fields.getTextInputValue('emoji').trim().slice(0, 64);
+	                setDisplay(selectedCode, { voiceStatusEmoji: emoji || '🎵' });
+	                tokens = store.get('tokens') || [];
+	                tokens.forEach(t => {
+	                    if (t.code === selectedCode) t.voiceStatusEmoji = emoji || '🎵';
+	                });
+	                store.set('tokens', tokens);
+	                await mainMsg.edit({ content: `✅ تم تحديث إيموجي Status الروم إلى ${emoji || '🎵'}.`, embeds: [], components: [] });
+	                setTimeout(() => updatePanel(), 2500);
+	            }
+
+	            if (interaction.customId === `stg_mod_${mid}_banner`) {
                 const url = interaction.fields.getTextInputValue('url');
                 await mainMsg.edit({ content: '⏳ جاري تغيير البانر...', embeds: [], components: [] });
                 
@@ -1047,16 +1127,27 @@ module.exports = {
 	                    }
 
 	                    t.channel = targetChannel.id;
-	                    const existing = bot.poru.players.get(guild.id);
-	                    if (existing) existing.destroy();
-
-	                    await bot.poru.createConnection({
-	                        guildId: guild.id,
-	                        voiceChannel: targetChannel.id,
-	                        textChannel: t.chat || targetChannel.id,
-	                        deaf: true,
-	                        group: t.token,
-	                    });
+		                    const existing = bot.poru.players.get(guild.id);
+		                    if (existing) {
+		                        existing.textChannel = t.chat || existing.textChannel || targetChannel.id;
+		                        existing.data = existing.data || {};
+		                        if (t.chat) existing.data.lastTextChannel = t.chat;
+		                        try {
+		                            if (!existing.isConnected || existing.voiceChannel !== targetChannel.id) {
+		                                existing.setVoiceChannel(targetChannel.id, { deaf: true, mute: false });
+		                            }
+		                        } catch (err) {
+		                            if (!(err instanceof ReferenceError)) throw err;
+		                        }
+		                    } else {
+		                        await bot.poru.createConnection({
+		                            guildId: guild.id,
+		                            voiceChannel: targetChannel.id,
+		                            textChannel: t.chat || targetChannel.id,
+		                            deaf: true,
+		                            group: t.token,
+		                        });
+		                    }
 	                    success++;
 	                }));
 

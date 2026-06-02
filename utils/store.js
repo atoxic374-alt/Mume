@@ -12,6 +12,7 @@ const FILES = {
   history:  './settings/history.json',
   database: './settings/database.json',
 };
+const OBJ_KEYS = ['display', 'database'];
 
 class Store {
   constructor() {
@@ -22,14 +23,15 @@ class Store {
     for (const [key, file] of Object.entries(FILES)) {
       try {
         if (fs.existsSync(file)) {
-          this._mem[key] = JSON.parse(fs.readFileSync(file, 'utf8'));
+          const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+          this._mem[key] = OBJ_KEYS.includes(key) && (Array.isArray(parsed) || !parsed || typeof parsed !== 'object')
+            ? {}
+            : parsed;
         } else {
-          const OBJ_KEYS = ['host', 'display', 'database'];
           this._mem[key] = OBJ_KEYS.includes(key) ? {} : [];
         }
       }
       catch {
-        const OBJ_KEYS = ['host', 'display', 'database'];
         this._mem[key] = OBJ_KEYS.includes(key) ? {} : [];
       }
     }

@@ -6,7 +6,14 @@ function getDisplayAll() {
 
 function getDisplay(code) {
     const data = getDisplayAll();
-    return data[code] || { buttons: true, embeds: true, platform: 'ytsearch' };
+    return {
+        buttons: true,
+        embeds: true,
+        platform: 'ytsearch',
+        voiceStatus: false,
+        voiceStatusEmoji: '🎵',
+        ...(data[code] || {}),
+    };
 }
 
 function setDisplay(code, updates) {

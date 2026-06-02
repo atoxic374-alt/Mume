@@ -27,6 +27,8 @@ const likes = require('./utils/likes');
 const { getDisplay } = require('./utils/display');
 const MUSIC_EMOJIS = require('./utils/musicEmojis');
 const { getEmbedColor, refreshEmbedColor } = require('./utils/embedColor');
+const statusStore = require('./statusStore');
+const { tintAttachmentPayload } = require('./utils/tintedThumbnail');
 
 const runningBots = new Collection();
 const botLastActivity = new Map();
@@ -98,6 +100,8 @@ function displaySettings(tokenObj) {
         buttons: tokenObj?.buttons ? tokenObj.buttons === 'on' : saved.buttons !== false,
         embeds: tokenObj?.embeds ? tokenObj.embeds === 'on' : saved.embeds !== false,
         platform: tokenObj?.source || saved.platform || 'ytsearch',
+        voiceStatus: tokenObj?.voiceStatus ? tokenObj.voiceStatus === 'on' : saved.voiceStatus === true,
+        voiceStatusEmoji: tokenObj?.voiceStatusEmoji || saved.voiceStatusEmoji || '🎵',
     };
 }
 
@@ -158,18 +162,17 @@ function buildMusicComponents({ liked = false, artistTracks = [], selectedFilter
                 value: String(i),
                 description: `${shortDuration(t.info.length)} · ${(t.info.author || '').slice(0, 50)}`.slice(0, 99),
                 emoji: ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'][i],
-                default: selectedArtistIndex === i,
             })));
         rows.push(new ActionRowBuilder().addComponents(artistMenu));
     }
 
     if (showControls) {
+        const activeFilterName = FILTER_NAMES[selectedFilter] || FILTER_NAMES.clear;
         const filterMenu = new StringSelectMenuBuilder()
             .setCustomId('np_filter')
-            .setPlaceholder('الفلاتر الصوتية')
+            .setPlaceholder(`الفلاتر الصوتية • الحالي: ${activeFilterName}`)
             .addOptions(FILTER_OPTIONS.map(option => ({
                 ...option,
-                default: option.value === selectedFilter,
             })));
         rows.push(new ActionRowBuilder().addComponents(filterMenu));
     }
@@ -179,6 +182,7 @@ function buildMusicComponents({ liked = false, artistTracks = [], selectedFilter
 
 function buildNowPlayingPayload(TrueMusic, tokenObj, track, requester, options = {}) {
     const settings = displaySettings(tokenObj);
+    const embedColor = getEmbedColor(TrueMusic);
     const title = track?.info?.title || 'Unknown track';
     const uri = track?.info?.uri;
     const duration = shortDuration(track?.info?.length);
@@ -194,7 +198,7 @@ function buildNowPlayingPayload(TrueMusic, tokenObj, track, requester, options =
 
     if (settings.embeds) {
         const embed = new EmbedBuilder()
-            .setColor(getEmbedColor(TrueMusic))
+            .setColor(embedColor)
             .setTitle('Now Playing')
             .setThumbnail('attachment://NowPlaying.png')
             .setDescription(`**${titleText}**`)
@@ -207,12 +211,12 @@ function buildNowPlayingPayload(TrueMusic, tokenObj, track, requester, options =
                 iconURL: TrueMusic.user?.displayAvatarURL?.({ dynamic: true }),
             });
 
-        return {
+        return tintAttachmentPayload({
             content: `🎶 **${TrueMusic.user?.displayName || TrueMusic.user?.username || 'Music'}**`,
             embeds: [embed],
             files: ['./assets/image/icons/NowPlaying.png'],
             components,
-        };
+        }, embedColor);
     }
 
     return {
@@ -235,18 +239,20 @@ function compactMusicText({ title, description, fields = [] }) {
 function musicPayload(tokenObj, { title, description, fields = [], components = [], color = undefined, thumbnail = null, files = [] }) {
     const settings = displaySettings(tokenObj);
     const colorSource = tokenObj?.token ? runningBots.get(tokenObj.token) : null;
+    const embedColor = getEmbedColor(colorSource, color);
     const payload = {
         components: settings.buttons && components.length ? components : [],
     };
 
     if (settings.embeds) {
-        const embed = new EmbedBuilder().setColor(getEmbedColor(colorSource, color));
+        const embed = new EmbedBuilder().setColor(embedColor);
         if (title) embed.setTitle(title);
         if (description) embed.setDescription(description);
         if (thumbnail) embed.setThumbnail(thumbnail);
         if (fields.length) embed.addFields(fields);
         payload.embeds = [embed];
         if (files.length) payload.files = files;
+        return tintAttachmentPayload(payload, embedColor);
     } else {
         payload.content = compactMusicText({ title, description, fields });
         payload.embeds = [];
@@ -257,6 +263,7 @@ function musicPayload(tokenObj, { title, description, fields = [], components = 
 
 function platformDisplay(source) {
     const names = {
+        auto: 'Smart Search',
         ytsearch: 'YouTube',
         ytmsearch: 'YouTube Music',
         scsearch: 'SoundCloud',
@@ -350,6 +357,192 @@ function disableComponents(components = []) {
     });
 }
 
+function ensurePlayerData(player) {
+    if (!player.data) player.data = {};
+    if (!player.data.queuePanels) player.data.queuePanels = new Map();
+    if (!Number.isFinite(player.data.queueVersion)) player.data.queueVersion = 0;
+    return player.data;
+}
+
+function trackIdentity(track) {
+    const info = track?.info || track || {};
+    return track?.track || info.uri || info.identifier || [info.sourceName, info.author, info.title, info.length].filter(Boolean).join(':');
+}
+
+function rememberTextChannel(player, channelId) {
+    if (!player || !channelId) return;
+    ensurePlayerData(player);
+    player.textChannel = channelId;
+    player.data.lastTextChannel = channelId;
+}
+
+function registerQueuePanel(player, message, version) {
+    if (!player || !message) return;
+    const data = ensurePlayerData(player);
+    data.queuePanels.set(message.id, { message, version });
+}
+
+async function expireQueuePanels(player, reason = 'queue_changed', preserveMessageId = null) {
+    const panels = player?.data?.queuePanels;
+    if (!panels?.size) return;
+
+    const entries = [...panels.entries()];
+    const toDisable = [];
+    panels.clear();
+
+    for (const [messageId, entry] of entries) {
+        if (preserveMessageId && messageId === preserveMessageId) {
+            panels.set(messageId, entry);
+        } else {
+            toDisable.push(entry);
+        }
+    }
+
+    await Promise.allSettled(toDisable.map(async ({ message }) => {
+        if (!message?.editable && typeof message?.edit !== 'function') return;
+        const components = message.components?.length ? disableComponents(message.components) : [];
+        await message.edit({ components }).catch(() => {});
+    }));
+
+    player.data.lastQueuePanelReason = reason;
+}
+
+async function bumpQueueVersion(player, reason = 'queue_changed', preserveMessageId = null) {
+    if (!player) return 0;
+    const data = ensurePlayerData(player);
+    data.queueVersion += 1;
+    await expireQueuePanels(player, reason, preserveMessageId);
+    return data.queueVersion;
+}
+
+async function safePlay(player) {
+    if (!player?.queue?.length) return false;
+    if (player.isPlaying || player.isPaused) return false;
+    await player.play();
+    return true;
+}
+
+function isProbablyUrl(value) {
+    if (!value) return false;
+    try {
+        const url = new URL(value);
+        return ['http:', 'https:'].includes(url.protocol);
+    } catch {
+        return false;
+    }
+}
+
+function normalizeArabicSearch(value) {
+    return String(value || '')
+        .normalize('NFKD')
+        .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+        .replace(/[إأآا]/g, 'ا')
+        .replace(/ى/g, 'ي')
+        .replace(/ؤ/g, 'و')
+        .replace(/ئ/g, 'ي')
+        .replace(/ة/g, 'ه')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function buildSearchVariants(query) {
+    const raw = String(query || '').replace(/\s+/g, ' ').trim();
+    const normalized = normalizeArabicSearch(raw);
+    const variants = [
+        raw,
+        normalized,
+        `${raw} official audio`,
+        `${raw} lyrics`,
+    ];
+
+    return [...new Set(variants.filter(Boolean))];
+}
+
+function dedupeTracks(tracks = []) {
+    const seen = new Set();
+    const unique = [];
+
+    for (const track of tracks) {
+        const info = track?.info || {};
+        const key = trackIdentity(track)
+            || `${(info.title || '').toLowerCase()}|${(info.author || '').toLowerCase()}|${info.length || 0}`;
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        unique.push(track);
+    }
+
+    return unique;
+}
+
+async function resolveSmartTracks(poru, query, source, limit = 20) {
+    if (isProbablyUrl(query)) {
+        const result = await poru.resolve({ query });
+        return dedupeTracks(result?.tracks || []).slice(0, limit);
+    }
+
+    const variants = buildSearchVariants(query);
+    const sources = source === 'auto'
+        ? ['ytmsearch', 'ytsearch', 'scsearch', 'spsearch', 'amsearch', 'dzsearch']
+        : [source || 'ytsearch'];
+    const tracks = [];
+
+    for (const searchSource of sources) {
+        for (const variant of variants) {
+            if (tracks.length >= limit * 2) break;
+            const result = await poru.resolve({ query: variant, source: searchSource }).catch(() => null);
+            if (result?.tracks?.length) tracks.push(...result.tracks.slice(0, 8));
+        }
+    }
+
+    return dedupeTracks(tracks).slice(0, limit);
+}
+
+function compactTrackStatusTitle(title) {
+    const cleaned = String(title || 'Music')
+        .replace(/\[[^\]]*\]|\([^)]*\)/g, ' ')
+        .replace(/official|video|audio|lyrics?|visualizer|remaster(ed)?|HD|4K/ig, ' ')
+        .replace(/[^\p{L}\p{N}\s'-]/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const words = cleaned.split(' ').filter(Boolean).slice(0, 5);
+    return (words.join(' ') || String(title || 'Music')).slice(0, 64);
+}
+
+async function setVoiceChannelStatus(client, channelId, status) {
+    if (!client?.rest || !channelId) return false;
+    const body = { status: status ? String(status).slice(0, 500) : null };
+    await client.rest.put(`/channels/${channelId}/voice-status`, { body });
+    return true;
+}
+
+async function updatePlaybackVoiceStatus(client, tokenObj, player, track = null) {
+    const settings = displaySettings(tokenObj);
+    if (!settings.voiceStatus) return;
+
+    const channelId = player?.voiceChannel || client.guilds.cache.get(player?.guildId)?.members?.me?.voice?.channelId;
+    if (!channelId) return;
+
+    const status = track
+        ? `${settings.voiceStatusEmoji || '🎵'} ${compactTrackStatusTitle(track.info?.title)}`
+        : null;
+
+    ensurePlayerData(player);
+    if (player.data.lastVoiceStatusChannelId === channelId && player.data.lastVoiceStatus === status) return;
+
+    try {
+        await setVoiceChannelStatus(client, channelId, status);
+        player.data.lastVoiceStatusChannelId = channelId;
+        player.data.lastVoiceStatus = status;
+        player.data.voiceStatusWarned = false;
+    } catch (err) {
+        if (!player.data.voiceStatusWarned) {
+            const code = err?.code || err?.status || err?.rawError?.code || 'unknown';
+            console.warn(`[VoiceStatus] failed for ${channelId}: ${code} ${err?.message || ''}`.trim());
+            player.data.voiceStatusWarned = true;
+        }
+    }
+}
+
 async function finalizePlayerUi(player) {
     const msg = player?.data?.nowPlayingMessage;
     if (msg?.components?.length) {
@@ -438,34 +631,176 @@ module.exports = {
             }
         });
 
-        TrueMusic.poru.on('nodeConnect', (node) => {
-            const name = node.options.name || node.options.host;
-            const prev = store.getNodes().get(name) || {};
-            store.setNode(name, {
-                status: 'live',
-                connectedAt: Date.now(),
-                reconnects: prev.reconnects ?? 0,
+        const voiceEnsureLocks = new Map();
+
+        async function ensureConfiguredVoice(guild, tokenObj, reason = 'guard') {
+            if (!guild || !tokenObj?.channel || tokenObj.awaitingReplacement) return null;
+            if (!TrueMusic.poru?.leastUsedNodes?.length) return null;
+
+            const lockKey = `${guild.id}:${tokenObj.channel}`;
+            if (voiceEnsureLocks.has(lockKey)) return voiceEnsureLocks.get(lockKey);
+
+            const task = (async () => {
+                const targetChannel = guild.channels.cache.get(tokenObj.channel)
+                    || await guild.channels.fetch(tokenObj.channel).catch(() => null);
+                if (!targetChannel) return null;
+
+                const player = TrueMusic.poru.players.get(guild.id);
+                const currentVoiceId = guild.members.me?.voice?.channelId;
+                const backToVoice = tokenObj.backToVoice !== 'off';
+
+                if (currentVoiceId === targetChannel.id) return player || null;
+                if (currentVoiceId && !backToVoice) return player || null;
+
+                if (player) {
+                    if (tokenObj.chat && !player.data?.lastTextChannel) rememberTextChannel(player, tokenObj.chat);
+                    if (!player.isConnected || player.voiceChannel !== targetChannel.id || !currentVoiceId) {
+                        try {
+                            player.setVoiceChannel(targetChannel.id, { deaf: true, mute: false });
+                        } catch (err) {
+                            if (!(err instanceof ReferenceError)) throw err;
+                        }
+                    }
+                    return player;
+                }
+
+                const created = await TrueMusic.poru.createConnection({
+                    guildId: guild.id,
+                    voiceChannel: targetChannel.id,
+                    textChannel: tokenObj.chat || targetChannel.id,
+                    deaf: true,
+                    group: tokenObj.token,
+                });
+                ensurePlayerData(created);
+                if (tokenObj.chat) rememberTextChannel(created, tokenObj.chat);
+                created.data.voiceEnsureReason = reason;
+                return created;
+            })().finally(() => {
+                setTimeout(() => voiceEnsureLocks.delete(lockKey), 1500);
             });
 
+            voiceEnsureLocks.set(lockKey, task);
+            return task;
+        }
+
+        async function restartCurrentTrack(player, reason = 'recover') {
+            if (!player?.currentTrack?.track || !player?.node?.rest) return false;
+            await player.node.rest.updatePlayer({
+                guildId: player.guildId,
+                data: {
+                    track: { encoded: player.currentTrack.track },
+                    position: Math.max(0, Number(player.position || 0)),
+                    paused: false,
+                },
+            });
+            player.isPlaying = true;
+            player.isPaused = false;
+            ensurePlayerData(player);
+            player.data.lastProgressAt = Date.now();
+            player.data.lastRecoveryReason = reason;
+            return true;
+        }
+
+        async function recoverPlayerPlayback(player, reason = 'watchdog') {
+            if (!player || player.isPaused) return;
+            ensurePlayerData(player);
+
+            const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
+            const guild = TrueMusic.guilds.cache.get(player.guildId);
+            if (guild && tokenObj?.channel) {
+                await ensureConfiguredVoice(guild, tokenObj, reason).catch(() => null);
+            }
+
+            if (!player.currentTrack && player.queue?.length) {
+                await safePlay(player).catch(() => {});
+                return;
+            }
+
+            if (!player.currentTrack) return;
+
+            player.data.recoveryAttempts = (player.data.recoveryAttempts || 0) + 1;
+            if (player.data.recoveryAttempts <= 2) {
+                await restartCurrentTrack(player, reason).catch(() => {});
+                return;
+            }
+
+            if (player.queue?.length) {
+                player.data.recoveryAttempts = 0;
+                await finalizePlayerUi(player);
+                await player.skip().catch(() => {});
+                return;
+            }
+
+            await restartCurrentTrack(player, reason).catch(() => {});
+        }
+
+        function scheduleNodeRecovery(node, reason = 'node_reconnect') {
+            setTimeout(() => {
+                TrueMusic.poru.players.forEach(player => {
+                    if (player.node === node) recoverPlayerPlayback(player, reason).catch(() => {});
+                });
+            }, 6000);
+        }
+
+        const playbackWatchdog = setInterval(() => {
+            const now = Date.now();
+            TrueMusic.poru.players.forEach(player => {
+                if (!player.currentTrack || player.isPaused) return;
+                ensurePlayerData(player);
+                const lastProgress = player.data.lastProgressAt || player.data.trackStartedAt || now;
+                const length = Number(player.currentTrack.info?.length || 0);
+                const grace = length && length < 90_000 ? 35_000 : 55_000;
+                if (now - lastProgress > grace) {
+                    recoverPlayerPlayback(player, 'stalled_progress').catch(() => {});
+                }
+            });
+        }, 20_000);
+        playbackWatchdog.unref?.();
+
+        TrueMusic.poru.on('nodeConnect', (node) => {
+            const name = node.options.name || node.options.host;
+            const prev = statusStore.getNodes().get(name) || {};
+            const data = {
+                status: 'online',
+                connectedAt: Date.now(),
+                reconnects: prev.reconnects ?? 0,
+            };
+            statusStore.setNode(name, data);
+
             let newData = tempData.get("bots");
-            newData.push(TrueMusic);
+            if (!newData.includes(TrueMusic)) newData.push(TrueMusic);
             tempData.set("bots", newData);
 
             let botNumber = newData.indexOf(TrueMusic) + 1;
             console.log(`\x1b[33m${botNumber}\x1b[0m | ${TrueMusic.user?.username || 'Unknown'} | Connected \x1b[32m${node.options.host}\x1b[0m`);
+            scheduleNodeRecovery(node, 'node_connect');
+        });
+
+        TrueMusic.poru.on('nodeReconnect', (node) => {
+            const name = node.options.name || node.options.host;
+            const prev = statusStore.getNodes().get(name) || {};
+            const data = {
+                status: 'online',
+                connectedAt: Date.now(),
+                reconnects: (prev.reconnects ?? 0) + 1,
+            };
+            statusStore.setNode(name, data);
+            scheduleNodeRecovery(node, 'node_reconnect');
         });
 
         TrueMusic.poru.on('nodeDisconnect', (node) => {
             const name = node.options.name || node.options.host;
-            const prev = store.getNodes().get(name) || {};
-            store.setNode(name, { status: 'offline', reconnects: prev.reconnects ?? 0 });
+            const prev = statusStore.getNodes().get(name) || {};
+            const data = { status: 'offline', reconnects: prev.reconnects ?? 0 };
+            statusStore.setNode(name, data);
             console.log(`\x1b[33m[Poru] Node reconnecting: ${name}\x1b[0m`);
         });
 
         TrueMusic.poru.on('nodeError', (node, err) => {
             const name = node.options.name || node.options.host;
-            const prev = store.getNodes().get(name) || {};
-            store.setNode(name, { status: 'offline', reconnects: (prev.reconnects ?? 0) + 1 });
+            const prev = statusStore.getNodes().get(name) || {};
+            const data = { status: 'offline', reconnects: (prev.reconnects ?? 0) + 1 };
+            statusStore.setNode(name, data);
             const message = err?.message || String(err || 'unknown');
             const transient = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket/i.test(message);
             console.log(`${transient ? '\x1b[33m' : '\x1b[31m'}[Poru] Node ${transient ? 'transient' : 'error'} (${name}): ${message}\x1b[0m`);
@@ -513,16 +848,7 @@ module.exports = {
 
             voiceReturnLock = true;
             try {
-                const player = TrueMusic.poru.players.get(guild.id);
-                if (player) player.destroy();
-
-                await TrueMusic.poru.createConnection({
-                    guildId: guild.id,
-                    voiceChannel: targetChannelId,
-                    textChannel: tokenObj.chat || targetChannelId,
-                    deaf: true,
-                    group: tokenObj.token,
-                });
+                await ensureConfiguredVoice(guild, tokenObj, 'voice_state_update');
             } catch {
                 // periodic voice guard will retry
             } finally {
@@ -537,9 +863,7 @@ module.exports = {
 
             TrueMusic.poru.players.forEach(player => {
                 player.queue.clear();
-                if (player.isPlaying) {
-                    player.stop();
-                }
+                player.skip?.().catch(() => {});
             });
 
             let int = setInterval(async () => {
@@ -550,12 +874,14 @@ module.exports = {
                 let tokenObj = dataaa.find((tokenBot) => tokenBot.token === token);
 
                 if (!tokenObj) {
+                    clearInterval(playbackWatchdog);
                     await TrueMusic.destroy().catch(() => 0);
                     runningBots.delete(token);
                     return clearInterval(int);
                 }
 
                 if (tokenObj.awaitingReplacement || tokenObj.expireDate <= Date.now()) {
+                    clearInterval(playbackWatchdog);
                     await TrueMusic.destroy().catch(() => 0);
                     runningBots.delete(token);
                     return clearInterval(int);
@@ -572,19 +898,10 @@ module.exports = {
                             const shouldReconnect = !currentVC || (backToVoice && currentVC.id !== musicChannel.id);
 
                             if (shouldReconnect) {
-                                const player = TrueMusic.poru.players.get(guild.id);
-                                if (player) player.destroy();
-
                                 if (!TrueMusic.readyAt) return;
 
                                 try {
-                                    await TrueMusic.poru.createConnection({
-                                        guildId: guild.id,
-                                        voiceChannel: musicChannel.id,
-                                        textChannel: tokenObj.chat || musicChannel.id,
-                                        deaf: true,
-                                        group: tokenObj.token,
-                                    });
+                                    await ensureConfiguredVoice(guild, tokenObj, 'periodic_guard');
                                 } catch (err) {
                                 }
                             }
@@ -595,6 +912,8 @@ module.exports = {
                     if (guild) {
                         const player = TrueMusic.poru.players.get(guild.id);
                         if (player) {
+                            await finalizePlayerUi(player);
+                            await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
                             player.destroy();
                         }
                     }
@@ -613,7 +932,7 @@ module.exports = {
         url: Array.isArray(TwitchUrl) ? TwitchUrl[0] : TwitchUrl,
       },
     ],
-    status: 'live',
+    status: 'online',
   });
 }
 
@@ -933,22 +1252,41 @@ module.exports = {
 
 
 
-    TrueMusic.poru.on('trackEnd', async (player) => {
+    TrueMusic.poru.on('playerUpdate', (player) => {
+        ensurePlayerData(player);
+        const position = Number(player.position || 0);
+        if (position > (player.data.lastPosition || 0) + 750 || !player.data.lastProgressAt) {
+            player.data.lastProgressAt = Date.now();
+            player.data.recoveryAttempts = 0;
+        }
+        player.data.lastPosition = position;
+    });
+
+    TrueMusic.poru.on('trackError', async (player, track, data) => {
+        console.warn(`[TrackError] ${data?.type || 'unknown'} ${data?.reason || data?.exception?.message || ''}`.trim());
+        await finalizePlayerUi(player);
+        await bumpQueueVersion(player, 'track_error');
+        setTimeout(() => recoverPlayerPlayback(player, 'track_error').catch(() => {}), 2500);
+    });
+
+    TrueMusic.poru.on('trackEnd', async (player, track, data) => {
       await finalizePlayerUi(player);
+      await bumpQueueVersion(player, `track_end:${data?.reason || 'unknown'}`);
 	    });
 
 	    TrueMusic.poru.on("queueEnd", async (player) => {
 	      await finalizePlayerUi(player);
+	      await bumpQueueVersion(player, 'queue_end');
+	      const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
+	      await updatePlaybackVoiceStatus(TrueMusic, tokenObj2, player, null);
 	      if (!player?.data?.autoPlay || player.data.autoPlay === false) {
-	        if (player.isPlaying) player.stop();
 	        player.queue.clear();
 	        player.data.autoPlay = false;
         return;
       }
-      const currentTrack = player.currentTrack;
+      const currentTrack = player.previousTrack || player.currentTrack || player.data?.lastTrack;
       if (!currentTrack) {
         await finalizePlayerUi(player);
-        if (player.isPlaying) player.stop();
         player.queue.clear();
         player.data.autoPlay = false;
         return;
@@ -961,7 +1299,6 @@ module.exports = {
 
       if (!res || res.tracks.length === 0) {
         await finalizePlayerUi(player);
-        if (player.isPlaying) player.stop();
         player.queue.clear();
         player.data.autoPlay = false;
         return;
@@ -971,7 +1308,6 @@ module.exports = {
 
       if (!nextTrack) {
         await finalizePlayerUi(player);
-        if (player.isPlaying) player.stop();
         player.queue.clear();
         player.data.autoPlay = false;
         return;
@@ -980,9 +1316,8 @@ module.exports = {
       nextTrack.info.requester = currentTrack.info.requester;
       player.queue.add(nextTrack);
 
-      if (!player.isPlaying && !player.paused) {
-        player.play();
-      }
+      await bumpQueueVersion(player, 'autoplay_add');
+      await safePlay(player);
     });
 
 
@@ -1015,24 +1350,31 @@ module.exports = {
         return selected;
     }
 
-    // ── trackStart: always publish the normal now-playing panel ──────────
-    TrueMusic.poru.on('trackStart', async (player, track) => {
-        player.data.lastTrack = track;
+	    // ── trackStart: always publish the normal now-playing panel ──────────
+	    TrueMusic.poru.on('trackStart', async (player, track) => {
+        await bumpQueueVersion(player, 'track_start');
+        ensurePlayerData(player);
+	        player.data.lastTrack = track;
+        player.data.trackStartedAt = Date.now();
+        player.data.lastProgressAt = Date.now();
+        player.data.lastPosition = 0;
+        player.data.recoveryAttempts = 0;
 
-        const requester = track.info?.requester;
-        if (!requester) return;
-
-        const tc = player.textChannel;
-        let channel;
-        if (typeof tc === 'string') {
-            channel = TrueMusic.channels.cache.get(tc);
-        } else if (tc && typeof tc === 'object') {
-            channel = TrueMusic.channels.cache.get(tc.id) || tc;
-        }
-        if (!channel) return;
-
+	        const requester = track.info?.requester;
         const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
-        const selectedFilter = player.data.activeFilter || 'clear';
+        await updatePlaybackVoiceStatus(TrueMusic, tokenObj2, player, track);
+	        if (!requester) return;
+
+	        const tc = player.data.lastTextChannel || player.textChannel;
+	        let channel;
+	        if (typeof tc === 'string') {
+	            channel = TrueMusic.channels.cache.get(tc);
+	        } else if (tc && typeof tc === 'object') {
+	            channel = TrueMusic.channels.cache.get(tc.id) || tc;
+	        }
+	        if (!channel) return;
+
+	        const selectedFilter = player.data.activeFilter || 'clear';
         const alreadyLiked = await likes.isLiked(requester.id, track).catch((err) => {
             console.error('[Likes] isLiked failed:', err?.message || err);
             return false;
@@ -1059,12 +1401,12 @@ module.exports = {
         const artistName = track.info?.author;
         if (!artistName) return;
 
-        try {
-            const source = displaySettings(tokenObj2).platform;
-            const res = await TrueMusic.poru.resolve({ query: artistName, source });
-            const artistTracks = (res?.tracks || [])
-                .filter(t => (t.info.uri || t.info.identifier) !== (track.info.uri || track.info.identifier))
-                .slice(0, 5);
+	        try {
+	            const source = displaySettings(tokenObj2).platform;
+	            const resolvedTracks = await resolveSmartTracks(TrueMusic.poru, artistName, source || 'auto', 12);
+	            const artistTracks = resolvedTracks
+	                .filter(t => (t.info.uri || t.info.identifier) !== (track.info.uri || track.info.identifier))
+	                .slice(0, 5);
             player.data.ui.artistTracks = artistTracks;
             if (player.data.nowPlayingMessage?.id === msg.id && player.currentTrack === track) {
                 const components = buildMusicComponents({
@@ -1184,35 +1526,45 @@ module.exports = {
                     }));
                 }
 
-                let player = TrueMusic.poru.players.get(message.guild.id);
-                if (player) player.textChannel = message.channel.id;
+	                let player = TrueMusic.poru.players.get(message.guild.id);
+	                if (player) rememberTextChannel(player, message.channel.id);
 
-                if (!player) {
-                    try {
-                        const voiceConnection = getVoiceConnection(message.guild.id);
+	                if (!player) {
+	                    try {
+	                        const voiceConnection = getVoiceConnection(message.guild.id);
                         if (voiceConnection) {
                             voiceConnection.destroy();
                             await new Promise(res => setTimeout(res, 500));
                         }
                     } catch { }
 
-                    player = await TrueMusic.poru.createConnection({
-                        guildId: message.guild.id,
-                        voiceChannel: message.member.voice.channel.id,
-                        textChannel: message.channel.id,
-                        deaf: true,
-                        autoPlay: false,
-                    });
-                  player.autoplay = false;
-                
-                }
+	                    player = await TrueMusic.poru.createConnection({
+	                        guildId: message.guild.id,
+	                        voiceChannel: message.member.voice.channel.id,
+	                        textChannel: message.channel.id,
+	                        deaf: true,
+	                        autoPlay: false,
+	                        group: tokenObj.token,
+	                    });
+	                    ensurePlayerData(player);
+		                    rememberTextChannel(player, message.channel.id);
+		                    player.data.autoPlay = false;
 
-                try {
-	                    const searchSource = displaySettings(tokenObj).platform;
-                    const res = await TrueMusic.poru.resolve({ query: song, source: searchSource });
+		                }
 
-                    if (!res || !res.tracks || res.tracks.length === 0) {
-                        return message.reply(musicPayload(tokenObj, {
+	                try {
+		                    const searchSource = displaySettings(tokenObj).platform;
+	                    let res = await TrueMusic.poru.resolve({
+	                        query: song,
+	                        ...(isProbablyUrl(song) ? {} : { source: searchSource }),
+	                    });
+	                    if ((!res || !res.tracks || res.tracks.length === 0) && !isProbablyUrl(song)) {
+	                        const fallbackTracks = await resolveSmartTracks(TrueMusic.poru, song, 'auto', 10);
+	                        if (fallbackTracks.length) res = { loadType: 'search', tracks: fallbackTracks };
+	                    }
+
+	                    if (!res || !res.tracks || res.tracks.length === 0) {
+	                        return message.reply(musicPayload(tokenObj, {
                             title: 'No Results',
                             description: `No results found for **${song}**.`,
                             color: '#ff0000',
@@ -1230,17 +1582,19 @@ module.exports = {
                             files: ['./assets/image/icons/NowPlaying.png'],
                         }));
 
-                        for (const track of res.tracks) {
-                            track.info.requester = message.author;
-                            player.queue.add(track);
-                        }
-                    } else {
-                        const track = res.tracks[0];
-                        track.info.requester = message.author;
-                        player.queue.add(track);
+	                        for (const track of res.tracks) {
+	                            track.info.requester = message.author;
+	                            player.queue.add(track);
+	                        }
+	                        await bumpQueueVersion(player, 'playlist_add');
+	                    } else {
+	                        const track = res.tracks[0];
+	                        track.info.requester = message.author;
+	                        player.queue.add(track);
+	                        await bumpQueueVersion(player, 'track_add');
 
-                        if (player.isPlaying) {
-                            return message.reply(musicPayload(tokenObj, {
+	                        if (player.isPlaying) {
+	                            return message.reply(musicPayload(tokenObj, {
                                 title: 'Add Song',
                                 description: `**[${track.info.title}](${track.info.uri})**`,
                                 fields: [{ name: 'Song Duration', value: `**${shortDuration(track.info.length)}**`, inline: true }],
@@ -1248,19 +1602,17 @@ module.exports = {
                                 files: ['./assets/image/icons/AddSong.png'],
                             }));
                         }
-                    }
-
-	                    if (!player.isPlaying && !player.isPaused) {
-	                        await player.play();
 	                    }
+
+		                    await safePlay(player);
 
                 } catch (error) {
                     console.error('Error searching for song:', error.message);
                     message.reply(musicPayload(tokenObj, {
                         title: 'Search Error',
                         description: 'An error occurred while searching for the song.',
-                        thumbnail: 'attachment://error.png',
-                        files: ['./assets/image/icons/error.png'],
+	                        thumbnail: 'attachment://Error.png',
+	                        files: ['./assets/image/icons/Error.png'],
                     }));
                 }
             }
@@ -1276,12 +1628,14 @@ module.exports = {
                     }));
                 }
 
-	                player.setLoop('NONE');
-	                player.queue.clear();
-	                player.data.autoPlay = false;
-	                await finalizePlayerUi(player);
-	                await player.destroy();
-	                message.react(`🔴`);
+		                player.setLoop('NONE');
+		                player.queue.clear();
+		                player.data.autoPlay = false;
+		                await finalizePlayerUi(player);
+		                await bumpQueueVersion(player, 'stop');
+		                await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
+		                await player.destroy();
+		                message.react(`🔴`);
             }
 
 
@@ -1389,11 +1743,11 @@ module.exports = {
                     }));
                 }
 
-                const nowPlayingTrack = player.currentTrack;
-                if (!nowPlayingTrack) {
-                    return message.reply(musicPayload(tokenObj, {
-                        title: 'Queue',
-                        description: 'No song is currently playing.',
+	                const currentTrackForRender = () => player.currentTrack;
+	                if (!currentTrackForRender()) {
+	                    return message.reply(musicPayload(tokenObj, {
+	                        title: 'Queue',
+	                        description: 'No song is currently playing.',
                         thumbnail: 'attachment://Error.png',
                         files: ['./assets/image/icons/Error.png'],
                     }));
@@ -1406,16 +1760,21 @@ module.exports = {
                     const text = value || 'Unknown';
                     return text.length > max ? `${text.slice(0, max - 1)}…` : text;
                 };
-                const duration = (track) => shortDuration(track?.info?.length);
-                const totalPages = () => Math.max(1, Math.ceil(player.queue.length / itemsPerPage));
-                const pageTracks = () => player.queue.slice(page * itemsPerPage, (page + 1) * itemsPerPage);
+	                const duration = (track) => shortDuration(track?.info?.length);
+	                const totalPages = () => Math.max(1, Math.ceil(player.queue.length / itemsPerPage));
+	                const pageTracks = () => {
+	                    if (page > totalPages() - 1) page = totalPages() - 1;
+	                    if (page < 0) page = 0;
+	                    return player.queue.slice(page * itemsPerPage, (page + 1) * itemsPerPage);
+	                };
 
-                const buildQueueDescription = () => {
-                    const currentTitle = trimTitle(nowPlayingTrack.info.title, 80);
-                    const currentUrl = nowPlayingTrack.info.uri;
-                    const currentLine = currentUrl
-                        ? `> **[${currentTitle}](${currentUrl})**  ·  \`${duration(nowPlayingTrack)}\``
-                        : `> **${currentTitle}**  ·  \`${duration(nowPlayingTrack)}\``;
+	                const buildQueueDescription = () => {
+	                    const nowPlayingTrack = currentTrackForRender();
+	                    const currentTitle = trimTitle(nowPlayingTrack?.info?.title, 80);
+	                    const currentUrl = nowPlayingTrack?.info?.uri;
+	                    const currentLine = currentUrl
+	                        ? `> **[${currentTitle}](${currentUrl})**  ·  \`${duration(nowPlayingTrack)}\``
+	                        : `> **${currentTitle}**  ·  \`${duration(nowPlayingTrack)}\``;
                     const queuedLines = pageTracks().map((track, i) => {
                         const absolute = page * itemsPerPage + i + 1;
                         const title = trimTitle(track.info.title);
@@ -1480,27 +1839,34 @@ module.exports = {
                     return rows;
                 };
 
-                const queueMessage = await message.reply(musicPayload(tokenObj, {
-                    title: `${message.guild.name} Queue`,
-                    description: buildQueueDescription(),
-                    components: buildQueueComponents(),
-                })).catch(console.error);
+	                const queueMessage = await message.reply(musicPayload(tokenObj, {
+	                    title: `${message.guild.name} Queue`,
+	                    description: buildQueueDescription(),
+	                    components: buildQueueComponents(),
+	                })).catch(console.error);
 
-                if (!queueMessage || !displaySettings(tokenObj).buttons) return;
+	                if (!queueMessage || !displaySettings(tokenObj).buttons) return;
+	                let queueVersion = ensurePlayerData(player).queueVersion;
+	                registerQueuePanel(player, queueMessage, queueVersion);
 
-                const filter = interaction => interaction.user.id === message.author.id && interaction.customId.startsWith(`queue_${message.id}_`);
-                const collector = queueMessage.createMessageComponentCollector({ filter, time: 120000 });
+	                const filter = interaction => interaction.user.id === message.author.id && interaction.customId.startsWith(`queue_${message.id}_`);
+	                const collector = queueMessage.createMessageComponentCollector({ filter, time: 120000 });
 
-                const renderQueue = (interaction, title = `${message.guild.name} Queue`) => interaction.update(musicPayload(tokenObj, {
+	                const renderQueue = (interaction, title = `${message.guild.name} Queue`) => interaction.update(musicPayload(tokenObj, {
                     title,
                     description: buildQueueDescription(),
                     components: buildQueueComponents(),
                 }));
 
-                collector.on('collect', async interaction => {
-                    if (interaction.customId === `queue_${message.id}_prev`) {
-                        if (page > 0) page--;
-                        return renderQueue(interaction);
+	                collector.on('collect', async interaction => {
+	                    if ((player.data?.queueVersion || 0) !== queueVersion) {
+	                        collector.stop('stale');
+	                        return interaction.update({ components: disableComponents(queueMessage.components) }).catch(() => {});
+	                    }
+
+	                    if (interaction.customId === `queue_${message.id}_prev`) {
+	                        if (page > 0) page--;
+	                        return renderQueue(interaction);
                     }
 
                     if (interaction.customId === `queue_${message.id}_next`) {
@@ -1508,11 +1874,12 @@ module.exports = {
                         return renderQueue(interaction);
                     }
 
-                    if (interaction.customId === `queue_${message.id}_clear`) {
-                        player.queue.clear();
-                        collector.stop('cleared');
-                        return interaction.update(musicPayload(tokenObj, {
-                            title: 'Queue Cleared',
+	                    if (interaction.customId === `queue_${message.id}_clear`) {
+	                        player.queue.clear();
+	                        await bumpQueueVersion(player, 'queue_clear');
+	                        collector.stop('cleared');
+	                        return interaction.update(musicPayload(tokenObj, {
+	                            title: 'Queue Cleared',
                             description: 'تم حذف قائمة الانتظار بالكامل.',
                         }));
                     }
@@ -1529,18 +1896,21 @@ module.exports = {
 
                         const indexes = [...new Set(interaction.values.map(Number))]
                             .filter(index => index >= 0 && index < player.queue.length);
-                        const selectedTracks = indexes.map(index => player.queue[index]).filter(Boolean);
-                        indexes.sort((a, b) => b - a).forEach(index => player.queue.splice(index, 1));
-                        for (let i = selectedTracks.length - 1; i >= 0; i--) player.queue.unshift(selectedTracks[i]);
-                        page = 0;
-                        return renderQueue(interaction, 'Queue Updated');
-                    }
-                });
+	                        const selectedTracks = indexes.map(index => player.queue[index]).filter(Boolean);
+	                        indexes.sort((a, b) => b - a).forEach(index => player.queue.splice(index, 1));
+	                        for (let i = selectedTracks.length - 1; i >= 0; i--) player.queue.unshift(selectedTracks[i]);
+	                        page = 0;
+	                        queueVersion = await bumpQueueVersion(player, 'queue_reorder', queueMessage.id);
+	                        registerQueuePanel(player, queueMessage, queueVersion);
+	                        return renderQueue(interaction, 'Queue Updated');
+	                    }
+	                });
 
-                collector.on('end', (_, reason) => {
-                    if (!['closed', 'cleared'].includes(reason)) {
-                        queueMessage.edit({ components: disableComponents(queueMessage.components) }).catch(() => {});
-                    }
+	                collector.on('end', (_, reason) => {
+	                    player.data?.queuePanels?.delete(queueMessage.id);
+	                    if (!['closed', 'cleared'].includes(reason)) {
+	                        queueMessage.edit({ components: disableComponents(queueMessage.components) }).catch(() => {});
+	                    }
                 });
             } else if (cmdsArray.skip.includes(command)) {
                 let player = TrueMusic.poru.players.get(message.guild.id);
@@ -1561,19 +1931,22 @@ module.exports = {
 
                 const currentTrack = player.currentTrack;
 
-                if (player.queue.length === 0) {
-                    await finalizePlayerUi(player);
-                    await player.destroy();
-                    return message.reply(musicPayload(tokenObj, {
+	                if (player.queue.length === 0) {
+	                    await finalizePlayerUi(player);
+	                    await bumpQueueVersion(player, 'skip_end');
+	                    await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
+	                    await player.destroy();
+	                    return message.reply(musicPayload(tokenObj, {
                         title: 'Skipped',
                         description: `**${currentTrack.info.title}**\nBy **${message.author.displayName}**`,
                         thumbnail: 'attachment://Skip.png',
                         files: ['./assets/image/icons/Skip.png'],
                     }));
-                } else {
-                    const skippedTrack = currentTrack;
-                    await finalizePlayerUi(player);
-                    await player.skip();
+	                } else {
+	                    const skippedTrack = currentTrack;
+	                    await finalizePlayerUi(player);
+	                    await bumpQueueVersion(player, 'skip');
+	                    await player.skip();
 
                     return message.reply(musicPayload(tokenObj, {
                         title: 'Skipped',
@@ -1713,9 +2086,10 @@ module.exports = {
                 let searchOffset = 0;
                 let completed = false;
 
-                const platformOptions = [
-                    { label: 'YouTube', value: 'ytsearch', emoji: MUSIC_EMOJIS.platforms.ytsearch },
-                    { label: 'YouTube Music', value: 'ytmsearch', emoji: MUSIC_EMOJIS.platforms.ytmsearch },
+	                const platformOptions = [
+	                    { label: 'Smart Search', value: 'auto', emoji: '🔎', description: 'بحث متعدد المنصات وبأكثر من صيغة' },
+	                    { label: 'YouTube', value: 'ytsearch', emoji: MUSIC_EMOJIS.platforms.ytsearch },
+	                    { label: 'YouTube Music', value: 'ytmsearch', emoji: MUSIC_EMOJIS.platforms.ytmsearch },
                     { label: 'SoundCloud', value: 'scsearch', emoji: MUSIC_EMOJIS.platforms.scsearch },
                     { label: 'Spotify', value: 'spsearch', emoji: MUSIC_EMOJIS.platforms.spsearch },
                     { label: 'Apple Music', value: 'amsearch', emoji: MUSIC_EMOJIS.platforms.amsearch },
@@ -1753,10 +2127,10 @@ module.exports = {
                 const buildPlatformRows = () => [
                     new ActionRowBuilder().addComponents(
                         new StringSelectMenuBuilder()
-                            .setCustomId(`${searchId}_source`)
-                            .setPlaceholder('Choose search platform')
-                            .addOptions(platformOptions)
-                    ),
+	                            .setCustomId(`${searchId}_source`)
+	                            .setPlaceholder('Choose search method')
+	                            .addOptions(platformOptions)
+	                    ),
                     controlRow(false),
                 ];
 
@@ -1807,20 +2181,19 @@ module.exports = {
                         }));
                     }
 
-                    if (interaction.customId === `${searchId}_source`) {
-                        selectedSource = interaction.values[0];
-                        searchOffset = 0;
-                        await interaction.update(musicPayload(tokenObj, {
-                            title: 'Searching',
-                            description: `يتم البحث في ${platformDisplay(selectedSource)} عن **${searchQuery}**...`,
-                        }));
+	                    if (interaction.customId === `${searchId}_source`) {
+	                        selectedSource = interaction.values[0];
+	                        searchOffset = 0;
+	                        await interaction.update(musicPayload(tokenObj, {
+	                            title: 'Searching',
+	                            description: `يتم البحث بطريقة ${platformDisplay(selectedSource)} عن **${searchQuery}**...`,
+	                        }));
 
-                        try {
-                            const result = await TrueMusic.poru.resolve({ query: searchQuery, source: selectedSource });
-                            allSearchTracks = result?.tracks || [];
-                            currentTracks = allSearchTracks.slice(searchOffset, searchOffset + 10);
+	                        try {
+	                            allSearchTracks = await resolveSmartTracks(TrueMusic.poru, searchQuery, selectedSource, 60);
+	                            currentTracks = allSearchTracks.slice(searchOffset, searchOffset + 10);
 
-                            if (currentTracks.length === 0) {
+	                            if (currentTracks.length === 0) {
                                 return sourceMessage.edit(musicPayload(tokenObj, {
                                     title: 'No Results',
                                     description: `لم يتم العثور على نتائج في ${platformDisplay(selectedSource)}.`,
@@ -1828,11 +2201,11 @@ module.exports = {
                                 }));
                             }
 
-                            return sourceMessage.edit(musicPayload(tokenObj, {
-                                title: 'Search Results',
-                                description: `النتائج من ${platformDisplay(selectedSource)}.\nاختر أغنية، أو اضغط **Continue Search** لنتائج أخرى.`,
-                                components: buildTrackRows(currentTracks),
-                            }));
+	                            return sourceMessage.edit(musicPayload(tokenObj, {
+	                                title: 'Search Results',
+	                                description: `النتائج من ${platformDisplay(selectedSource)} · بدون تكرار.\nاختر أغنية، أو اضغط **Continue Search** لنتائج أخرى.`,
+	                                components: buildTrackRows(currentTracks),
+	                            }));
                         } catch (err) {
                             console.error('Error searching for videos:', err);
                             return sourceMessage.edit(musicPayload(tokenObj, {
@@ -1882,30 +2255,34 @@ module.exports = {
                             }));
                         }
 
-                        let player = TrueMusic.poru.players.get(message.guild.id);
-                        if (player) player.textChannel = message.channel.id;
-                        if (!player) {
-                            player = await TrueMusic.poru.createConnection({
-                                guildId: message.guild.id,
-                                voiceChannel: message.member.voice.channel.id,
-                                textChannel: message.channel.id,
-                                deaf: true,
-                            });
-                        }
+	                        let player = TrueMusic.poru.players.get(message.guild.id);
+	                        if (player) rememberTextChannel(player, message.channel.id);
+	                        if (!player) {
+	                            player = await TrueMusic.poru.createConnection({
+	                                guildId: message.guild.id,
+	                                voiceChannel: message.member.voice.channel.id,
+	                                textChannel: message.channel.id,
+	                                deaf: true,
+	                                group: tokenObj.token,
+	                            });
+	                            ensurePlayerData(player);
+	                            rememberTextChannel(player, message.channel.id);
+	                        }
 
-                        selectedTrack.info.requester = message.author;
-                        player.queue.add(selectedTrack);
+	                        const queuedTrack = { ...selectedTrack, info: { ...selectedTrack.info, requester: message.author } };
+	                        player.queue.add(queuedTrack);
+	                        await bumpQueueVersion(player, 'search_add');
 
-                        completed = true;
+	                        completed = true;
                         collector.stop('selected');
 
-                        await sourceMessage.edit(musicPayload(tokenObj, {
-                            title: player.isPlaying ? 'Add Song' : 'Playing',
-                            description: `**${selectedTrack.info.title}**\nBy **${message.author.displayName}**`,
-                        }));
+	                        await sourceMessage.edit(musicPayload(tokenObj, {
+	                            title: player.isPlaying ? 'Add Song' : 'Playing',
+	                            description: `**${queuedTrack.info.title}**\nBy **${message.author.displayName}**`,
+	                        }));
 
-                        if (!player.isPlaying && !player.isPaused) await player.play();
-                    }
+	                        await safePlay(player);
+	                    }
                 });
 
                 collector.on('end', (_, reason) => {
@@ -1968,12 +2345,18 @@ module.exports = {
 	                return replyEphemeral('ادخل نفس الروم الصوتي أولاً.');
 	            }
 
-	            const player = TrueMusic.poru.players.get(interaction.guildId);
-	            if (!player || !player.currentTrack) {
-	                return replyEphemeral('لا يوجد شيء يعمل الآن.');
-	            }
+		            const player = TrueMusic.poru.players.get(interaction.guildId);
+		            if (!player || !player.currentTrack) {
+		                return replyEphemeral('لا يوجد شيء يعمل الآن.');
+		            }
 
-	            const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
+		            const activePanelId = player.data?.nowPlayingMessage?.id;
+		            if (activePanelId && interaction.message?.id !== activePanelId) {
+		                await interaction.message?.edit({ components: disableComponents(interaction.message.components) }).catch(() => {});
+		                return replyEphemeral('انتهت صلاحية لوحة التحكم لأن الأغنية تغيّرت.');
+		            }
+
+		            const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
 	            const ui = player.data.ui || {};
 	            const requesterId = ui.requesterId || player.currentTrack?.info?.requester?.id || player.currentTrack?.info?.requester;
 	            const editPanel = async (liked = false, targetInteraction = null) => {
@@ -1996,31 +2379,31 @@ module.exports = {
 	                        return replyEphemeral('هذه القائمة لصاحب الطلب فقط.');
 	                    }
 
-	                    const selectedIndex = Number(interaction.values[0]);
-	                    const selectedTrack = ui.artistTracks?.[selectedIndex];
-	                    if (!selectedTrack) return replyEphemeral('لم أجد الأغنية المختارة.');
+		                    const selectedIndex = Number(interaction.values[0]);
+		                    const selectedTrack = ui.artistTracks?.[selectedIndex];
+		                    if (!selectedTrack) return replyEphemeral('لم أجد الأغنية المختارة.');
 
-	                    selectedTrack.info.requester = interaction.user;
-	                    player.queue.add(selectedTrack);
-	                    ui.selectedArtistIndex = selectedIndex;
-	                    player.data.ui = ui;
+		                    const queuedTrack = { ...selectedTrack, info: { ...selectedTrack.info, requester: interaction.user } };
+		                    player.queue.add(queuedTrack);
+		                    await bumpQueueVersion(player, 'artist_menu_add');
+		                    ui.selectedArtistIndex = null;
+		                    player.data.ui = ui;
 
-	                    const liked = await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false);
-	                    await editPanel(liked, interaction);
+		                    const liked = await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false);
+		                    await editPanel(liked, interaction);
 
-	                    if (!player.isPlaying && !player.isPaused) {
-	                        await player.play();
-	                    }
-	                    return replyEphemeral(`تمت إضافة **${selectedTrack.info.title || 'الأغنية'}** للطابور.`);
-	                }
+		                    await safePlay(player);
+		                    return replyEphemeral(`تمت إضافة **${queuedTrack.info.title || 'الأغنية'}** للطابور.`);
+		                }
 
 	                if (interaction.customId === 'np_filter') {
 	                    await interaction.deferUpdate().catch(() => {});
 	                    const filterName = interaction.values[0];
 	                    try {
-	                        const applied = await applyFilter(player, filterName);
-	                        ui.selectedFilter = applied;
-	                        player.data.ui = ui;
+		                        const applied = await applyFilter(player, filterName);
+		                        ui.selectedFilter = applied;
+		                        ui.selectedArtistIndex = null;
+		                        player.data.ui = ui;
 	                        await editPanel(await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false));
 	                        const label = FILTER_NAMES[applied] || applied;
 	                        return replyEphemeral(applied === 'clear' ? 'تم إيقاف الفلاتر.' : `تم تطبيق **${label}**.`);
@@ -2062,19 +2445,22 @@ module.exports = {
 	                responseMessage = `الصوت: **${newVolume}%**`;
 	            }
 
-	            if (interaction.customId === 'skip') {
-	                const currentTrack = player.currentTrack;
-	                if (!currentTrack) {
-	                    responseMessage = 'لا توجد أغنية للتخطي.';
-	                } else if (player.queue.length === 0) {
-	                    await finalizePlayerUi(player);
-	                    await player.destroy();
-	                    responseMessage = `تم التخطي: **${currentTrack.info.title || 'الأغنية'}**`;
-	                } else {
-	                    await finalizePlayerUi(player);
-	                    await player.skip();
-	                    responseMessage = `تم التخطي: **${currentTrack.info.title || 'الأغنية'}**`;
-	                }
+		            if (interaction.customId === 'skip') {
+		                const currentTrack = player.currentTrack;
+		                if (!currentTrack) {
+		                    responseMessage = 'لا توجد أغنية للتخطي.';
+		                } else if (player.queue.length === 0) {
+		                    await finalizePlayerUi(player);
+		                    await bumpQueueVersion(player, 'button_skip_end');
+		                    await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
+		                    await player.destroy();
+		                    responseMessage = `تم التخطي: **${currentTrack.info.title || 'الأغنية'}**`;
+		                } else {
+		                    await finalizePlayerUi(player);
+		                    await bumpQueueVersion(player, 'button_skip');
+		                    await player.skip();
+		                    responseMessage = `تم التخطي: **${currentTrack.info.title || 'الأغنية'}**`;
+		                }
 	            }
 
 	            if (interaction.customId === 'like') {
