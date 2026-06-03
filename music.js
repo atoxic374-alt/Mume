@@ -46,7 +46,7 @@ tempData.set("bots", []);
 const collection = new Collection();
 
 const FILTER_NAMES = {
-    clear: 'بدون فلتر',
+    clear: 'None',
     bassboost: 'Bass Boost',
     bassboost2: 'Bass Boost+',
     nightcore: 'Nightcore',
@@ -69,7 +69,7 @@ const FILTER_NAMES = {
 };
 
 const FILTER_OPTIONS = [
-    { label: 'إيقاف الفلاتر', value: 'clear', description: 'إزالة جميع الفلاتر', emoji: MUSIC_EMOJIS.filters },
+    { label: 'Clear Filters', value: 'clear', description: 'إزالة جميع الفلاتر', emoji: MUSIC_EMOJIS.filters },
     { label: 'Bass Boost', value: 'bassboost', description: 'جهير أوضح بدون تشويه', emoji: MUSIC_EMOJIS.filters },
     { label: 'Bass Boost+', value: 'bassboost2', description: 'جهير أقوى وواضح', emoji: MUSIC_EMOJIS.filters },
     { label: 'Nightcore', value: 'nightcore', description: 'سرعة ونبرة أعلى', emoji: MUSIC_EMOJIS.filters },
@@ -248,7 +248,7 @@ function buildMusicComponents({ liked = false, paused = false, artistTracks = []
     if (showControls && artistTracks.length > 0) {
         const artistMenu = new StringSelectMenuBuilder()
             .setCustomId('np_artist')
-            .setPlaceholder('أفضل 5 أغاني لنفس الفنان')
+            .setPlaceholder('Suggest For You')
             .addOptions(artistTracks.slice(0, 5).map((t, i) => ({
                 label: (t.info.title || 'Unknown').slice(0, 99),
                 value: String(i),
@@ -262,7 +262,7 @@ function buildMusicComponents({ liked = false, paused = false, artistTracks = []
         const activeFilterName = FILTER_NAMES[selectedFilter] || FILTER_NAMES.clear;
         const filterMenu = new StringSelectMenuBuilder()
             .setCustomId('np_filter')
-            .setPlaceholder(`الفلاتر الصوتية • الحالي: ${activeFilterName}`)
+            .setPlaceholder(` Current Filter : ${activeFilterName}`)
             .addOptions(FILTER_OPTIONS.map(option => ({
                 ...option,
             })));
@@ -491,7 +491,7 @@ function buildNowPlayingMetaRow(tokenObj, currentTime, totalTime, refId = 'np', 
     if (options.platform !== false) {
         buttons.push(new ButtonBuilder()
             .setCustomId(`${refId}_platform`)
-            .setLabel(`Platform: ${compactPlatformName(platform)}`.slice(0, 80))
+            .setLabel(`Platform : ${compactPlatformName(platform)}`.slice(0, 80))
             .setEmoji(MUSIC_EMOJIS.platforms[emojiKey] || '🎵')
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(true));
@@ -506,7 +506,7 @@ function buildNowPlayingMetaRow(tokenObj, currentTime, totalTime, refId = 'np', 
     if (options.volume) {
         buttons.push(new ButtonBuilder()
             .setCustomId(`${refId}_volume`)
-            .setLabel(`VOLUME: ${Math.max(0, Number(player?.volume || 100))}%`.slice(0, 80))
+            .setLabel(`Volume : ${Math.max(0, Number(player?.volume || 100))}%`.slice(0, 80))
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(true));
     }
@@ -514,7 +514,7 @@ function buildNowPlayingMetaRow(tokenObj, currentTime, totalTime, refId = 'np', 
         const loopValue = player?.loop === 'TRACK' ? 'ON' : 'OFF';
         buttons.push(new ButtonBuilder()
             .setCustomId(`${refId}_loop`)
-            .setLabel(`LOOP: ${loopValue}`)
+            .setLabel(`Loop : ${loopValue}`)
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(true));
     }
@@ -872,7 +872,7 @@ function buildQueueDescription(player, page = 0, itemsPerPage = 8) {
     const npAuthor = cleanInlineText(nowPlaying?.info?.author, '', 40);
     const npLine = [
         `**${queueTrackLink(nowPlaying, 72)}**`,
-        npAuthor ? `\`${dur(nowPlaying)}\`  ·  ${npAuthor}` : `\`${dur(nowPlaying)}\``,
+        npAuthor ? `\`${dur(nowPlaying)}\`  •  ${npAuthor}` : `\`${dur(nowPlaying)}\``,
     ].join('\n> ');
 
     // Queue entries
@@ -880,15 +880,15 @@ function buildQueueDescription(player, page = 0, itemsPerPage = 8) {
         const absolute = safePage * itemsPerPage + i + 1;
         const author = cleanInlineText(track.info?.author, '', 36);
         const numStr = String(absolute).padStart(2, '0');
-        const titleLine = `\`${numStr}\`  **${queueTrackLink(track)}**`;
+        const titleLine = `**\`${numStr}\`- ${queueTrackLink(track)}**`;
         const metaLine  = author
-            ? `\`${dur(track)}\`  ·  ${author}`
-            : `\`${dur(track)}\``;
-        return `${titleLine}\n└ ${metaLine}`;
+            ? `**\`${dur(track)}\` • ${author}**`
+            : `**\`${dur(track)}\`**`;
+        return `**${titleLine}\n\n└ ${metaLine}**`;
     });
 
     const upcomingHeader = player.queue.length > 0
-        ? `**Upcoming**  ·  ${player.queue.length} track${player.queue.length === 1 ? '' : 's'}  ·  ${totalDurStr} total  ·  page ${safePage + 1}/${totalPages}`
+        ? `**Upcoming** • ${player.queue.length} track : ${player.queue.length === 1 ? '' : 's'}`
         : '**Upcoming**';
 
     return [
@@ -1902,7 +1902,7 @@ module.exports = {
 
                             .setThumbnail("https://cdn.discordapp.com/attachments/1091536665912299530/1264225405465002025/O.png?ex=669d1928&is=669bc7a8&hm=ee36f6e8facc4eb99721570bc7f32dff9551bc5bea89d7a027c09408cafba604&")
                             .setDescription(`
-              \`\`\`Music Commands\`\`\`
+              \`\`\`*Music Commands*\`\`\`**
                 play [track] - \`Adds the track to the queue.\`
                 search [track] - \`Searching from YouTube\`
 
@@ -1932,8 +1932,8 @@ module.exports = {
                 setvc [setvc/leave] - \`set the voice bot and name it as voice.\`
                 settc [settc/unchat] - \`Sets the text channel for playing music\`
 
-                mu - \`Control all bots in a server in a True\`
-                restart - \`Restart the bot\`
+                Settings - \`Control all bots \`
+                restart - \`Restart the bot**\`
               
               `)
 
@@ -1956,7 +1956,6 @@ module.exports = {
                                 .setDescription(`> **تم إرسال الاوامر في الخاص.**`)
                                 .setFooter({
                                     text: 'Ens 𝐒𝐭𝐨𝐫𝐞',
-                                    iconURL: 'https://cdn.discordapp.com/attachments/1091536665912299530/1264377247117082624/emo2.png?ex=669da692&is=669c5512&hm=6d7ce09b35345cdfa38f5aefa67c4031c4158b9b8ef95c83ea1336e979fbc9a1&' // رابط أيقونة البوت
                                 });
                             message.reply({ embeds: [helpdma] }).catch(() => 0);
 
@@ -2646,8 +2645,8 @@ module.exports = {
                             return message.channel.send(musicPayload(tokenObj, {
                                 title: 'Play Command',
                         description:
-                            '`play [Song]` : Play the first search result\n' +
-                            '`play [URL]` : Play from YouTube, SoundCloud, Spotify, Apple Music, or Deezer',
+                            '>`play [Song]` : Play the first search result\n' +
+                            '>`play [URL]` : Play from YouTube, SoundCloud, Spotify, Apple Music, or Deezer',
                         thumbnail: 'attachment://Error.png',
                         files: ['./assets/image/icons/Error.png'],
                             }));
@@ -2697,7 +2696,7 @@ module.exports = {
                             if (!res || !res.tracks || res.tracks.length === 0) {
                                 return message.reply(musicPayload(tokenObj, {
                             title: 'No Results',
-                            description: `No results found for **${song}**.`,
+                            description: `**No results found for __${song}__**.`,
                             color: '#ff0000',
                             thumbnail: 'attachment://Error.png',
                             files: ['./assets/image/icons/Error.png'],
@@ -2741,7 +2740,7 @@ module.exports = {
                     console.error('Error searching for song:', error.message);
                     message.reply(musicPayload(tokenObj, {
                         title: 'Search Error',
-                        description: 'An error occurred while searching for the song.',
+                        description: '*An error occurred while searching for the song*.',
                                 thumbnail: 'attachment://Error.png',
                                 files: ['./assets/image/icons/Error.png'],
                     }));
@@ -2753,7 +2752,7 @@ module.exports = {
                 if (!player) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'No Music',
-                        description: 'No music is currently playing.',
+                        description: '*No music is currently playing.*',
                         thumbnail: 'attachment://Error.png',
                         files: ['./assets/image/icons/Error.png'],
                     }));
@@ -2776,7 +2775,7 @@ module.exports = {
                 if (!player || !player.currentTrack) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'No Music',
-                        description: 'No music is currently playing.',
+                        description: '*No music is currently playing*.',
                     }));
                 }
 
@@ -2810,7 +2809,7 @@ module.exports = {
                 if (!player || !player.isPlaying) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'No Music',
-                        description: 'No music is currently playing.',
+                        description: '*No music is currently playing.*',
                         thumbnail: 'attachment://Error.png',
                         files: ['./assets/image/icons/Error.png'],
                     }));
@@ -2822,7 +2821,7 @@ module.exports = {
 
                 return message.reply(musicPayload(tokenObj, {
                     title: 'Loop',
-                    description: `Loop mode is now **${newLoopMode === "TRACK" ? 'ON' : 'OFF'}**.`,
+                    description: `**Loop mode is now ${newLoopMode === "TRACK" ? 'ON' : 'OFF'}**.`,
                     thumbnail: `attachment://${newLoopMode === "TRACK" ? 'LoopON.png' : 'LoopOFF.png'}`,
                     files: [`./assets/image/icons/${newLoopMode === "TRACK" ? 'LoopON.png' : 'LoopOFF.png'}`],
                 }));
@@ -2833,7 +2832,7 @@ module.exports = {
                 if (!player || !player.currentTrack) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'No Music',
-                        description: 'No music is currently playing.',
+                        description: '*No music is currently playing*.',
                     }));
                 }
 
@@ -2862,7 +2861,7 @@ module.exports = {
                 if (!player || !player.queue || player.queue.length === 0) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'Queue',
-                        description: 'No songs are currently in the queue.',
+                        description: '*No songs are currently in the queue*.',
                         thumbnail: 'attachment://Error.png',
                         files: ['./assets/image/icons/Error.png'],
                     }));
@@ -2872,7 +2871,7 @@ module.exports = {
                         if (!currentTrackForRender()) {
                             return message.reply(musicPayload(tokenObj, {
                                 title: 'Queue',
-                                description: 'No song is currently playing.',
+                                description: '*No song is currently playing.*',
                         thumbnail: 'attachment://Error.png',
                         files: ['./assets/image/icons/Error.png'],
                     }));
@@ -2929,7 +2928,7 @@ module.exports = {
                                 collector.stop('cleared');
                                 return interaction.update(musicPayload(tokenObj, {
                                     title: 'Queue Cleared',
-                                    description: 'تم حذف قائمة الانتظار بالكامل.',
+                                    description: '**تم حذف قائمة الانتظار بالكامل.**',
                                 }));
                             }
 
@@ -2966,7 +2965,7 @@ module.exports = {
                 if (!player || !player.isPlaying) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'No Music',
-                        description: 'No music is currently playing.',
+                        description: '*No music is currently playing*.',
                         thumbnail: 'attachment://Error.png',
                         files: ['./assets/image/icons/Error.png'],
                     }));
@@ -2986,7 +2985,7 @@ module.exports = {
                             await player.destroy();
                             return message.reply(musicPayload(tokenObj, {
                         title: 'Skipped',
-                        description: `**${currentTrack.info.title}**\nBy **${message.author.displayName}**`,
+                        description: `**${currentTrack.info.title}\nBy : ${message.author.displayName}**`,
                         thumbnail: 'attachment://Skip.png',
                         files: ['./assets/image/icons/Skip.png'],
                     }));
@@ -2998,7 +2997,7 @@ module.exports = {
 
                     return message.reply(musicPayload(tokenObj, {
                         title: 'Skipped',
-                        description: `**${skippedTrack.info.title}**\nBy **${message.author.displayName}**`,
+                        description: `**${skippedTrack.info.title}\nBy :${message.author.displayName}**`,
                         thumbnail: 'attachment://Skip.png',
                         files: ['./assets/image/icons/Skip.png'],
                     }));
@@ -3013,7 +3012,7 @@ module.exports = {
                 if (!player || !player.isPlaying) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'No Music',
-                        description: 'No music is currently playing.',
+                        description: '*No music is currently playing.*',
                         thumbnail: 'attachment://Error.png',
                         files: ['./assets/image/icons/Error.png'],
                     }));
@@ -3031,7 +3030,7 @@ module.exports = {
                 if (isNaN(volume)) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'Volume',
-                        description: `Current volume is **${currentVolume}%**.`,
+                        description: `*Current volume is ${currentVolume}%**.`,
                         thumbnail: 'attachment://Volumeup.png',
                         files: ['./assets/image/icons/Volumeup.png'],
                     }));
@@ -3040,7 +3039,7 @@ module.exports = {
                 if (volume < 0 || volume > 130) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'Volume',
-                        description: 'Please provide a valid volume level between **0%** and **130%**.',
+                        description: '**Please provide a valid volume level between 0% and 130%**.',
                         thumbnail: 'attachment://Error.png',
                         files: ['./assets/image/icons/Error.png'],
                     }));
@@ -3050,7 +3049,7 @@ module.exports = {
 
                 return message.reply(musicPayload(tokenObj, {
                     title: 'Volume',
-                    description: `Volume changed from **${currentVolume}%** to **${volume}%**.`,
+                    description: `**Volume changed from__${currentVolume}%__ to __${volume}%__.**`,
                     thumbnail: `attachment://${volume < currentVolume ? 'Volumedowwn' : 'Volumeup'}.png`,
                     files: [`./assets/image/icons/${volume < currentVolume ? 'Volumedowwn' : 'Volumeup'}.png`],
                 }));
@@ -3060,7 +3059,7 @@ module.exports = {
                 if (!player || !player.currentTrack) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'No Music',
-                        description: 'No music is currently playing.',
+                        description: '*No music is currently playing*.',
                         thumbnail: 'attachment://Error.png',
                         files: ['./assets/image/icons/Error.png'],
                     }));
@@ -3077,7 +3076,7 @@ module.exports = {
                 if (!timeArg) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'Seek',
-                        description: 'Please provide a seek duration like `1:11`, `90s`, or `2m`.',
+                        description: '**Please provide a seek duration like** `1:11`, `90s`, or `2m`.',
                         thumbnail: 'attachment://seek.png',
                         files: ['./assets/image/icons/seek.png'],
                     }));
@@ -3098,7 +3097,7 @@ module.exports = {
                 if (isNaN(seconds)) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'Seek',
-                        description: 'Invalid time format. Use something like `1:30` or `90s`.',
+                        description: '*Invalid time format. Use something like 1:30 or 90s*.',
                         thumbnail: 'attachment://seek.png',
                         files: ['./assets/image/icons/seek.png'],
                     }));
@@ -3115,7 +3114,7 @@ module.exports = {
                 if (!player || !player.currentTrack) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'No Music',
-                        description: 'No music is currently playing.',
+                        description: '*No music is currently playing.*',
                         thumbnail: 'attachment://Error.png',
                         files: ['./assets/image/icons/Error.png'],
                     }));
@@ -3128,7 +3127,7 @@ module.exports = {
                 if (!timeArg) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'Forward',
-                        description: 'Provide a time to skip forward.\nExamples: `forward 30s` · `forward 1m` · `forward 1:30`',
+                        description: '**Provide a time to skip forward.\nExamples : forward 30s • forward 1m • forward 1:30**',
                         thumbnail: 'attachment://seek.png',
                         files: ['./assets/image/icons/seek.png'],
                     }));
@@ -3149,7 +3148,7 @@ module.exports = {
                 if (isNaN(seconds) || seconds <= 0) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'Forward',
-                        description: 'Invalid time. Use something like `30s`, `1m`, or `1:30`.',
+                        description: '**Invalid time. Use something like 30s, 1m, or 1:30**.',
                         thumbnail: 'attachment://seek.png',
                         files: ['./assets/image/icons/seek.png'],
                     }));
@@ -3166,7 +3165,7 @@ module.exports = {
                 if (!player || !player.currentTrack) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'No Music',
-                        description: 'No music is currently playing.',
+                        description: '*No music is currently playing.*',
                         thumbnail: 'attachment://Error.png',
                         files: ['./assets/image/icons/Error.png'],
                     }));
@@ -3180,8 +3179,8 @@ module.exports = {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'Remove',
                         description: player.queue.length === 0
-                            ? 'The queue is empty.'
-                            : `Provide a position between **1** and **${player.queue.length}**.`,
+                            ? '*The queue is empty.*'
+                            : `**Provide a position between 1 and ${player.queue.length}**.`,
                         thumbnail: 'attachment://Error.png',
                         files: ['./assets/image/icons/Error.png'],
                     }));
@@ -3192,7 +3191,7 @@ module.exports = {
                 await bumpQueueVersion(player, 'remove');
                 return message.reply(musicPayload(tokenObj, {
                     title: 'Removed',
-                    description: `Removed **${removed?.info?.title || 'Unknown'}** from the queue.`,
+                    description: `**Removed ${removed?.info?.title || 'Unknown'} from the queue**.`,
                     thumbnail: 'attachment://Skip.png',
                     files: ['./assets/image/icons/Skip.png'],
                 }));
@@ -3203,14 +3202,14 @@ module.exports = {
                 if (!searchQuery) {
                     return message.channel.send(musicPayload(tokenObj, {
                         title: 'Search',
-                        description: 'Please write the name of the song.',
+                        description: '*Please write the name of the song*.',
                     }));
                 }
 
                 if (!displaySettings(tokenObj).buttons) {
                     return message.channel.send(musicPayload(tokenObj, {
                         title: 'Search',
-                        description: 'Search menus are disabled for this subscription. Use `play <song>` or enable buttons from settings.',
+                        description: '*Search menus are disabled for this subscription. Use `play <song>` or enable buttons from settings.*',
                     }));
                 }
 
@@ -3222,7 +3221,7 @@ module.exports = {
                 let completed = false;
 
                         const platformOptions = [
-                            { label: 'Smart Search', value: 'auto', emoji: MUSIC_EMOJIS.smartSearch, description: 'بحث متعدد المنصات وبأكثر من صيغة' },
+                            { label: 'Smart Search', value: 'auto', emoji: MUSIC_EMOJIS.smartSearch, description: 'All Source' },
                             { label: 'YouTube', value: 'ytsearch', emoji: MUSIC_EMOJIS.platforms.ytsearch },
                             { label: 'YouTube Music', value: 'ytmsearch', emoji: MUSIC_EMOJIS.platforms.ytmsearch },
                     { label: 'SoundCloud', value: 'scsearch', emoji: MUSIC_EMOJIS.platforms.scsearch },
@@ -3287,7 +3286,7 @@ module.exports = {
 
                 const sourceMessage = await message.channel.send(musicPayload(tokenObj, {
                     title: 'Search',
-                    description: `البحث عن: **${searchQuery}**\nاختر المنصة التي تريد البحث فيها.`,
+                    description: `**البحث عن : ${searchQuery}\nاختر المنصة التي تريد البحث فيها.**`,
                     components: buildPlatformRows(),
                 }));
 
@@ -3302,7 +3301,7 @@ module.exports = {
                         collector.stop('cancel');
                         return interaction.update(musicPayload(tokenObj, {
                             title: 'Search Cancelled',
-                            description: 'تم إلغاء البحث.',
+                            description: '*تم إلغاء البحث*.',
                         }));
                     }
 
@@ -3313,7 +3312,7 @@ module.exports = {
                         searchOffset = 0;
                         return interaction.update(musicPayload(tokenObj, {
                             title: 'Search',
-                            description: `البحث عن: **${searchQuery}**\nاختر المنصة التي تريد البحث فيها.`,
+                            description: `*البحث عن : ${searchQuery}\nاختر المنصة التي تريد البحث فيها*.`,
                             components: buildPlatformRows(),
                         }));
                     }
@@ -3323,7 +3322,7 @@ module.exports = {
                                 searchOffset = 0;
                                 await interaction.update(musicPayload(tokenObj, {
                                     title: 'Searching',
-                                    description: `يتم البحث بطريقة ${platformDisplay(selectedSource)} عن **${searchQuery}**...`,
+                                    description: `**يتم البحث في : ${platformDisplay(selectedSource)} عن ${searchQuery}**...`,
                                 }));
 
                                 try {
@@ -3333,21 +3332,21 @@ module.exports = {
                                     if (currentTracks.length === 0) {
                                 return sourceMessage.edit(musicPayload(tokenObj, {
                                     title: 'No Results',
-                                    description: `لم يتم العثور على نتائج في ${platformDisplay(selectedSource)}.`,
+                                    description: `*لم يتم العثور على نتائج في ${platformDisplay(selectedSource)}.*`,
                                     components: [controlRow(true)],
                                 }));
                             }
 
                                     return sourceMessage.edit(musicPayload(tokenObj, {
                                         title: 'Search Results',
-                                        description: `النتائج من ${platformDisplay(selectedSource)} · مرتبة حسب صلة البحث وبدون تكرار.\nاختر أغنية من القائمة.`,
+                                        description: `**النتائج من ${platformDisplay(selectedSource)}.\nاختر أغنية من القائمة**.`,
                                         components: buildTrackRows(currentTracks),
                                     }));
                         } catch (err) {
                             console.error('Error searching for videos:', err);
                             return sourceMessage.edit(musicPayload(tokenObj, {
                                 title: 'Search Error',
-                                description: 'حدث خطأ أثناء البحث. يمكنك الرجوع واختيار منصة أخرى.',
+                                description: '**حدث خطأ أثناء البحث. يمكنك الرجوع واختيار منصة أخرى.**',
                                 components: [controlRow(true)],
                             }));
                         }
@@ -3357,7 +3356,7 @@ module.exports = {
                         if (!selectedSource) {
                             return interaction.update(musicPayload(tokenObj, {
                                 title: 'Search',
-                                description: 'اختر منصة البحث أولاً.',
+                                description: '*اختر منصة البحث أولاً*.',
                                 components: buildPlatformRows(),
                             }));
                         }
@@ -3366,7 +3365,7 @@ module.exports = {
                         if (nextOffset >= allSearchTracks.length) {
                             return interaction.update(musicPayload(tokenObj, {
                                 title: 'Search Results',
-                                description: `لا توجد نتائج إضافية من ${platformDisplay(selectedSource)} لهذا البحث.`,
+                                description: `**لا توجد نتائج إضافية من ${platformDisplay(selectedSource)} لهذا البحث**.`,
                                 components: buildTrackRows(currentTracks),
                             }));
                         }
@@ -3375,7 +3374,7 @@ module.exports = {
                         currentTracks = allSearchTracks.slice(searchOffset, searchOffset + 10);
                         return interaction.update(musicPayload(tokenObj, {
                             title: 'Search Results',
-                            description: `نتائج إضافية من ${platformDisplay(selectedSource)} · مطابقة للبحث.\nتم استبدال القائمة السابقة.`,
+                            description: `**نتائج إضافية من ${platformDisplay(selectedSource)} • مطابقة للبحث.\nتم استبدال القائمة السابقة.**`,
                             components: buildTrackRows(currentTracks),
                         }));
                     }
@@ -3390,7 +3389,7 @@ module.exports = {
                         if (!selectedTrack) {
                             return sourceMessage.edit(musicPayload(tokenObj, {
                                 title: 'Search',
-                                description: 'لم يعد هذا الاختيار متاحاً. ارجع واختر نتيجة أخرى.',
+                                description: '*لم يعد هذا الاختيار متاحاً. ارجع واختر نتيجة أخرى.*',
                                 components: [controlRow(true)],
                             }));
                         }
@@ -3418,7 +3417,7 @@ module.exports = {
 
                                 await sourceMessage.edit(musicPayload(tokenObj, {
                                     title: player.isPlaying ? 'Add Song' : 'Playing',
-                                    description: `**${queuedTrack.info.title}**\nBy **${message.author.displayName}**`,
+                                    description: `**${queuedTrack.info.title}\nBy ${message.author.displayName}**`,
                                 }));
 
                                 await safePlay(player);
@@ -3429,7 +3428,7 @@ module.exports = {
                     if (!completed && reason === 'time') {
                         sourceMessage.edit(musicPayload(tokenObj, {
                             title: 'Search Expired',
-                            description: 'انتهى وقت البحث بدون اختيار.',
+                            description: '*انتهى وقت البحث بدون اختيار.*',
                         })).catch(() => {});
                     }
                 });
@@ -3439,7 +3438,7 @@ module.exports = {
                 if (!player) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'No Music',
-                        description: 'No music is currently playing.',
+                        description: '*No music is currently playing.*',
                         thumbnail: 'attachment://Error.png',
                         files: ['./assets/image/icons/Error.png'],
                     }));
@@ -3454,7 +3453,7 @@ module.exports = {
 
                 return message.reply(musicPayload(tokenObj, {
                     title: 'Autoplay',
-                    description: `Autoplay is now **${player.data.autoPlay ? 'ON' : 'OFF'}**.\nBy **${message.author.displayName}**`,
+                    description: `**Autoplay is now ${player.data.autoPlay ? 'ON' : 'OFF'}**.\nBy **${message.author.displayName}**`,
                     thumbnail: 'attachment://AutoPlay.png',
                     files: ['./assets/image/icons/AutoPlay.png'],
                 }));
@@ -3485,17 +3484,17 @@ module.exports = {
                     const memberVoice = interaction.member?.voice?.channel;
                     const clientVoice = interaction.guild?.members?.me?.voice?.channel;
                     if (!memberVoice || !clientVoice || memberVoice.id !== clientVoice.id) {
-                        return replyEphemeral('ادخل نفس الروم الصوتي أولاً.');
+                        return replyEphemeral('**ادخل نفس الروم الصوتي أولاً.**');
                     }
 
                             const player = TrueMusic.poru.players.get(interaction.guildId);
                             if (!player || !player.currentTrack) {
-                                return replyEphemeral('لا يوجد شيء يعمل الآن.');
+                                return replyEphemeral('**لا يوجد شيء يعمل الآن.**');
                             }
 
                                     const activePanelId = player.data?.nowPlayingMessage?.id;
                                     if (activePanelId && interaction.message?.id !== activePanelId) {
-                                        return replyEphemeral('انتهت صلاحية لوحة التحكم لأن الأغنية تغيّرت.');
+                                        return replyEphemeral('انتهت صلاحية لوحة التحكم لأن الأغنية* تغيّرت*.');
                                     }
 
                             const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
@@ -3532,7 +3531,7 @@ module.exports = {
 
                                     const selectedIndex = Number(interaction.values[0]);
                                     const selectedTrack = ui.artistTracks?.[selectedIndex];
-                                    if (!selectedTrack) return replyEphemeral('لم أجد الأغنية المختارة.');
+                                    if (!selectedTrack) return replyEphemeral('**لم أجد الأغنية المختارة.**');
 
                                             const queuedTrack = { ...selectedTrack, info: { ...selectedTrack.info, requester: interaction.user } };
                                             player.queue.add(queuedTrack);
@@ -3544,7 +3543,7 @@ module.exports = {
                                     await editPanel(liked, interaction);
 
                                     await safePlay(player);
-                                    return replyEphemeral(`تمت إضافة **${queuedTrack.info.title || 'الأغنية'}** للطابور.`);
+                                    return replyEphemeral(`**تمت إضافة **${queuedTrack.info.title || 'الأغنية'} للطابور.**`);
                                 }
 
                         if (interaction.customId === 'np_filter') {
@@ -3558,10 +3557,10 @@ module.exports = {
                                                 player.data.ui = ui;
                                         await editPanel(ui.liked);
                                 const label = FILTER_NAMES[applied] || applied;
-                                return replyEphemeral(applied === 'clear' ? 'تم إيقاف الفلاتر.' : `تم تطبيق **${label}**.`);
+                                return replyEphemeral(applied === 'clear' ? '*Filter Stoped.*' : `>**Done applied : ${label}**.`);
                             } catch (err) {
                                 console.error('[Filters] failed:', err?.message || err);
-                                return replyEphemeral('تعذر تطبيق الفلتر الآن.');
+                                return replyEphemeral('Failed to apply.');
                             }
                         }
                     }
@@ -3572,16 +3571,16 @@ module.exports = {
                     if (interaction.customId === 'loop') {
                         const newLoopMode = player.loop === 'NONE' ? 'TRACK' : 'NONE';
                         player.setLoop(newLoopMode);
-                        responseMessage = `التكرار: **${newLoopMode === 'TRACK' ? 'ON' : 'OFF'}**`;
+                        responseMessage = `Loop is : **${newLoopMode === 'TRACK' ? 'ON' : 'OFF'}**`;
                     }
 
                     if (interaction.customId === 'pause') {
                         if (player.isPaused) {
                             await player.pause(false);
-                            responseMessage = 'تم الاستئناف.';
+                            responseMessage = '**>Done resume the music**.';
                         } else {
                             await player.pause(true);
-                            responseMessage = 'تم الإيقاف المؤقت.';
+                            responseMessage = '**>Done puase the music.**';
                         }
                         const liked = await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false);
                         await editPanel(liked);
@@ -3590,30 +3589,30 @@ module.exports = {
                     if (interaction.customId === 'volume_down') {
                         const newVolume = Math.max(player.volume - 10, 0);
                         await player.setVolume(newVolume);
-                        responseMessage = `الصوت: **${newVolume}%**`;
+                        responseMessage = `**Volume Now __${newVolume}%__**`;
                     }
 
                     if (interaction.customId === 'volume_up') {
                         const newVolume = Math.min(player.volume + 10, 130);
                         await player.setVolume(newVolume);
-                        responseMessage = `الصوت: **${newVolume}%**`;
+                        responseMessage = `**Volume Now : __${newVolume}%__**`;
                     }
 
                             if (interaction.customId === 'skip') {
                                 const currentTrack = player.currentTrack;
                                 if (!currentTrack) {
-                                    responseMessage = 'لا توجد أغنية للتخطي.';
+                                    responseMessage = '*لا توجد أغنية للتخطي*.';
                                 } else if (player.queue.length === 0) {
                                     await finalizePlayerUi(player);
                                     await bumpQueueVersion(player, 'button_skip_end');
                                     await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
                                     await player.destroy();
-                                    responseMessage = `تم التخطي: **${currentTrack.info.title || 'الأغنية'}**`;
+                                    responseMessage = `** Done skiped : ${currentTrack.info.title || 'الأغنية'}**`;
                                 } else {
                                     await finalizePlayerUi(player);
                                     await bumpQueueVersion(player, 'button_skip');
                                     await player.skip();
-                                    responseMessage = `تم التخطي: **${currentTrack.info.title || 'الأغنية'}**`;
+                                    responseMessage = `** Done Skiped : ${currentTrack.info.title || 'الأغنية'}**`;
                                 }
                     }
 
@@ -3642,12 +3641,12 @@ module.exports = {
                         await bumpQueueVersion(player, 'button_stop');
                         await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
                         await player.destroy();
-                        responseMessage = '⏹ تم إيقاف التشغيل.';
+                        responseMessage = '*⏹ Done Stoped The Song*.';
                     }
 
                     if (interaction.customId === 'queue_btn') {
                         if (!player.currentTrack) {
-                            responseMessage = 'لا يوجد شيء يعمل الآن.';
+                            responseMessage = '*لا يوجد شيء يعمل الآن.*';
                         } else {
                             const qItemsPerPage = 8;
                             let qPage = 0;
@@ -3680,7 +3679,7 @@ module.exports = {
                                     }
                                     if (i.customId === `queue_${refId}_prev`) { if (qPage > 0) qPage--; return renderQ(i); }
                                     if (i.customId === `queue_${refId}_next`) { const tot = Math.max(1, Math.ceil(player.queue.length / qItemsPerPage)); if (qPage < tot - 1) qPage++; return renderQ(i); }
-                                    if (i.customId === `queue_${refId}_clear`) { player.queue.clear(); await bumpQueueVersion(player, 'queue_clear'); qCollector.stop('cleared'); return i.update(musicPayload(tokenObj, { title: 'Queue Cleared', description: 'تم حذف قائمة الانتظار بالكامل.' })); }
+                                    if (i.customId === `queue_${refId}_clear`) { player.queue.clear(); await bumpQueueVersion(player, 'queue_clear'); qCollector.stop('cleared'); return i.update(musicPayload(tokenObj, { title: 'Queue Cleared', description: '**تم حذف قائمة الانتظار بالكامل**.' })); }
                                     if (i.customId === `queue_${refId}_close`) { qCollector.stop('closed'); return i.update({ components: disableComponents(queueMsg.components) }); }
                                     if (i.customId === `queue_${refId}_reorder`) {
                                         if (typeof player.queue.splice !== 'function' || typeof player.queue.unshift !== 'function') return i.reply({ content: 'تعذر ترتيب الطابور.', ephemeral: true });
@@ -3707,24 +3706,24 @@ module.exports = {
                             if (interaction.customId === 'like') {
                                 const currentTrack = player.currentTrack;
                                 if (!currentTrack) {
-                                    responseMessage = 'لا يوجد شيء يعمل الآن.';
+                                    responseMessage = '*لا يوجد شيء يعمل الآن.*';
                                 } else {
                                     try {
                                         const { liked } = await likes.toggle(interaction.user.id, currentTrack);
                                         responseMessage = liked
-                                            ? `تم حفظ **${currentTrack.info.title || 'الأغنية'}** في لايكاتك.`
-                                            : `تم حذف **${currentTrack.info.title || 'الأغنية'}** من لايكاتك.`;
+                                            ? `** Done Liked  **${currentTrack.info.title || 'الأغنية'} In Likelist** .`
+                                            : `**Done Unlike : \n${currentTrack.info.title || 'الأغنية'} From Likelist**.`;
                                         if (!requesterId || interaction.user.id === requesterId) {
                                             await editPanel(liked);
                                         }
                                     } catch (err) {
                                         console.error('[Likes] toggle failed:', err?.message || err);
-                                        responseMessage = 'تعذر حفظ اللايك الآن.';
+                                        responseMessage = '*تعذر حفظ اللايك الآن*.';
                             }
                         }
                     }
 
-                    await interaction.editReply(responseMessage || 'تم.');
+                    await interaction.editReply(responseMessage || '*Done*.');
                     setTimeout(() => interaction.deleteReply().catch(() => {}), 8000);
                 });
 
