@@ -1975,7 +1975,7 @@ module.exports = {
                         await TrueMusic.destroy()
                         setTimeout(async () => {
                             TrueMusic.login(token).then(() => {
-                                message.react(`💹`).catch(() => 0)
+                                reactCustom(message, MUSIC_EMOJIS.like, '💹')
                             }).catch(() => { console.log(`${TrueMusic.user.tag} (${TrueMusic.user.id}) has an error with restarting.`) })
                         }, 5000)
 
@@ -1985,7 +1985,7 @@ module.exports = {
 
                         const tryChangeName = (newName, attempts = 0) => {
                             TrueMusic.user.setUsername(newName).then(async () => {
-                                message.react('✅').catch(() => 0);
+                                reactCustom(message, MUSIC_EMOJIS.like, '✅');
                             }).catch((error) => {
                                 if (error.code === 50035) {
                                     if (attempts < 3) {
@@ -2013,10 +2013,10 @@ module.exports = {
                         TrueMusic.user.setAvatar(url)
                             .then(() => {
                                 refreshEmbedColor(TrueMusic).catch(() => {});
-                                message.react('✅').catch(() => { });
+                                reactCustom(message, MUSIC_EMOJIS.like, '✅');
                             })
                             .catch((error) => {
-                                message.react('✅').catch(() => { });
+                                reactCustom(message, MUSIC_EMOJIS.like, '✅');
                             });
 
                     } else if (args[0] == 'leave' || args[0] == 'اخرج' || args[0] == 'اطلع' || args[0] == 'disablechannel') {
@@ -2029,7 +2029,7 @@ module.exports = {
                             return tokenBot;
                         });
                         store.set('tokens', data);
-                        message.react('✅');
+                        reactCustom(message, MUSIC_EMOJIS.like, '✅');
                     }
                     else if (args[0] == 'setup') {
                         let channel = message.member.voice.channel;
@@ -2053,7 +2053,7 @@ module.exports = {
                             await TrueMusic.user.setUsername(channel.name);
                             TrueMusic.user.lastChangeTime = Date.now();
                             store.set('tokens', data);
-                            message.react('✅');
+                            reactCustom(message, MUSIC_EMOJIS.like, '✅');
                         } catch (error) {
                             if (error.code === 50035) {
                                 return message.reply('> **Please try to change the name later.**');
@@ -2076,7 +2076,7 @@ module.exports = {
 
                         store.set('tokens', data);
 
-                        message.react('✅');
+                        reactCustom(message, MUSIC_EMOJIS.like, '✅');
                     }
 
                     else if (args[0] == 'setchat' || args[0] == 'chat' || args[0] == 'settc' || args[0] == 'اوامر') {
@@ -2098,7 +2098,7 @@ module.exports = {
                         });
 
                         store.set('tokens', parsedData);
-                        message.react('✅');
+                        reactCustom(message, MUSIC_EMOJIS.like, '✅');
 
                     } else if (args[0] == 'unchat' || args[0] == 'unt' || args[0] == 'الغاء') {
                         let parsedData = store.get('tokens') || [];
@@ -2118,7 +2118,7 @@ module.exports = {
                         });
 
                         store.set('tokens', parsedData);
-                        message.react('✅');
+                        reactCustom(message, MUSIC_EMOJIS.like, '✅');
                         loadPrefix();
 
                     } else if (args[0] == 'ping' || args[0] == 'بنج' || args[0] == 'بنغ') {
@@ -2127,7 +2127,7 @@ module.exports = {
 
                     } else if (args[0] == 'setstreaming' || args[0] == 'streaming' || args[0] == 'ste' || args[0] == 'ستريمنج') {
                         let status = message.content.split(" ")[2];
-                        if (!status) return message.react("❌");
+                        if (!status) return reactCustom(message, MUSIC_EMOJIS.dislike, '❌');
                         TrueMusic.user.setPresence({
                             activities: [
                                 {
@@ -2138,7 +2138,7 @@ module.exports = {
                             ],
                             status: 'online',
                         });
-                        message.react("✅");
+                        reactCustom(message, MUSIC_EMOJIS.like, '✅');
 
                         let tokens = store.get('tokens') || [];
                         let tokenObj = tokens.find((tokenBot) => tokenBot.token == token);
@@ -2531,6 +2531,11 @@ module.exports = {
 
 
 
+        const reactCustom = (msg, emojiId, fallback) => {
+            const emoji = TrueMusic.emojis.cache.get(emojiId);
+            return msg.react(emoji ?? fallback).catch(() => {});
+        };
+
         TrueMusic.on('messageCreate', async (message) => {
             if (message.author.bot || !message.guild) return;
 
@@ -2627,6 +2632,8 @@ module.exports = {
                 loop: [`loop`, `تكرار`, `l`, `L`, `Loop`],
                 pause: [`pause`, `توقيف`, `كمل`, `pa`, `Pa`, `Pause`, `resume`],
                 seek: [`seek`, `Seek`, `قدم`, `se`, `Se`],
+                forward: [`forward`, `Forward`, `fwd`, `fw`, `تقديم`],
+                remove: [`remove`, `Remove`, `rm`, `حذف`],
                 autoplay: [`autoplay`, `Autoplay`, `Ap`, `ap`],
                 search: [`search`, `ys`, `بحث`],
                 queue: [`queue`, `قائمة`, `اغاني`, `q`, `qu`, `Q`, `Qu`, `Queue`],
@@ -2759,7 +2766,7 @@ module.exports = {
                                 await bumpQueueVersion(player, 'stop');
                                 await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
                                 await player.destroy();
-                                message.react(`🔴`);
+                                reactCustom(message, MUSIC_EMOJIS.stop, '🔴');
             }
 
 
@@ -2837,10 +2844,10 @@ module.exports = {
 
                 if (player.isPaused) {
                     await player.pause(false);
-                    message.react('▶️');
+                    reactCustom(message, MUSIC_EMOJIS.skip, '▶️');
                 } else {
                     await player.pause(true);
-                    message.react('⏸️');
+                    reactCustom(message, MUSIC_EMOJIS.pause, '⏸️');
                 }
             }
 
@@ -3098,9 +3105,96 @@ module.exports = {
                 const seekTime = Math.min(seconds * 1000, player.currentTrack.info.length);
                 await player.seekTo(seekTime);
 
-                message.react("✅").catch(() => { });
+                reactCustom(message, MUSIC_EMOJIS.skip, '✅');
             }
 
+            else if (cmdsArray.forward.includes(command)) {
+                const player = TrueMusic.poru.players.get(message.guild.id);
+                if (!player || !player.currentTrack) {
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'No Music',
+                        description: 'No music is currently playing.',
+                        thumbnail: 'attachment://Error.png',
+                        files: ['./assets/image/icons/Error.png'],
+                    }));
+                }
+                const memberVoice = message.member?.voice?.channel;
+                const clientVoice = message.guild.members?.me?.voice?.channel;
+                if (!memberVoice || !clientVoice || memberVoice.id !== clientVoice.id) return;
+
+                const timeArg = args[0];
+                if (!timeArg) {
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'Forward',
+                        description: 'Provide a time to skip forward.\nExamples: `forward 30s` · `forward 1m` · `forward 1:30`',
+                        thumbnail: 'attachment://seek.png',
+                        files: ['./assets/image/icons/seek.png'],
+                    }));
+                }
+
+                let seconds = 0;
+                if (timeArg.includes(':')) {
+                    const [min, sec] = timeArg.split(':').map(Number);
+                    seconds = (min * 60) + sec;
+                } else if (timeArg.endsWith('s')) {
+                    seconds = parseInt(timeArg);
+                } else if (timeArg.endsWith('m')) {
+                    seconds = parseInt(timeArg) * 60;
+                } else {
+                    seconds = parseInt(timeArg);
+                }
+
+                if (isNaN(seconds) || seconds <= 0) {
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'Forward',
+                        description: 'Invalid time. Use something like `30s`, `1m`, or `1:30`.',
+                        thumbnail: 'attachment://seek.png',
+                        files: ['./assets/image/icons/seek.png'],
+                    }));
+                }
+
+                const currentPosition = Number(player.position || 0);
+                const newPosition = Math.min(currentPosition + seconds * 1000, player.currentTrack.info.length - 1000);
+                await player.seekTo(newPosition);
+                reactCustom(message, MUSIC_EMOJIS.skip, '⏩');
+            }
+
+            else if (cmdsArray.remove.includes(command)) {
+                const player = TrueMusic.poru.players.get(message.guild.id);
+                if (!player || !player.currentTrack) {
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'No Music',
+                        description: 'No music is currently playing.',
+                        thumbnail: 'attachment://Error.png',
+                        files: ['./assets/image/icons/Error.png'],
+                    }));
+                }
+                const memberVoice = message.member?.voice?.channel;
+                const clientVoice = message.guild.members?.me?.voice?.channel;
+                if (!memberVoice || !clientVoice || memberVoice.id !== clientVoice.id) return;
+
+                const pos = parseInt(args[0]);
+                if (isNaN(pos) || pos < 1 || pos > player.queue.length) {
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'Remove',
+                        description: player.queue.length === 0
+                            ? 'The queue is empty.'
+                            : `Provide a position between **1** and **${player.queue.length}**.`,
+                        thumbnail: 'attachment://Error.png',
+                        files: ['./assets/image/icons/Error.png'],
+                    }));
+                }
+
+                const removed = player.queue[pos - 1];
+                player.queue.splice(pos - 1, 1);
+                await bumpQueueVersion(player, 'remove');
+                return message.reply(musicPayload(tokenObj, {
+                    title: 'Removed',
+                    description: `Removed **${removed?.info?.title || 'Unknown'}** from the queue.`,
+                    thumbnail: 'attachment://Skip.png',
+                    files: ['./assets/image/icons/Skip.png'],
+                }));
+            }
 
             else if (cmdsArray.search.includes(command)) {
                 const searchQuery = args.join(' ');
