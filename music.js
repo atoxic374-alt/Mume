@@ -569,7 +569,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
         );
 
     if (artworkUrl) {
-        section.setThumbnailAccessory(new ThumbnailBuilder().setURL(artworkUrl));
+        section.setThumbnailAccessory(new ThumbnailBuilder().setURL(artworkUrl).setDescription('\u200b'));
     }
 
     if (compactPlayLayout) {
