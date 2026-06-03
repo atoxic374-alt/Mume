@@ -167,10 +167,9 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         // ── Discord-style single-row layout ──────────────────────────────
         // [currentTime]  ────────●─────────────────────  [totalTime]
         //
-        // Canvas is always HEIGHT=52 regardless of what caller passes,
-        // to guarantee the knob (r=10) and 24px text fit with padding.
+        // Height is caller-supplied (min 52 so knob r=10 and 24px font fit).
         const W = width;
-        const H = 52;
+        const H = Math.max(52, height);
 
         const FONT         = '700 24px "DejaVu Sans"';
         const GUTTER       = 14;   // px between label and rail edge

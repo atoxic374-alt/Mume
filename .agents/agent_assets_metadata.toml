@@ -1,0 +1,38 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "PHr00ku9t-PjQPC6Wf_gc"
+uri = "file://assets/image/test_bar.png"
+type = "image"
+title = "البار — وسط التشغيل (1:23 / 3:40)"
+
+[[outputs]]
+id = "4A8mQ3NyILY2e_1rdmdFV"
+uri = "file://assets/image/test_bar_start.png"
+type = "image"
+title = "البار — بداية (0:05 / 3:40)"
+
+[[outputs]]
+id = "cnnGF9rcwyowD-tD9GOCw"
+uri = "file://assets/image/test_bar_end.png"
+type = "image"
+title = "البار — نهاية (3:35 / 3:40)"
+
+[[outputs]]
+id = "aQZbyWgQnU6kKs71QjQcv"
+uri = "file://assets/image/bar_cmp_52.png"
+type = "image"
+title = "52px — حالياً (رفيع)"
+
+[[outputs]]
+id = "I39SQHOOGZxdbqxCPHoHA"
+uri = "file://assets/image/bar_cmp_64.png"
+type = "image"
+title = "64px — متوسط"
+
+[[outputs]]
+id = "GyZDHlyEPOJ8dt9ivlZDT"
+uri = "file://assets/image/bar_cmp_80.png"
+type = "image"
+title = "80px — أسمك"
