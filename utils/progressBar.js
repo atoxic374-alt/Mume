@@ -169,7 +169,7 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         const GUTTER  = 14;
         const RAIL_H  = 6;
         const KNOB_R  = 9;
-        const FONT    = 'bold 19px sans-serif';
+        const FONT    = 'bold 19px "DejaVu Sans"';
 
         const cDisc = createCanvas(W, H);
         const cx    = cDisc.getContext('2d');
