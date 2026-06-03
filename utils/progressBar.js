@@ -164,59 +164,92 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
     ctx.clearRect(0, 0, width, height);
 
     if (variant === 'discordCompact') {
-        // ── Discord-style bar only (no canvas text — labels shown via TextDisplay) ──
+        // ── Discord-style: solid bg + text labels left/right of rail ─────
+        // Solid background avoids Discord CDN transparency-to-JPEG conversion
+        // which washes out semi-transparent text pixels.
         const W = width;
-        const H = Math.max(40, height);
-        const GUTTER  = 12;
-        const RAIL_H  = 6;
-        const KNOB_R  = 10;
-        const RAIL_BG = 'rgba(65,69,73,0.90)';
+        const H = Math.max(52, height);
+
+        const FONT        = 'bold 22px sans-serif';
+        const GUTTER      = 10;
+        const RAIL_H      = 6;
+        const KNOB_R      = 10;
+        const BG_COLOR    = 'rgb(43,45,49)';          // Discord dark container bg
+        const RAIL_BG     = 'rgb(72,76,80)';
+        const TEXT_COLOR  = 'rgb(181,186,196)';        // Discord secondary text
 
         const cDisc = createCanvas(W, H);
         const cx    = cDisc.getContext('2d');
         cx.imageSmoothingEnabled = true;
         cx.imageSmoothingQuality = 'high';
-        cx.clearRect(0, 0, W, H);
 
-        // Rail geometry — full width, no label margins
-        const railX  = GUTTER;
-        const railEnd = W - GUTTER;
-        const railW  = Math.max(20, railEnd - railX);
-        const railY  = Math.round((H - RAIL_H) / 2);
-        const railR  = RAIL_H / 2;
-        const fillW  = Math.max(0, Math.min(railW, railW * ratio));
-        const knobX  = Math.max(railX + KNOB_R, Math.min(railX + fillW, railEnd - KNOB_R));
-        const knobY  = railY + RAIL_H / 2;
+        // Solid background — prevents CDN from corrupting transparency
+        cx.fillStyle = BG_COLOR;
+        cx.fillRect(0, 0, W, H);
+
+        cx.font         = FONT;
+        cx.textBaseline = 'middle';
+
+        // Measure labels
+        const MIN_W  = 40;
+        const curW   = currentLabel  ? Math.max(MIN_W, Math.ceil(cx.measureText(currentLabel).width))  : 0;
+        const totW   = durationLabel ? Math.max(MIN_W, Math.ceil(cx.measureText(durationLabel).width)) : 0;
+        const PAD    = GUTTER;
+
+        // Rail geometry between labels
+        const railX   = curW  > 0 ? curW  + PAD * 2 : PAD;
+        const railEnd = W - (totW > 0 ? totW + PAD * 2 : PAD);
+        const railW   = Math.max(20, railEnd - railX);
+        const railY   = Math.round((H - RAIL_H) / 2);
+        const railR   = RAIL_H / 2;
+        const fillW   = Math.max(0, Math.min(railW, railW * ratio));
+        const knobX   = Math.max(railX + KNOB_R, Math.min(railX + fillW, railEnd - KNOB_R));
+        const knobY   = railY + RAIL_H / 2;
+
+        // Current-time label (left, vertically centred)
+        if (currentLabel) {
+            cx.fillStyle = TEXT_COLOR;
+            cx.textAlign = 'right';
+            cx.fillText(currentLabel, curW + PAD, H / 2);
+        }
 
         // Rail background
         cx.fillStyle = RAIL_BG;
         fillRoundedRect(cx, railX, railY, railW, RAIL_H, railR);
 
-        // Fill
+        // Filled portion
         if (fillW > 1) {
             cx.save();
-            cx.fillStyle   = rgba(base, 0.97);
-            cx.shadowColor = rgba(base, 0.35);
-            cx.shadowBlur  = 3;
+            cx.fillStyle   = rgba(base, 1);
+            cx.shadowColor = rgba(base, 0.4);
+            cx.shadowBlur  = 4;
             fillRoundedRect(cx, railX, railY, fillW, RAIL_H, railR);
             cx.restore();
         }
 
         // Knob
         cx.save();
-        cx.shadowColor = 'rgba(0,0,0,0.45)';
-        cx.shadowBlur  = 4;
-        cx.fillStyle   = 'rgba(254,254,255,0.98)';
+        cx.shadowColor = 'rgba(0,0,0,0.5)';
+        cx.shadowBlur  = 5;
+        cx.fillStyle   = 'rgb(255,255,255)';
         cx.beginPath();
         cx.arc(knobX, knobY, KNOB_R, 0, Math.PI * 2);
         cx.fill();
         cx.restore();
 
-        cx.strokeStyle = rgba(light, 0.55);
-        cx.lineWidth   = 1.2;
+        // Knob ring
+        cx.strokeStyle = rgba(light, 0.6);
+        cx.lineWidth   = 1.5;
         cx.beginPath();
-        cx.arc(knobX, knobY, KNOB_R - 0.6, 0, Math.PI * 2);
+        cx.arc(knobX, knobY, KNOB_R - 0.8, 0, Math.PI * 2);
         cx.stroke();
+
+        // Total-duration label (right, vertically centred)
+        if (durationLabel) {
+            cx.fillStyle = TEXT_COLOR;
+            cx.textAlign = 'left';
+            cx.fillText(durationLabel, railEnd + PAD, H / 2);
+        }
 
         return progressCacheSet(cacheKey, {
             attachment: cDisc.toBuffer('image/png'),
