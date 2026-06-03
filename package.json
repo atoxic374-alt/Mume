@@ -3,6 +3,11 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "preinstall": "npm install sqlite3 --build-from-source",
+    "start": "node server.js"
+  },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
     "@napi-rs/canvas": "^1.0.0",
@@ -26,13 +31,6 @@
     "undici-types": "^7.27.0",
     "ws": "^8.21.0"
   },
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  "preinstall": "npm install sqlite3 --build-from-source",
-  "start": "node server.js"
-  }
-    },
-  
   "author": "",
   "license": "ISC"
 }
