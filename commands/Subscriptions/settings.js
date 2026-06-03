@@ -313,26 +313,61 @@ module.exports = {
                                 });
                             }
 
-                            const updateInteraction = !interaction.replied && !interaction.deferred
-                                ? (payload) => interaction.update(payload)
-                                : (payload) => mainMsg.edit(payload);
+                            // ── helpers ────────────────────────────────────────────────
+                            const BAR_LEN = 20;
+                            const scopeLabels = { idle: 'الخاملين', grouped: 'المتجمعين', all: 'الكل' };
+                            const modeLabel = state.mode === 'names'
+                                ? (state.namesWithNumbers ? 'أسماء الرومات + أرقام' : 'أسماء الرومات')
+                                : state.mode === 'numbers'
+                                    ? (state.namePrefix ? `${state.namePrefix}1, ${state.namePrefix}2...` : '1, 2, 3...')
+                                    : 'بدون تغيير أسماء';
 
-                            await updateInteraction({
+                            function buildProgressBar(done, total) {
+                                const pct = total === 0 ? 1 : done / total;
+                                const filled = Math.round(pct * BAR_LEN);
+                                return `\`[${'█'.repeat(filled)}${'░'.repeat(BAR_LEN - filled)}]\` **${done}/${total}**`;
+                            }
+
+                            function buildProgressEmbed(done, total, okCount, failCount, liveLog) {
+                                const pct = total === 0 ? 100 : Math.round((done / total) * 100);
+                                return buildDistributionEmbed(
+                                    `⚙️ Smart Distribution — ${pct}%`,
+                                    [
+                                        `**المنظم:** <@${interaction.user.id}>  •  **الوضع:** ${modeLabel}`,
+                                        `**النطاق:** ${scopeLabels[state.scope] || state.scope}  •  <#${state.firstChannelId}> → <#${state.lastChannelId}>`,
+                                        '',
+                                        buildProgressBar(done, total),
+                                        `✅ **نجح:** \`${okCount}\`　❌ **فشل:** \`${failCount}\`　⏳ **متبقي:** \`${total - done}\``,
+                                    ].join('\n'),
+                                    liveLog.length > 0
+                                        ? [{ name: '📋 آخر العمليات', value: liveLog.slice(-6).join('\n'), inline: false }]
+                                        : [],
+                                );
+                            }
+
+                            // ── initial paint ───────────────────────────────────────
+                            const initPayload = {
                                 content: '',
-                                embeds: [buildDistributionEmbed('Smart Distribution', `⏳ جاري توزيع **${targets.length}** بوت...`)],
+                                embeds: [buildProgressEmbed(0, targets.length, 0, 0, [])],
                                 components: [],
-                            });
+                            };
+                            if (!interaction.replied && !interaction.deferred) {
+                                await interaction.update(initPayload);
+                            } else {
+                                await mainMsg.edit(initPayload);
+                            }
 
+                            let done = 0;
                             let success = 0;
                             let failed = 0;
                             let nameSuccess = 0;
                             let nameRequired = 0;
                             const details = [];
+                            const liveLog = [];
 
                             try {
                                 const targetChannels = await getDistributionChannels(state.firstChannelId, state.lastChannelId);
 
-                                // Process in parallel batches of 5
                                 const BATCH_SIZE = 5;
                                 for (let batchStart = 0; batchStart < targets.length; batchStart += BATCH_SIZE) {
                                     const batch = targets.slice(batchStart, batchStart + BATCH_SIZE);
@@ -349,7 +384,6 @@ module.exports = {
                                             || await guild.channels.fetch(chan.id).catch(() => null);
                                         if (!isVoiceChannel(targetChannel)) throw new Error('invalid channel');
 
-                                        // Compute target name
                                         let targetName = null;
                                         if (state.mode === 'names') {
                                             targetName = state.namesWithNumbers
@@ -390,7 +424,9 @@ module.exports = {
                                         return { idx, bot, targetChannel, nameResult, joined };
                                     }));
 
+                                    // ── accumulate results ──────────────────────────
                                     for (const res of batchResults) {
+                                        done++;
                                         if (res.status === 'fulfilled') {
                                             const { idx, bot, targetChannel, nameResult, joined } = res.value;
                                             if (joined) success++; else failed++;
@@ -398,45 +434,53 @@ module.exports = {
                                                 nameRequired++;
                                                 if (nameResult.ok) nameSuccess++;
                                             }
-                                            details.push([
-                                                `**${idx + 1}.** <@${bot.user.id}> → <#${targetChannel.id}>`,
-                                                `**Join:** ${joined ? '✅' : '❌'}`,
-                                                nameResult.required
-                                                    ? `**Name:** ${nameResult.ok ? `✅ \`${nameResult.actual}\`` : `❌ \`${nameResult.error || nameResult.actual}\``}`
-                                                    : null,
-                                            ].filter(Boolean).join(' | '));
+                                            const nameStr = nameResult.required
+                                                ? (nameResult.ok ? ` • 📝 \`${nameResult.actual}\`` : ` • 📝 ❌`)
+                                                : '';
+                                            const line = `${joined ? '✅' : '❌'} **${idx + 1}.** <@${bot.user.id}> → <#${targetChannel.id}>${nameStr}`;
+                                            details.push(line);
+                                            liveLog.push(line);
                                         } else {
                                             failed++;
-                                            details.push(`❌ ${res.reason?.message || 'unknown error'}`);
+                                            const errLine = `❌ **${done}.** ${res.reason?.message || 'unknown error'}`;
+                                            details.push(errLine);
+                                            liveLog.push(errLine);
                                         }
                                     }
+
+                                    // ── live update after each batch ────────────────
+                                    await mainMsg.edit({
+                                        content: '',
+                                        embeds: [buildProgressEmbed(done, targets.length, success, failed, liveLog)],
+                                        components: [],
+                                    }).catch(() => {});
                                 }
 
                                 store.set('tokens', tokens);
 
-                                const scopeLabels = { idle: 'الخاملين', grouped: 'المتجمعين بفويس واحد', all: 'الكل' };
-                                const modeLabel = state.mode === 'names'
-                                    ? (state.namesWithNumbers ? 'أسماء الرومات + أرقام' : 'أسماء الرومات')
-                                    : state.mode === 'numbers'
-                                        ? (state.namePrefix ? `${state.namePrefix}1, ${state.namePrefix}2...` : '1, 2, 3...')
-                                        : 'بدون تغيير أسماء';
+                                // ── final result embed ──────────────────────────────
+                                const nameField = nameRequired
+                                    ? `✅ **تم:** \`${nameSuccess}\`\n❌ **فشل:** \`${nameRequired - nameSuccess}\``
+                                    : '`—` بدون تغيير أسماء';
 
                                 const resultEmbed = buildDistributionEmbed(
-                                    'Distribution Confirmed',
+                                    failed === 0 ? '✅ Distribution Complete' : success === 0 ? '❌ Distribution Failed' : '⚠️ Distribution Done',
                                     [
                                         `**المنظم:** <@${interaction.user.id}>`,
-                                        `**النطاق:** **${scopeLabels[state.scope] || state.scope}**`,
+                                        `**النطاق:** ${scopeLabels[state.scope] || state.scope}  •  **الوضع:** ${modeLabel}`,
                                         `**الرومات:** <#${state.firstChannelId}> → <#${state.lastChannelId}>`,
-                                        `**الوضع:** **${modeLabel}**`,
+                                        '',
+                                        buildProgressBar(targets.length, targets.length),
                                     ].join('\n'),
                                     [
-                                        { name: 'Bots', value: `**المطلوب:** \`${targets.length}\`\n**دخل:** \`${success}\`\n**فشل:** \`${failed}\``, inline: true },
-                                        { name: 'Names', value: nameRequired ? `**تم:** \`${nameSuccess}/${nameRequired}\`\n**فشل:** \`${nameRequired - nameSuccess}\`` : '**بدون تغيير**', inline: true },
-                                        { name: 'Details', value: details.slice(0, 8).join('\n') || '**لا توجد تفاصيل.**', inline: false },
+                                        { name: '🤖 البوتات', value: `✅ \`${success}\` نجح\n❌ \`${failed}\` فشل\n📊 \`${targets.length}\` إجمالي`, inline: true },
+                                        { name: '📝 الأسماء', value: nameField, inline: true },
+                                        { name: '\u200b', value: '\u200b', inline: true },
+                                        { name: '📋 التفاصيل', value: details.slice(0, 10).join('\n') || '—', inline: false },
                                     ],
                                 );
-                                if (details.length > 8) {
-                                    resultEmbed.addFields({ name: 'More', value: `**+${details.length - 8}** بوت إضافي.`, inline: false });
+                                if (details.length > 10) {
+                                    resultEmbed.addFields({ name: '➕ المزيد', value: `وـ **${details.length - 10}** بوت إضافي.`, inline: false });
                                 }
 
                                 await mainMsg.edit({
@@ -448,7 +492,7 @@ module.exports = {
                             } catch (e) {
                                 await mainMsg.edit({
                                     content: `<@${interaction.user.id}>`,
-                                    embeds: [buildDistributionEmbed('Distribution Failed', `**المنظم:** <@${interaction.user.id}>\n**الخطأ:** ${e.message}`)],
+                                    embeds: [buildDistributionEmbed('❌ Distribution Failed', `**المنظم:** <@${interaction.user.id}>\n**الخطأ:** ${e.message}`)],
                                     components: [],
                                     allowedMentions: { users: [interaction.user.id] },
                                 });
