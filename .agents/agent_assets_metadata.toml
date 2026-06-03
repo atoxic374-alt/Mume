@@ -48,3 +48,27 @@ id = "ZBbYGF56_g-TpVnlqO5SR"
 uri = "file://attached_assets/progress_test.png"
 type = "image"
 title = "البار مع الوقت — بعد الإصلاح"
+
+[[outputs]]
+id = "X-XDJCa-onLo6OVl2WV6B"
+uri = "file://attached_assets/test_start.png"
+type = "image"
+title = "بداية الأغنية — 0:00 / 3:30"
+
+[[outputs]]
+id = "ujvW2DqZo4BcPB1tCN3uZ"
+uri = "file://attached_assets/test_mid.png"
+type = "image"
+title = "منتصف الأغنية — 0:26 / 3:12"
+
+[[outputs]]
+id = "CAeA2rtFKHjGJvDfewOwJ"
+uri = "file://attached_assets/test_end.png"
+type = "image"
+title = "نهاية الأغنية — 3:15 / 3:20"
+
+[[outputs]]
+id = "loEjQXJXQZ0jAARKSARv1"
+uri = "file://attached_assets/test_long.png"
+type = "image"
+title = "أغنية طويلة — 1:03:00 / 2:00:00"

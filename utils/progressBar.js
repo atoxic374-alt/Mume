@@ -1,6 +1,65 @@
 'use strict';
 
-const { createCanvas } = require('@napi-rs/canvas');
+const { createCanvas, GlobalFonts } = require('@napi-rs/canvas');
+const path = require('path');
+
+// ── Font registration: try bundled fonts so text always renders ───────────────
+(function registerFallbackFonts() {
+    const candidates = [
+        {
+            file: path.join(__dirname, '../node_modules/duratiform/docs/fonts/Montserrat/Montserrat-Bold.ttf'),
+            family: 'PB-Montserrat',
+        },
+        {
+            file: path.join(__dirname, '../node_modules/duratiform/docs/fonts/Montserrat/Montserrat-Regular.ttf'),
+            family: 'PB-Montserrat',
+        },
+        {
+            file: path.join(__dirname, '../node_modules/duratiform/docs/fonts/Source-Sans-Pro/sourcesanspro-regular-webfont.ttf'),
+            family: 'PB-SourceSans',
+        },
+    ];
+    for (const { file, family } of candidates) {
+        try { GlobalFonts.registerFromPath(file, family); } catch (_) {}
+    }
+})();
+
+// ── Pick the best font available at runtime ───────────────────────────────────
+function resolveFont(size = 19, bold = true) {
+    const weight    = bold ? 'bold ' : '';
+    const available = new Set((GlobalFonts.families || []).map(f => f.family));
+    const priority  = ['PB-Montserrat', 'PB-SourceSans', 'DejaVu Sans', 'DejaVu Serif'];
+    for (const family of priority) {
+        if (available.has(family)) return `${weight}${size}px "${family}"`;
+    }
+    // last resort — system name; may still work on some hosts
+    return `${weight}${size}px sans-serif`;
+}
+
+// ── Validate that a text string actually renders with non-zero width ──────────
+function fontRendersText(ctx, text, font) {
+    try {
+        ctx.font = font;
+        const w = ctx.measureText(text).width;
+        return Number.isFinite(w) && w > 2;
+    } catch (_) {
+        return false;
+    }
+}
+
+// ── Pick the first font (from a list) that measurably renders the sample ─────
+function pickWorkingFont(ctx, sample, size = 19, bold = true) {
+    const weight    = bold ? 'bold ' : '';
+    const available = new Set((GlobalFonts.families || []).map(f => f.family));
+    const priority  = ['PB-Montserrat', 'PB-SourceSans', 'DejaVu Sans', 'DejaVu Serif', 'DejaVu Sans Mono'];
+    for (const family of priority) {
+        if (!available.has(family)) continue;
+        const font = `${weight}${size}px "${family}"`;
+        if (fontRendersText(ctx, sample, font)) return font;
+    }
+    // final fallback — try plain sans-serif regardless
+    return `${weight}${size}px sans-serif`;
+}
 
 const PROGRESS_CACHE_MAX_ENTRIES = 768;
 const PROGRESS_CACHE_MAX_BYTES = 12 * 1024 * 1024;
@@ -169,11 +228,14 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         const GUTTER  = 14;
         const RAIL_H  = 6;
         const KNOB_R  = 9;
-        const FONT    = 'bold 19px "DejaVu Sans"';
 
         const cDisc = createCanvas(W, H);
         const cx    = cDisc.getContext('2d');
         cx.clearRect(0, 0, W, H);
+
+        // ── Resolve font: pick first family that measurably renders digits ───────
+        const sampleText = currentLabel || durationLabel || '0:00';
+        const FONT = pickWorkingFont(cx, sampleText, 19, true);
 
         // ── Measure labels first so the rail sits between them ──────────────────
         cx.font         = FONT;
