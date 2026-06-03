@@ -1739,6 +1739,21 @@ module.exports = {
             }
         });
 
+        // ── Fix: Re-init Lavalink after Discord WebSocket shard resumes ──────────
+        TrueMusic.on('shardResume', () => {
+            const allOffline = TrueMusic.poru?.nodes?.size > 0 &&
+                [...(TrueMusic.poru.nodes?.values() || [])].every(n => !n.isConnected);
+            if (allOffline) {
+                console.log('[Poru] Shard resumed — forcing Lavalink re-init');
+                try { TrueMusic.poru.init(TrueMusic); } catch {}
+            } else {
+                // Nodes are connected — recover any stalled players
+                TrueMusic.poru?.nodes?.forEach?.((node) => {
+                    if (node.isConnected) scheduleNodeRecovery(node, 'shard_resume');
+                });
+            }
+        });
+
         TrueMusic.once('clientReady', async () => {
             refreshEmbedColor(TrueMusic).catch(() => {});
             try { TrueMusic.poru.init(TrueMusic); } catch (e) { console.error(`[Poru] فشل الاتصال بـ Lavalink: ${e.message}`); }
@@ -1771,6 +1786,9 @@ module.exports = {
                 }
 
                 if (tokenObj.channel) {
+                    // ── Heartbeat: keep activity alive so idle-killer never fires ──
+                    botLastActivity.set(token, Date.now());
+
                     let guild = TrueMusic.guilds.cache.get(tokenObj.Server);
                     if (guild) {
                         const musicChannel = guild.channels.cache.get(tokenObj.channel);
@@ -1782,6 +1800,13 @@ module.exports = {
 
                             if (shouldReconnect) {
                                 if (!TrueMusic.readyAt) return;
+
+                                // ── Fix: if all Lavalink nodes are offline, force re-init ──
+                                const allNodesOffline = TrueMusic.poru?.nodes?.size > 0 &&
+                                    [...(TrueMusic.poru.nodes?.values() || [])].every(n => !n.isConnected);
+                                if (allNodesOffline) {
+                                    try { TrueMusic.poru.init(TrueMusic); } catch {}
+                                }
 
                                 try {
                                     await ensureConfiguredVoice(guild, tokenObj, 'periodic_guard');
@@ -3327,6 +3352,9 @@ module.exports = {
 
 
                 TrueMusic.on('interactionCreate', async (interaction) => {
+                    // Update activity timestamp on every interaction so idle-killer doesn't fire
+                    botLastActivity.set(token, Date.now());
+
                     const musicButtons = new Set(['loop', 'pause', 'volume_down', 'volume_up', 'skip', 'like', 'prev', 'stop', 'queue_btn']);
                     const isMusicButton = interaction.isButton() && musicButtons.has(interaction.customId);
                     const isMusicMenu = interaction.isStringSelectMenu() && ['np_artist', 'np_filter'].includes(interaction.customId);
