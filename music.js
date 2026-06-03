@@ -518,6 +518,16 @@ function buildNowPlayingMetaRow(tokenObj, currentTime, totalTime, refId = 'np', 
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(true));
     }
+    if (options.requester) {
+        const byName = typeof options.requester === 'string'
+            ? options.requester
+            : (options.requester?.displayName || options.requester?.globalName || options.requester?.username || 'Unknown');
+        buttons.push(new ButtonBuilder()
+            .setCustomId(`${refId}_requester`)
+            .setLabel(`By: ${byName}`.slice(0, 80))
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(true));
+    }
     return new ActionRowBuilder().addComponents(...buttons.slice(0, 5));
 }
 
@@ -608,6 +618,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
                     time: showDisabledNowPlayingInfo ? false : options.infoTime !== false,
                     volume: showDisabledNowPlayingInfo ? true : options.infoVolume === true,
                     loop: showDisabledNowPlayingInfo ? true : options.infoLoop === true,
+                    requester: requester || null,
                 },
             ));
         }
