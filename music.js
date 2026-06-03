@@ -69,7 +69,7 @@ const FILTER_NAMES = {
 };
 
 const FILTER_OPTIONS = [
-    { label: 'إيقاف الفلاتر', value: 'clear', description: 'إزالة جميع الفلاتر', emoji: '⬛' },
+    { label: 'إيقاف الفلاتر', value: 'clear', description: 'إزالة جميع الفلاتر', emoji: MUSIC_EMOJIS.filters },
     { label: 'Bass Boost', value: 'bassboost', description: 'جهير أوضح بدون تشويه', emoji: '🔊' },
     { label: 'Bass Boost+', value: 'bassboost2', description: 'جهير أقوى وواضح', emoji: '📢' },
     { label: 'Nightcore', value: 'nightcore', description: 'سرعة ونبرة أعلى', emoji: '🌙' },
@@ -191,7 +191,7 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
             likeInPrevSlot
                 ? new ButtonBuilder()
                     .setCustomId('like')
-                    .setEmoji(liked ? '💔' : '❤️')
+                    .setEmoji(liked ? MUSIC_EMOJIS.dislike : MUSIC_EMOJIS.like)
                     .setStyle(liked ? ButtonStyle.Danger : ButtonStyle.Secondary)
                 : new ButtonBuilder()
                     .setCustomId('prev')
@@ -199,11 +199,11 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
                     .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('stop')
-                .setEmoji('⏹')
+                .setEmoji(MUSIC_EMOJIS.stop)
                 .setStyle(dangerStop ? ButtonStyle.Danger : ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('pause')
-                .setEmoji(paused ? '▶️' : MUSIC_EMOJIS.pause)
+                .setEmoji(MUSIC_EMOJIS.pause)
                 .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('skip')
@@ -222,7 +222,7 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
                 .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('queue_btn')
-                .setEmoji('📋')
+                .setEmoji(MUSIC_EMOJIS.queue)
                 .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('volume_up')
@@ -234,7 +234,7 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
         row2.addComponents(
             new ButtonBuilder()
                 .setCustomId('like')
-                .setEmoji(liked ? '💔' : '❤️')
+                .setEmoji(liked ? MUSIC_EMOJIS.dislike : MUSIC_EMOJIS.like)
                 .setStyle(liked ? ButtonStyle.Danger : ButtonStyle.Secondary),
         );
     }
@@ -253,7 +253,7 @@ function buildMusicComponents({ liked = false, paused = false, artistTracks = []
                 label: (t.info.title || 'Unknown').slice(0, 99),
                 value: String(i),
                 description: `${shortDuration(t.info.length)} · ${(t.info.author || '').slice(0, 50)}`.slice(0, 99),
-                emoji: ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'][i],
+                emoji: MUSIC_EMOJIS.artistTop,
             })));
         rows.push(new ActionRowBuilder().addComponents(artistMenu));
     }
@@ -3115,7 +3115,7 @@ module.exports = {
                 let completed = false;
 
                         const platformOptions = [
-                            { label: 'Smart Search', value: 'auto', emoji: '🔎', description: 'بحث متعدد المنصات وبأكثر من صيغة' },
+                            { label: 'Smart Search', value: 'auto', emoji: MUSIC_EMOJIS.smartSearch, description: 'بحث متعدد المنصات وبأكثر من صيغة' },
                             { label: 'YouTube', value: 'ytsearch', emoji: MUSIC_EMOJIS.platforms.ytsearch },
                             { label: 'YouTube Music', value: 'ytmsearch', emoji: MUSIC_EMOJIS.platforms.ytmsearch },
                     { label: 'SoundCloud', value: 'scsearch', emoji: MUSIC_EMOJIS.platforms.scsearch },
