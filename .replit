@@ -43,8 +43,12 @@ isCanvasWorkflow = true
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd artifacts/mockup-sandbox && PORT=8000 BASE_PATH=/__mockup/ npm run dev"
-waitForPort = 8000
+args = "cd artifacts/mockup-sandbox && PORT=5173 BASE_PATH=/__mockup/ npm run dev"
+waitForPort = 5173
+
+[[ports]]
+localPort = 5173
+externalPort = 5173
 
 [[ports]]
 localPort = 8000
