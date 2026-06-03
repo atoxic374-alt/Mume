@@ -175,9 +175,10 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         const GUTTER       = 14;   // px between label and rail edge
         const RAIL_H       = 6;
         const KNOB_R       = 10;
-        const LABEL_COLOR  = 'rgba(220,222,227,0.97)';   // Discord secondary text
+        const LABEL_COLOR  = 'rgba(240,242,246,0.98)';
+        const LABEL_BG     = 'rgba(10,11,14,0.62)';
         const RAIL_BG      = 'rgba(65,69,73,0.90)';      // Discord dark input bg
-        const LABEL_SHADOW = 'rgba(0,0,0,0.65)';
+        const LABEL_SHADOW = 'rgba(0,0,0,0.0)';
 
         // Resize canvas to the canonical height
         const cDisc = createCanvas(W, H);
@@ -205,12 +206,19 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
 
         // ── Draw current-time label (left) ───────────────────────────────
         if (currentLabel) {
+            const PAD_X = 6, PAD_Y = 4;
+            const bgW = curW + PAD_X * 2;
+            const bgH = 30;
+            const bgX = 0;
+            const bgY = Math.round((H - bgH) / 2);
             cx.save();
+            cx.fillStyle = LABEL_BG;
+            fillRoundedRect(cx, bgX, bgY, bgW, bgH, 6);
             cx.textAlign   = 'right';
             cx.shadowColor = LABEL_SHADOW;
-            cx.shadowBlur  = 2;
+            cx.shadowBlur  = 0;
             cx.fillStyle   = LABEL_COLOR;
-            cx.fillText(currentLabel, curW, H / 2);
+            cx.fillText(currentLabel, bgW - PAD_X, H / 2);
             cx.restore();
         }
 
@@ -247,12 +255,19 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
 
         // ── Draw total-duration label (right) ────────────────────────────
         if (durationLabel) {
+            const PAD_X = 6;
+            const bgW = totW + PAD_X * 2;
+            const bgH = 30;
+            const bgX = W - bgW;
+            const bgY = Math.round((H - bgH) / 2);
             cx.save();
+            cx.fillStyle = LABEL_BG;
+            fillRoundedRect(cx, bgX, bgY, bgW, bgH, 6);
             cx.textAlign   = 'left';
             cx.shadowColor = LABEL_SHADOW;
-            cx.shadowBlur  = 2;
+            cx.shadowBlur  = 0;
             cx.fillStyle   = LABEL_COLOR;
-            cx.fillText(durationLabel, railEnd + GUTTER, H / 2);
+            cx.fillText(durationLabel, bgX + PAD_X, H / 2);
             cx.restore();
         }
 
