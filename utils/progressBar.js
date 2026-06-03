@@ -225,9 +225,9 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
     if (variant === 'discordCompact') {
         const W       = width;
         const H       = Math.max(56, height);
-        const GUTTER  = 14;
-        const RAIL_H  = 6;
-        const KNOB_R  = 9;
+        const GUTTER  = 12;
+        const RAIL_H  = 5;
+        const KNOB_R  = 5;
 
         const cDisc = createCanvas(W, H);
         const cx    = cDisc.getContext('2d');
@@ -235,7 +235,7 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
 
         // ── Resolve font: pick first family that measurably renders digits ───────
         const sampleText = currentLabel || durationLabel || '0:00';
-        const FONT = pickWorkingFont(cx, sampleText, 19, true);
+        const FONT = pickWorkingFont(cx, sampleText, 14, true);
 
         // ── Measure labels first so the rail sits between them ──────────────────
         cx.font         = FONT;
