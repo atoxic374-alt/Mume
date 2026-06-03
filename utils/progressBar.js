@@ -164,69 +164,35 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
     ctx.clearRect(0, 0, width, height);
 
     if (variant === 'discordCompact') {
-        // ── Discord-style single-row layout ──────────────────────────────
-        // [currentTime]  ────────●─────────────────────  [totalTime]
-        //
-        // Height is caller-supplied (min 52 so knob r=10 and 24px font fit).
+        // ── Discord-style bar only (no canvas text — labels shown via TextDisplay) ──
         const W = width;
-        const H = Math.max(52, height);
+        const H = Math.max(40, height);
+        const GUTTER  = 12;
+        const RAIL_H  = 6;
+        const KNOB_R  = 10;
+        const RAIL_BG = 'rgba(65,69,73,0.90)';
 
-        const FONT         = 'bold 24px sans-serif';
-        const GUTTER       = 14;   // px between label and rail edge
-        const RAIL_H       = 6;
-        const KNOB_R       = 10;
-        const LABEL_COLOR  = 'rgba(240,242,246,0.98)';
-        const LABEL_BG     = 'rgba(10,11,14,0.62)';
-        const RAIL_BG      = 'rgba(65,69,73,0.90)';      // Discord dark input bg
-        const LABEL_SHADOW = 'rgba(0,0,0,0.0)';
-
-        // Resize canvas to the canonical height
         const cDisc = createCanvas(W, H);
         const cx    = cDisc.getContext('2d');
         cx.imageSmoothingEnabled = true;
         cx.imageSmoothingQuality = 'high';
         cx.clearRect(0, 0, W, H);
-        cx.font          = FONT;
-        cx.textBaseline  = 'middle';
 
-        // Measure labels (fall back to fixed width if empty or font unmeasurable)
-        const MIN_LABEL_W = 44;
-        const curW  = currentLabel  ? Math.max(MIN_LABEL_W, Math.ceil(cx.measureText(currentLabel).width)  + 4) : 0;
-        const totW  = durationLabel ? Math.max(MIN_LABEL_W, Math.ceil(cx.measureText(durationLabel).width) + 4) : 0;
-
-        // Rail geometry
-        const railX  = (curW  > 0 ? curW  + GUTTER * 2 : GUTTER);
-        const railEnd = W - (totW > 0 ? totW + GUTTER * 2 : GUTTER);
+        // Rail geometry — full width, no label margins
+        const railX  = GUTTER;
+        const railEnd = W - GUTTER;
         const railW  = Math.max(20, railEnd - railX);
         const railY  = Math.round((H - RAIL_H) / 2);
         const railR  = RAIL_H / 2;
         const fillW  = Math.max(0, Math.min(railW, railW * ratio));
         const knobX  = Math.max(railX + KNOB_R, Math.min(railX + fillW, railEnd - KNOB_R));
-        const knobY  = railY + RAIL_H / 2;   // vertical center of rail
+        const knobY  = railY + RAIL_H / 2;
 
-        // ── Draw current-time label (left) ───────────────────────────────
-        if (currentLabel) {
-            const PAD_X = 6, PAD_Y = 4;
-            const bgW = curW + PAD_X * 2;
-            const bgH = 30;
-            const bgX = 0;
-            const bgY = Math.round((H - bgH) / 2);
-            cx.save();
-            cx.fillStyle = LABEL_BG;
-            fillRoundedRect(cx, bgX, bgY, bgW, bgH, 6);
-            cx.textAlign   = 'right';
-            cx.shadowColor = LABEL_SHADOW;
-            cx.shadowBlur  = 0;
-            cx.fillStyle   = LABEL_COLOR;
-            cx.fillText(currentLabel, bgW - PAD_X, H / 2);
-            cx.restore();
-        }
-
-        // ── Draw rail background ─────────────────────────────────────────
+        // Rail background
         cx.fillStyle = RAIL_BG;
         fillRoundedRect(cx, railX, railY, railW, RAIL_H, railR);
 
-        // ── Draw fill ────────────────────────────────────────────────────
+        // Fill
         if (fillW > 1) {
             cx.save();
             cx.fillStyle   = rgba(base, 0.97);
@@ -236,7 +202,7 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
             cx.restore();
         }
 
-        // ── Draw knob ────────────────────────────────────────────────────
+        // Knob
         cx.save();
         cx.shadowColor = 'rgba(0,0,0,0.45)';
         cx.shadowBlur  = 4;
@@ -246,30 +212,11 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         cx.fill();
         cx.restore();
 
-        // subtle ring on knob using accent color
         cx.strokeStyle = rgba(light, 0.55);
         cx.lineWidth   = 1.2;
         cx.beginPath();
         cx.arc(knobX, knobY, KNOB_R - 0.6, 0, Math.PI * 2);
         cx.stroke();
-
-        // ── Draw total-duration label (right) ────────────────────────────
-        if (durationLabel) {
-            const PAD_X = 6;
-            const bgW = totW + PAD_X * 2;
-            const bgH = 30;
-            const bgX = W - bgW;
-            const bgY = Math.round((H - bgH) / 2);
-            cx.save();
-            cx.fillStyle = LABEL_BG;
-            fillRoundedRect(cx, bgX, bgY, bgW, bgH, 6);
-            cx.textAlign   = 'left';
-            cx.shadowColor = LABEL_SHADOW;
-            cx.shadowBlur  = 0;
-            cx.fillStyle   = LABEL_COLOR;
-            cx.fillText(durationLabel, bgX + PAD_X, H / 2);
-            cx.restore();
-        }
 
         return progressCacheSet(cacheKey, {
             attachment: cDisc.toBuffer('image/png'),

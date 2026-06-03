@@ -584,6 +584,10 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
             variant: 'discordCompact',
         });
 
+        const timeText = (currentTime > 0 || totalTime > 0)
+            ? `-# ${shortDuration(currentTime)} / ${shortDuration(totalTime)}`
+            : null;
+
         const container = new ContainerBuilder()
             .addSectionComponents(section)
             .addMediaGalleryComponents(
@@ -593,6 +597,12 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
                         .setDescription('Playback progress'),
                 ),
             );
+
+        if (timeText) {
+            container.addTextDisplayComponents(
+                new TextDisplayBuilder().setContent(timeText),
+            );
+        }
 
         if (useEmbedAccent) container.setAccentColor(accentColor);
 
