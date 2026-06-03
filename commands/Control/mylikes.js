@@ -27,12 +27,10 @@ function cleanText(value, fallback = 'Unknown', max = 80) {
 }
 
 function escapeLinkText(value, max = 80) {
+    // Only escape ] to avoid breaking the link syntax.
+    // Escaping ( ) or \ creates visible backslashes in Discord.
     return cleanText(value, 'Unknown', max)
-        .replace(/\\/g, '\\\\')
-        .replace(/\[/g, '\\[')
-        .replace(/\]/g, '\\]')
-        .replace(/\(/g, '\\(')
-        .replace(/\)/g, '\\)');
+        .replace(/\]/g, '\\]');
 }
 
 function trackLink(title, uri, max = 70) {

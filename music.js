@@ -386,12 +386,10 @@ function cleanInlineText(value, fallback = 'Unknown', maxLength = 120) {
 }
 
 function escapeMarkdownLinkText(value, maxLength = 100) {
+    // Only escape ] — that's the only char that breaks a markdown link label.
+    // Escaping ( ) or \ produces visible backslashes in Discord.
     return cleanInlineText(value, 'Unknown', maxLength)
-        .replace(/\\/g, '\\\\')
-        .replace(/\[/g, '\\[')
-        .replace(/\]/g, '\\]')
-        .replace(/\(/g, '\\(')
-        .replace(/\)/g, '\\)');
+        .replace(/\]/g, '\\]');
 }
 
 function isHttpUrl(value) {
@@ -2175,7 +2173,8 @@ module.exports = {
       const naturalEnd = isNaturalTrackEnd(reason);
       player.data.lastTrackEndReason = reason;
       player.data.lastTrackEndNatural = naturalEnd;
-      if (!naturalEnd) console.warn(`[TrackEnd] non-natural end for ${trackIdentity(track) || 'unknown'}: ${reason}`);
+      // 'stopped' is intentional (user ran stop/leave) — only warn for unexpected reasons
+      if (!naturalEnd && reason !== 'stopped') console.warn(`[TrackEnd] non-natural end for ${trackIdentity(track) || 'unknown'}: ${reason}`);
       await finalizePlayerUi(player, { complete: naturalEnd, track });
       await bumpQueueVersion(player, `track_end:${reason}`);
             });
@@ -2291,7 +2290,8 @@ module.exports = {
                 );
                 return;
             }
-            console.warn(`[NowPlaying] finalizing stale panel before new track: ${previousIdentity} -> ${identity || 'unknown'}`);
+            // Normal when skipping — demote to debug to avoid log noise
+            if (process.env.DEBUG_NP) console.warn(`[NowPlaying] finalizing stale panel before new track: ${previousIdentity} -> ${identity || 'unknown'}`);
             await finalizePlayerUi(player, { complete: false, track: previousContext?.track });
             ensurePlayerData(player);
         }
@@ -2526,10 +2526,11 @@ module.exports = {
                                     }
                                     const likesCommandNames = ['mylikes', 'likes', 'liked', 'لايكاتي'];
                                     const runMyLikesCommand = (args = []) => {
-                                        // Must be in same VC as this sub-bot — identical to music command behaviour
-                                        const botVoice   = message.guild.members?.me?.voice?.channel;
+                                        // If this bot IS in a VC, the user must be in the same one.
+                                        // If the bot is not in any VC yet, allow the command (view-only; play will check later).
+                                        const botVoice    = message.guild.members?.me?.voice?.channel;
                                         const memberVoice = message.member?.voice?.channel;
-                                        if (!memberVoice || !botVoice || memberVoice.id !== botVoice.id) return null;
+                                        if (botVoice && (!memberVoice || memberVoice.id !== botVoice.id)) return null;
 
                                         // Must be in the allowed text channel (if one is configured)
                                         const allowedMyLikesChannels = new Set([tokenObj.chat, tokenObj.channel].filter(Boolean));
