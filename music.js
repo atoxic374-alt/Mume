@@ -581,8 +581,8 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
             color: progressColor,
             currentLabel: shortDuration(currentTime),
             durationLabel: shortDuration(totalTime),
-            width: options.progressWidth || 500,
-            height: 36,
+            width: options.progressWidth || 800,
+            height: 52,
             variant: 'discordCompact',
         });
 
@@ -2326,13 +2326,13 @@ module.exports = {
         }
 
                 const requester = track.info?.requester;
-	        const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
-	        await updatePlaybackVoiceStatus(TrueMusic, tokenObj2, player, track);
-	                if (!requester) {
-	                    player.data.nowPlayingSendLock = null;
-	                    console.warn(`[NowPlaying] skipped panel without requester for ${identity || 'unknown'}`);
-	                    return;
-	                }
+                const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
+                await updatePlaybackVoiceStatus(TrueMusic, tokenObj2, player, track);
+                        if (!requester) {
+                            player.data.nowPlayingSendLock = null;
+                            console.warn(`[NowPlaying] skipped panel without requester for ${identity || 'unknown'}`);
+                            return;
+                        }
 
                 const tc = player.data.lastTextChannel || player.textChannel;
                 let channel;
@@ -2341,11 +2341,11 @@ module.exports = {
                 } else if (tc && typeof tc === 'object') {
                     channel = TrueMusic.channels.cache.get(tc.id) || tc;
                 }
-	                if (!channel) {
-	                    player.data.nowPlayingSendLock = null;
-	                    console.warn(`[NowPlaying] skipped panel without text channel for ${identity || 'unknown'}`);
-	                    return;
-	                }
+                        if (!channel) {
+                            player.data.nowPlayingSendLock = null;
+                            console.warn(`[NowPlaying] skipped panel without text channel for ${identity || 'unknown'}`);
+                            return;
+                        }
 
                 const selectedFilter = player.data.activeFilter || 'clear';
         const alreadyLiked = await likes.isLiked(requester.id, track).catch((err) => {
@@ -2438,9 +2438,9 @@ module.exports = {
                             compactPlayLayout: ui3.compactPlayLayout === true,
                             showProgressLabels: true,
                             showInfoRow: false,
-	                            useEmbedAccent: false,
-	                            progressWidth: PLAY_PROGRESS_WIDTH,
-	                        });
+                                    useEmbedAccent: false,
+                                    progressWidth: PLAY_PROGRESS_WIDTH,
+                                });
                 await msg.edit(payload3).catch((err) => {
                     warnPlayerOnce(player, `edit-failed:${msg.id}`, `[ProgressUpdate] edit failed for ${msg.id}: ${err?.message || err}`);
                 });

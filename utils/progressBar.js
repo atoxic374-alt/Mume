@@ -164,65 +164,101 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
     ctx.clearRect(0, 0, width, height);
 
     if (variant === 'discordCompact') {
-        ctx.font = '700 20px sans-serif';
-        ctx.textBaseline = 'middle';
+        // ── Discord-style single-row layout ──────────────────────────────
+        // [currentTime]  ────────●─────────────────────  [totalTime]
+        //
+        // Canvas is always HEIGHT=52 regardless of what caller passes,
+        // to guarantee the knob (r=10) and 24px text fit with padding.
+        const W = width;
+        const H = 52;
 
-        const currentW = currentLabel ? Math.ceil(ctx.measureText(currentLabel).width) + 16 : 18;
-        const durationW = durationLabel ? Math.ceil(ctx.measureText(durationLabel).width) + 14 : 18;
-        const railX = currentW;
-        const railW = Math.max(40, width - railX - durationW);
-        const railH = 7;
-        const railY = Math.round((height - railH) / 2);
-        const radius = railH / 2;
-        const knobRadius = 6;
-        const fillW = railW * ratio;
-        const knobX = railX + fillW;
-        const knobY = railY + railH / 2;
-        const drawLabel = (text, x, align) => {
-            ctx.save();
-            ctx.textAlign = align;
-            ctx.lineWidth = 3;
-            ctx.strokeStyle = 'rgba(0,0,0,0.65)';
-            ctx.strokeText(text, x, height / 2);
-            ctx.fillStyle = 'rgba(218,219,226,0.99)';
-            ctx.fillText(text, x, height / 2);
-            ctx.restore();
-        };
+        const FONT         = '700 24px "DejaVu Sans"';
+        const GUTTER       = 14;   // px between label and rail edge
+        const RAIL_H       = 6;
+        const KNOB_R       = 10;
+        const LABEL_COLOR  = 'rgba(181,186,196,0.95)';   // Discord secondary text
+        const RAIL_BG      = 'rgba(65,69,73,0.90)';      // Discord dark input bg
+        const LABEL_SHADOW = 'rgba(0,0,0,0.55)';
 
+        // Resize canvas to the canonical height
+        const cDisc = createCanvas(W, H);
+        const cx    = cDisc.getContext('2d');
+        cx.imageSmoothingEnabled = true;
+        cx.imageSmoothingQuality = 'high';
+        cx.clearRect(0, 0, W, H);
+        cx.font          = FONT;
+        cx.textBaseline  = 'middle';
+
+        // Measure labels (fall back to fixed width if empty)
+        const curW  = currentLabel  ? Math.ceil(cx.measureText(currentLabel).width)  + 4 : 0;
+        const totW  = durationLabel ? Math.ceil(cx.measureText(durationLabel).width) + 4 : 0;
+
+        // Rail geometry
+        const railX  = (curW  > 0 ? curW  + GUTTER * 2 : GUTTER);
+        const railEnd = W - (totW > 0 ? totW + GUTTER * 2 : GUTTER);
+        const railW  = Math.max(20, railEnd - railX);
+        const railY  = Math.round((H - RAIL_H) / 2);
+        const railR  = RAIL_H / 2;
+        const fillW  = Math.max(0, Math.min(railW, railW * ratio));
+        const knobX  = Math.max(railX + KNOB_R, Math.min(railX + fillW, railEnd - KNOB_R));
+        const knobY  = railY + RAIL_H / 2;   // vertical center of rail
+
+        // ── Draw current-time label (left) ───────────────────────────────
         if (currentLabel) {
-            drawLabel(currentLabel, 0, 'left');
+            cx.save();
+            cx.textAlign   = 'right';
+            cx.shadowColor = LABEL_SHADOW;
+            cx.shadowBlur  = 2;
+            cx.fillStyle   = LABEL_COLOR;
+            cx.fillText(currentLabel, curW, H / 2);
+            cx.restore();
         }
 
-        ctx.fillStyle = 'rgba(50,50,52,0.96)';
-        fillRoundedRect(ctx, railX, railY, railW, railH, radius);
+        // ── Draw rail background ─────────────────────────────────────────
+        cx.fillStyle = RAIL_BG;
+        fillRoundedRect(cx, railX, railY, railW, RAIL_H, railR);
 
-        if (fillW > 0.5) {
-            ctx.fillStyle = rgba(base, 0.98);
-            fillRoundedRect(ctx, railX, railY, fillW, railH, radius);
+        // ── Draw fill ────────────────────────────────────────────────────
+        if (fillW > 1) {
+            cx.save();
+            cx.fillStyle   = rgba(base, 0.97);
+            cx.shadowColor = rgba(base, 0.35);
+            cx.shadowBlur  = 3;
+            fillRoundedRect(cx, railX, railY, fillW, RAIL_H, railR);
+            cx.restore();
         }
 
-        ctx.save();
-        ctx.shadowColor = 'rgba(0,0,0,0.28)';
-        ctx.shadowBlur = 1.5;
-        ctx.fillStyle = 'rgba(254,255,253,0.99)';
-        ctx.beginPath();
-        ctx.arc(knobX, knobY, knobRadius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
+        // ── Draw knob ────────────────────────────────────────────────────
+        cx.save();
+        cx.shadowColor = 'rgba(0,0,0,0.45)';
+        cx.shadowBlur  = 4;
+        cx.fillStyle   = 'rgba(254,254,255,0.98)';
+        cx.beginPath();
+        cx.arc(knobX, knobY, KNOB_R, 0, Math.PI * 2);
+        cx.fill();
+        cx.restore();
 
-        ctx.strokeStyle = rgba(light, 0.78);
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(knobX, knobY, knobRadius - 0.5, 0, Math.PI * 2);
-        ctx.stroke();
+        // subtle ring on knob using accent color
+        cx.strokeStyle = rgba(light, 0.55);
+        cx.lineWidth   = 1.2;
+        cx.beginPath();
+        cx.arc(knobX, knobY, KNOB_R - 0.6, 0, Math.PI * 2);
+        cx.stroke();
 
+        // ── Draw total-duration label (right) ────────────────────────────
         if (durationLabel) {
-            drawLabel(durationLabel, width, 'right');
+            cx.save();
+            cx.textAlign   = 'left';
+            cx.shadowColor = LABEL_SHADOW;
+            cx.shadowBlur  = 2;
+            cx.fillStyle   = LABEL_COLOR;
+            cx.fillText(durationLabel, railEnd + GUTTER, H / 2);
+            cx.restore();
         }
 
         return progressCacheSet(cacheKey, {
-            attachment: canvas.toBuffer('image/png'),
-            name: `progress-compact-v3-${base.hex}-${width}x${height}-${bucket}-${labelKey}.png`,
+            attachment: cDisc.toBuffer('image/png'),
+            name: `progress-compact-v4-${base.hex}-${W}x${H}-${bucket}-${labelKey}.png`,
             ratio,
         });
     }
