@@ -1975,7 +1975,7 @@ module.exports = {
                         await TrueMusic.destroy()
                         setTimeout(async () => {
                             TrueMusic.login(token).then(() => {
-                                reactCustom(message, MUSIC_EMOJIS.like, '💹')
+                                reactCustom(message, MUSIC_EMOJIS.settings, '💹')
                             }).catch(() => { console.log(`${TrueMusic.user.tag} (${TrueMusic.user.id}) has an error with restarting.`) })
                         }, 5000)
 
@@ -1985,7 +1985,7 @@ module.exports = {
 
                         const tryChangeName = (newName, attempts = 0) => {
                             TrueMusic.user.setUsername(newName).then(async () => {
-                                reactCustom(message, MUSIC_EMOJIS.like, '✅');
+                                reactCustom(message, MUSIC_EMOJIS.settings, '✅');
                             }).catch((error) => {
                                 if (error.code === 50035) {
                                     if (attempts < 3) {
@@ -2013,10 +2013,10 @@ module.exports = {
                         TrueMusic.user.setAvatar(url)
                             .then(() => {
                                 refreshEmbedColor(TrueMusic).catch(() => {});
-                                reactCustom(message, MUSIC_EMOJIS.like, '✅');
+                                reactCustom(message, MUSIC_EMOJIS.settings, '✅');
                             })
                             .catch((error) => {
-                                reactCustom(message, MUSIC_EMOJIS.like, '✅');
+                                reactCustom(message, MUSIC_EMOJIS.settings, '✅');
                             });
 
                     } else if (args[0] == 'leave' || args[0] == 'اخرج' || args[0] == 'اطلع' || args[0] == 'disablechannel') {
@@ -2029,7 +2029,7 @@ module.exports = {
                             return tokenBot;
                         });
                         store.set('tokens', data);
-                        reactCustom(message, MUSIC_EMOJIS.like, '✅');
+                        reactCustom(message, MUSIC_EMOJIS.settings, '✅');
                     }
                     else if (args[0] == 'setup') {
                         let channel = message.member.voice.channel;
@@ -2053,7 +2053,7 @@ module.exports = {
                             await TrueMusic.user.setUsername(channel.name);
                             TrueMusic.user.lastChangeTime = Date.now();
                             store.set('tokens', data);
-                            reactCustom(message, MUSIC_EMOJIS.like, '✅');
+                            reactCustom(message, MUSIC_EMOJIS.settings, '✅');
                         } catch (error) {
                             if (error.code === 50035) {
                                 return message.reply('> **Please try to change the name later.**');
@@ -2076,7 +2076,7 @@ module.exports = {
 
                         store.set('tokens', data);
 
-                        reactCustom(message, MUSIC_EMOJIS.like, '✅');
+                        reactCustom(message, MUSIC_EMOJIS.settings, '✅');
                     }
 
                     else if (args[0] == 'setchat' || args[0] == 'chat' || args[0] == 'settc' || args[0] == 'اوامر') {
@@ -2098,7 +2098,7 @@ module.exports = {
                         });
 
                         store.set('tokens', parsedData);
-                        reactCustom(message, MUSIC_EMOJIS.like, '✅');
+                        reactCustom(message, MUSIC_EMOJIS.settings, '✅');
 
                     } else if (args[0] == 'unchat' || args[0] == 'unt' || args[0] == 'الغاء') {
                         let parsedData = store.get('tokens') || [];
@@ -2118,7 +2118,7 @@ module.exports = {
                         });
 
                         store.set('tokens', parsedData);
-                        reactCustom(message, MUSIC_EMOJIS.like, '✅');
+                        reactCustom(message, MUSIC_EMOJIS.settings, '✅');
                         loadPrefix();
 
                     } else if (args[0] == 'ping' || args[0] == 'بنج' || args[0] == 'بنغ') {
@@ -2138,7 +2138,7 @@ module.exports = {
                             ],
                             status: 'online',
                         });
-                        reactCustom(message, MUSIC_EMOJIS.like, '✅');
+                        reactCustom(message, MUSIC_EMOJIS.settings, '✅');
 
                         let tokens = store.get('tokens') || [];
                         let tokenObj = tokens.find((tokenBot) => tokenBot.token == token);

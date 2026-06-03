@@ -10,6 +10,7 @@ const MUSIC_EMOJIS = {
     like: '1511836479570313338',
     dislike: '1511836476869181641',
     queue: '1511836499392466974',
+    settings: '1511856454838255616',
     filters: { id: '1511837180530790592', name: 'filters' },
     artistTop: { id: '1511836503096164595', name: 'artistTop' },
     smartSearch: { id: '1511837177800298669', name: 'smartSearch' },
