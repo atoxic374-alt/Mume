@@ -164,72 +164,79 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
     ctx.clearRect(0, 0, width, height);
 
     if (variant === 'discordCompact') {
-        const W = width;
-        const H = Math.max(52, height);
-        const GUTTER   = 10;
-        const RAIL_H   = 6;
-        const KNOB_R   = 10;
+        const W       = width;
+        const H       = Math.max(56, height);
+        const GUTTER  = 14;
+        const RAIL_H  = 6;
+        const KNOB_R  = 9;
+        const FONT    = 'bold 19px sans-serif';
 
         const cDisc = createCanvas(W, H);
         const cx    = cDisc.getContext('2d');
         cx.clearRect(0, 0, W, H);
 
-        // — measure text first so rail fits between labels —
-        cx.font         = 'bold 20px sans-serif';
+        // ── Measure labels first so the rail sits between them ──────────────────
+        cx.font         = FONT;
         cx.textBaseline = 'middle';
-        const curW  = currentLabel  ? Math.ceil(cx.measureText(currentLabel).width)  + 4 : 0;
-        const totW  = durationLabel ? Math.ceil(cx.measureText(durationLabel).width) + 4 : 0;
+        const curW  = currentLabel  ? Math.ceil(cx.measureText(currentLabel).width)  + 6 : 0;
+        const totW  = durationLabel ? Math.ceil(cx.measureText(durationLabel).width) + 6 : 0;
 
-        const railX   = curW  > 0 ? curW  + GUTTER * 2 : GUTTER;
+        const railX  = curW  > 0 ? curW  + GUTTER * 2 : GUTTER;
         const railEnd = W - (totW > 0 ? totW + GUTTER * 2 : GUTTER);
-        const railW   = Math.max(20, railEnd - railX);
-        const railY   = Math.round((H - RAIL_H) / 2);
-        const railR   = RAIL_H / 2;
-        const fillW   = Math.max(0, Math.min(railW, railW * ratio));
-        const knobX   = Math.max(railX + KNOB_R, Math.min(railX + fillW, railEnd - KNOB_R));
-        const knobY   = railY + RAIL_H / 2;
+        const railW  = Math.max(20, railEnd - railX);
+        const railY  = Math.round((H - RAIL_H) / 2);
+        const railR  = RAIL_H / 2;
+        const fillW  = Math.max(0, Math.min(railW, railW * ratio));
+        const knobX  = Math.max(railX + KNOB_R, Math.min(railX + fillW, railEnd - KNOB_R));
+        const knobY  = railY + RAIL_H / 2;
 
-        // — current time (left) — outline trick: draw black stroke then colored fill —
-        if (currentLabel) {
-            cx.textAlign  = 'right';
-            cx.lineWidth  = 4;
-            cx.strokeStyle = 'rgba(0,0,0,0.55)';
-            cx.lineJoin   = 'round';
-            cx.strokeText(currentLabel, curW + GUTTER, H / 2);
-            cx.fillStyle  = 'rgb(220,222,228)';
-            cx.fillText(currentLabel, curW + GUTTER, H / 2);
-        }
-
-        // — rail —
+        // ── 1. Rail background ───────────────────────────────────────────────────
         cx.fillStyle = 'rgba(70,73,80,0.88)';
         fillRoundedRect(cx, railX, railY, railW, RAIL_H, railR);
 
-        // — filled portion —
+        // ── 2. Filled portion ────────────────────────────────────────────────────
         if (fillW > 1) {
             cx.fillStyle = rgba(base, 0.97);
             fillRoundedRect(cx, railX, railY, fillW, RAIL_H, railR);
         }
 
-        // — knob —
+        // ── 3. Knob ──────────────────────────────────────────────────────────────
         cx.fillStyle = 'rgb(255,255,255)';
         cx.beginPath();
         cx.arc(knobX, knobY, KNOB_R, 0, Math.PI * 2);
         cx.fill();
 
-        // — total time (right) — same outline trick —
-        if (durationLabel) {
-            cx.textAlign   = 'left';
-            cx.lineWidth   = 4;
-            cx.strokeStyle = 'rgba(0,0,0,0.55)';
+        // ── 4. Time labels drawn LAST so they are always on top ─────────────────
+        cx.font         = FONT;
+        cx.textBaseline = 'middle';
+
+        // current time — right-aligned, sitting left of the rail
+        if (currentLabel) {
+            const tx = railX - GUTTER;
+            cx.textAlign   = 'right';
+            cx.lineWidth   = 3;
+            cx.strokeStyle = 'rgba(0,0,0,0.65)';
             cx.lineJoin    = 'round';
-            cx.strokeText(durationLabel, railEnd + GUTTER, H / 2);
-            cx.fillStyle   = 'rgb(220,222,228)';
-            cx.fillText(durationLabel, railEnd + GUTTER, H / 2);
+            cx.strokeText(currentLabel, tx, H / 2);
+            cx.fillStyle   = 'rgb(225,227,232)';
+            cx.fillText(currentLabel, tx, H / 2);
+        }
+
+        // total duration — left-aligned, sitting right of the rail
+        if (durationLabel) {
+            const tx = railEnd + GUTTER;
+            cx.textAlign   = 'left';
+            cx.lineWidth   = 3;
+            cx.strokeStyle = 'rgba(0,0,0,0.65)';
+            cx.lineJoin    = 'round';
+            cx.strokeText(durationLabel, tx, H / 2);
+            cx.fillStyle   = 'rgb(225,227,232)';
+            cx.fillText(durationLabel, tx, H / 2);
         }
 
         return progressCacheSet(cacheKey, {
             attachment: cDisc.toBuffer('image/png'),
-            name: `progress-compact-v4-${base.hex}-${W}x${H}-${bucket}-${labelKey}.png`,
+            name: `progress-compact-v5-${base.hex}-${W}x${H}-${bucket}-${labelKey}.png`,
             ratio,
         });
     }

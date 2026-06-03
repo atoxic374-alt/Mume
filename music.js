@@ -2173,9 +2173,16 @@ module.exports = {
       const naturalEnd = isNaturalTrackEnd(reason);
       player.data.lastTrackEndReason = reason;
       player.data.lastTrackEndNatural = naturalEnd;
-      // 'stopped' is intentional (user ran stop/leave) — only warn for unexpected reasons
       if (!naturalEnd && reason !== 'stopped') console.warn(`[TrackEnd] non-natural end for ${trackIdentity(track) || 'unknown'}: ${reason}`);
-      await finalizePlayerUi(player, { complete: naturalEnd, track });
+      // Guard: if the new track already started and its panel is live, skip UI finalization
+      // to avoid disabling the new panel by mistake (race condition with trackStart).
+      const endingIdentity = trackIdentity(track);
+      const panelIdentity = player.data.nowPlayingTrackIdentity;
+      if (endingIdentity && panelIdentity && endingIdentity !== panelIdentity) {
+          if (process.env.DEBUG_NP) console.warn(`[TrackEnd] skipping finalizePlayerUi — panel already moved to ${panelIdentity}`);
+      } else {
+          await finalizePlayerUi(player, { complete: naturalEnd, track });
+      }
       await bumpQueueVersion(player, `track_end:${reason}`);
             });
 
