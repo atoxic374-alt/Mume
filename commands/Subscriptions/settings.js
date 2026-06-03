@@ -72,6 +72,7 @@ module.exports = {
         let currentPanel = 'SELECT'; 
         if (selectedCode) currentPanel = 'MAIN';
         let activeDistributionCollector = null;
+        let activeDistributionState = null;
 
         function getClientId(token) {
             try { return Buffer.from(token.split('.')[0], 'base64').toString('utf8'); } catch { return ''; }
@@ -258,51 +259,69 @@ module.exports = {
                             return false;
                         }
 
-                        async function setBotNameAndVerify(bot, targetName) {
+                        async function setBotNameAndVerify(bot, targetName, maxRetries = 3) {
                             if (!targetName) return { required: false, ok: true, actual: bot.user?.username || 'Unknown' };
                             const safeName = String(targetName).slice(0, 32);
                             if (bot.user?.username === safeName) {
                                 return { required: true, ok: true, actual: bot.user.username, expected: safeName };
                             }
-                            const updated = await bot.user.setUsername(safeName).catch(err => ({ error: err }));
-                            if (updated?.error) {
-                                return {
-                                    required: true,
-                                    ok: false,
-                                    actual: bot.user?.username || 'Unknown',
-                                    error: updated.error?.message || 'name change failed',
-                                };
+
+                            let lastError = null;
+                            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                                const result = await bot.user.setUsername(safeName).catch(err => ({ _rateErr: err }));
+                                if (!result?._rateErr) {
+                                    const actual = result?.username || bot.user?.username || 'Unknown';
+                                    return { required: true, ok: true, actual, expected: safeName };
+                                }
+                                lastError = result._rateErr;
+
+                                const rawRetryAfter =
+                                    lastError?.rawError?.retry_after ??
+                                    String(lastError?.message || '').match(/(\d+(\.\d+)?)\s*second/i)?.[1];
+                                const retryAfterMs = rawRetryAfter
+                                    ? Math.ceil(parseFloat(rawRetryAfter) * 1000) + 1500
+                                    : null;
+                                const isRateLimit =
+                                    lastError?.status === 429 ||
+                                    lastError?.httpStatus === 429 ||
+                                    retryAfterMs != null;
+
+                                if (isRateLimit && attempt < maxRetries) {
+                                    await new Promise(r => setTimeout(r, Math.min(retryAfterMs ?? 65000, 90000)));
+                                    continue;
+                                }
+                                break;
                             }
 
-                            const actual = updated?.username || bot.user?.username || 'Unknown';
                             return {
                                 required: true,
-                                ok: actual === safeName,
-                                actual,
-                                expected: safeName,
+                                ok: false,
+                                actual: bot.user?.username || 'Unknown',
+                                error: lastError?.message || 'name change failed',
                             };
                         }
 
                         async function executeSmartDistribution(interaction, state) {
                             const targets = distributionTargets(state.scope);
-                    if (targets.length === 0) {
-                        return interaction.update({
-                            content: '',
-                            embeds: [buildDistributionEmbed('Smart Distribution', 'لا توجد بوتات مناسبة لهذا الخيار حالياً.')],
-                            components: [new ActionRowBuilder().addComponents(
-                                new ButtonBuilder().setCustomId(`stg_dist_${mid}_back_rooms`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
-                            )],
-                        });
-                    }
+                            if (targets.length === 0) {
+                                return interaction.update({
+                                    content: '',
+                                    embeds: [buildDistributionEmbed('Smart Distribution', 'لا توجد بوتات مناسبة لهذا الخيار حالياً.')],
+                                    components: [new ActionRowBuilder().addComponents(
+                                        new ButtonBuilder().setCustomId(`stg_dist_${mid}_back_rooms`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+                                    )],
+                                });
+                            }
 
-                    await interaction.update({
-                        content: '',
-                        embeds: [buildDistributionEmbed(
-                            'Smart Distribution',
-                            `سيتم توزيع **${targets.length}** بوت واحداً تلو الآخر.`
-                        )],
-                        components: [],
-                    });
+                            const updateInteraction = !interaction.replied && !interaction.deferred
+                                ? (payload) => interaction.update(payload)
+                                : (payload) => mainMsg.edit(payload);
+
+                            await updateInteraction({
+                                content: '',
+                                embeds: [buildDistributionEmbed('Smart Distribution', `⏳ جاري توزيع **${targets.length}** بوت...`)],
+                                components: [],
+                            });
 
                             let success = 0;
                             let failed = 0;
@@ -313,88 +332,94 @@ module.exports = {
                             try {
                                 const targetChannels = await getDistributionChannels(state.firstChannelId, state.lastChannelId);
 
-                        for (let idx = 0; idx < targets.length; idx++) {
-                            const t = targets[idx];
-                            const bot = runningBots.get(t.token);
-                            if (!bot?.poru) {
-                                failed++;
-                                continue;
-                            }
+                                // Process in parallel batches of 5
+                                const BATCH_SIZE = 5;
+                                for (let batchStart = 0; batchStart < targets.length; batchStart += BATCH_SIZE) {
+                                    const batch = targets.slice(batchStart, batchStart + BATCH_SIZE);
+                                    const batchResults = await Promise.allSettled(batch.map(async (t, batchIdx) => {
+                                        const idx = batchStart + batchIdx;
+                                        const bot = runningBots.get(t.token);
+                                        if (!bot?.poru) throw new Error('bot offline');
 
-                            const guild = bot.guilds.cache.get(t.Server);
-                            if (!guild) {
-                                failed++;
-                                continue;
-                            }
+                                        const guild = bot.guilds.cache.get(t.Server);
+                                        if (!guild) throw new Error('bot outside server');
 
-                            const chan = targetChannels[idx % targetChannels.length];
-                            const targetChannel = guild.channels.cache.get(chan.id)
-                                || await guild.channels.fetch(chan.id).catch(() => null);
+                                        const chan = targetChannels[idx % targetChannels.length];
+                                        const targetChannel = guild.channels.cache.get(chan.id)
+                                            || await guild.channels.fetch(chan.id).catch(() => null);
+                                        if (!isVoiceChannel(targetChannel)) throw new Error('invalid channel');
 
-                            if (!isVoiceChannel(targetChannel)) {
-                                failed++;
-                                continue;
-                            }
+                                        // Compute target name
+                                        let targetName = null;
+                                        if (state.mode === 'names') {
+                                            targetName = state.namesWithNumbers
+                                                ? `${targetChannel.name} ${idx + 1}`.slice(0, 32)
+                                                : targetChannel.name.slice(0, 32);
+                                        } else if (state.mode === 'numbers') {
+                                            targetName = state.namePrefix
+                                                ? `${state.namePrefix}${idx + 1}`.slice(0, 32)
+                                                : String(idx + 1);
+                                        }
 
-                                    const targetName = state.mode === 'names'
-                                        ? targetChannel.name
-                                        : state.mode === 'numbers'
-                                            ? `${targetChannel.name} ${idx + 1}`
-                                            : null;
-                                    const nameResult = await setBotNameAndVerify(bot, targetName);
-                                    if (nameResult.required) {
-                                        nameRequired++;
-                                        if (nameResult.ok) nameSuccess++;
+                                        const nameResult = await setBotNameAndVerify(bot, targetName);
+
+                                        t.channel = targetChannel.id;
+                                        const existing = bot.poru.players.get(guild.id);
+                                        if (existing) {
+                                            existing.textChannel = t.chat || existing.textChannel || targetChannel.id;
+                                            existing.data = existing.data || {};
+                                            if (t.chat) existing.data.lastTextChannel = t.chat;
+                                            try {
+                                                if (!existing.isConnected || existing.voiceChannel !== targetChannel.id) {
+                                                    existing.setVoiceChannel(targetChannel.id, { deaf: true, mute: false });
+                                                }
+                                            } catch (err) {
+                                                if (!(err instanceof ReferenceError)) throw err;
+                                            }
+                                        } else {
+                                            await bot.poru.createConnection({
+                                                guildId: guild.id,
+                                                voiceChannel: targetChannel.id,
+                                                textChannel: t.chat || targetChannel.id,
+                                                deaf: true,
+                                                group: t.token,
+                                            });
+                                        }
+
+                                        const joined = await waitForBotVoiceChannel(guild, bot, targetChannel.id);
+                                        return { idx, bot, targetChannel, nameResult, joined };
+                                    }));
+
+                                    for (const res of batchResults) {
+                                        if (res.status === 'fulfilled') {
+                                            const { idx, bot, targetChannel, nameResult, joined } = res.value;
+                                            if (joined) success++; else failed++;
+                                            if (nameResult.required) {
+                                                nameRequired++;
+                                                if (nameResult.ok) nameSuccess++;
+                                            }
+                                            details.push([
+                                                `**${idx + 1}.** <@${bot.user.id}> → <#${targetChannel.id}>`,
+                                                `**Join:** ${joined ? '✅' : '❌'}`,
+                                                nameResult.required
+                                                    ? `**Name:** ${nameResult.ok ? `✅ \`${nameResult.actual}\`` : `❌ \`${nameResult.error || nameResult.actual}\``}`
+                                                    : null,
+                                            ].filter(Boolean).join(' | '));
+                                        } else {
+                                            failed++;
+                                            details.push(`❌ ${res.reason?.message || 'unknown error'}`);
+                                        }
                                     }
-
-                                    t.channel = targetChannel.id;
-
-                                    const existing = bot.poru.players.get(guild.id);
-                                    if (existing) {
-                                existing.textChannel = t.chat || existing.textChannel || targetChannel.id;
-                                existing.data = existing.data || {};
-                                if (t.chat) existing.data.lastTextChannel = t.chat;
-                                try {
-                                    if (!existing.isConnected || existing.voiceChannel !== targetChannel.id) {
-                                        existing.setVoiceChannel(targetChannel.id, { deaf: true, mute: false });
-                                    }
-                                } catch (err) {
-                                    if (!(err instanceof ReferenceError)) throw err;
-                                }
-                            } else {
-                                await bot.poru.createConnection({
-                                    guildId: guild.id,
-                                    voiceChannel: targetChannel.id,
-                                    textChannel: t.chat || targetChannel.id,
-                                    deaf: true,
-                                            group: t.token,
-                                        });
-                                    }
-
-                                    const joined = await waitForBotVoiceChannel(guild, bot, targetChannel.id);
-                                    if (joined) {
-                                        success++;
-                                    } else {
-                                        failed++;
-                                    }
-
-                                    details.push([
-                                        `**${idx + 1}.** <@${bot.user.id}> → <#${targetChannel.id}>`,
-                                        `**Join:** ${joined ? '**نجح**' : '**فشل**'}`,
-                                        nameResult.required ? `**Name:** ${nameResult.ok ? '**تم**' : `**فشل** (${nameResult.actual})`}` : null,
-                                    ].filter(Boolean).join(' | '));
                                 }
 
                                 store.set('tokens', tokens);
-                        const scopeLabels = {
-                            idle: 'الخاملين',
-                            grouped: 'المتجمعين بفويس واحد',
-                            all: 'الكل',
-                        };
-                        const modeLabels = {
-                            names: 'أسماء الرومات',
-                            numbers: 'ترقيم البوتات',
-                        };
+
+                                const scopeLabels = { idle: 'الخاملين', grouped: 'المتجمعين بفويس واحد', all: 'الكل' };
+                                const modeLabel = state.mode === 'names'
+                                    ? (state.namesWithNumbers ? 'أسماء الرومات + أرقام' : 'أسماء الرومات')
+                                    : state.mode === 'numbers'
+                                        ? (state.namePrefix ? `${state.namePrefix}1, ${state.namePrefix}2...` : '1, 2, 3...')
+                                        : 'بدون تغيير أسماء';
 
                                 const resultEmbed = buildDistributionEmbed(
                                     'Distribution Confirmed',
@@ -402,11 +427,11 @@ module.exports = {
                                         `**المنظم:** <@${interaction.user.id}>`,
                                         `**النطاق:** **${scopeLabels[state.scope] || state.scope}**`,
                                         `**الرومات:** <#${state.firstChannelId}> → <#${state.lastChannelId}>`,
-                                        `**الوضع:** **${modeLabels[state.mode] || state.mode}**`,
+                                        `**الوضع:** **${modeLabel}**`,
                                     ].join('\n'),
                                     [
-                                        { name: 'Bots', value: `**المطلوب:** \`${targets.length}\`\n**دخل فعلياً:** \`${success}\`\n**فشل:** \`${failed}\``, inline: true },
-                                        { name: 'Names', value: nameRequired ? `**تغير الاسم:** \`${nameSuccess}/${nameRequired}\`` : '**بدون تغيير أسماء**', inline: true },
+                                        { name: 'Bots', value: `**المطلوب:** \`${targets.length}\`\n**دخل:** \`${success}\`\n**فشل:** \`${failed}\``, inline: true },
+                                        { name: 'Names', value: nameRequired ? `**تم:** \`${nameSuccess}/${nameRequired}\`\n**فشل:** \`${nameRequired - nameSuccess}\`` : '**بدون تغيير**', inline: true },
                                         { name: 'Details', value: details.slice(0, 8).join('\n') || '**لا توجد تفاصيل.**', inline: false },
                                     ],
                                 );
@@ -429,8 +454,8 @@ module.exports = {
                                 });
                             }
 
-                    setTimeout(() => updatePanel(), 5000);
-                }
+                            setTimeout(() => updatePanel(), 5000);
+                        }
 
                 async function startSmartDistribution(interaction) {
                     const subTokens = getSelectedTokens();
@@ -449,7 +474,10 @@ module.exports = {
                         firstChannelId: null,
                         lastChannelId: null,
                         mode: null,
+                        namePrefix: null,
+                        namesWithNumbers: null,
                     };
+                    activeDistributionState = state;
 
                     const renderScope = async (i = interaction) => {
                         const buckets = distributionBuckets();
@@ -541,8 +569,9 @@ module.exports = {
                             .setCustomId(`stg_dist_${mid}_mode`)
                             .setPlaceholder('Select naming mode')
                             .addOptions([
-                                { label: 'Room Names', value: 'names', description: 'يسمي كل بوت باسم الروم الذي يدخلها' },
-                                { label: 'Numbered Names', value: 'numbers', description: 'يسمي كل بوت باسم الروم مع رقم ترتيبه' },
+                                { label: 'Room Names', value: 'names', description: 'يسمي كل بوت باسم الروم (اختياري: مع أرقام)' },
+                                { label: 'Numbered Names', value: 'numbers', description: 'اسم مخصص + رقم: Ahmed1, Ahmed2 أو أرقام فقط: 1, 2, 3' },
+                                { label: 'No Rename', value: 'none', description: 'توزيع البوتات بدون تغيير أسمائها' },
                             ]);
                         const row = new ActionRowBuilder().addComponents(select);
                         const back = new ActionRowBuilder().addComponents(
@@ -556,11 +585,49 @@ module.exports = {
                                 [
                                     `النطاق: **${state.scope === 'idle' ? 'الخاملين' : state.scope === 'grouped' ? 'المتجمعين' : 'الكل'}**`,
                                     `الرومات: <#${state.firstChannelId}> → <#${state.lastChannelId}>`,
-                                    'اختر وضع التسمية، وبعدها سيبدأ التوزيع مباشرة.',
+                                    'اختر وضع التسمية.',
                                 ].join('\n')
                             )],
                             components: [row, back],
                         });
+                    };
+
+                    const renderNamesConfirm = async (i) => {
+                        return i.update({
+                            content: '',
+                            embeds: [buildDistributionEmbed(
+                                'Smart Distribution — أسماء الرومات',
+                                [
+                                    `النطاق: **${state.scope === 'idle' ? 'الخاملين' : state.scope === 'grouped' ? 'المتجمعين' : 'الكل'}**`,
+                                    `الرومات: <#${state.firstChannelId}> → <#${state.lastChannelId}>`,
+                                    '',
+                                    '**هل تريد إضافة أرقام ترتيبية لأسماء الرومات؟**',
+                                    '`مع أرقام` ← روم A 1 ، روم B 2 ، روم C 3',
+                                    '`بدون أرقام` ← روم A ، روم B ، روم C',
+                                ].join('\n')
+                            )],
+                            components: [new ActionRowBuilder().addComponents(
+                                new ButtonBuilder().setCustomId(`stg_dist_${mid}_names_withnum`).setLabel('مع أرقام').setStyle(ButtonStyle.Primary),
+                                new ButtonBuilder().setCustomId(`stg_dist_${mid}_names_nonum`).setLabel('بدون أرقام').setStyle(ButtonStyle.Secondary),
+                                new ButtonBuilder().setCustomId(`stg_dist_${mid}_last_back`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+                            )],
+                        });
+                    };
+
+                    const showNumbersModal = async (i) => {
+                        const modal = new ModalBuilder()
+                            .setCustomId(`stg_mod_${mid}_dist_prefix`)
+                            .setTitle('Numbered Names — اسم البوتات');
+                        modal.addComponents(new ActionRowBuilder().addComponents(
+                            new TextInputBuilder()
+                                .setCustomId('prefix')
+                                .setLabel('الاسم المشترك (أو اكتب 0 لأرقام فقط)')
+                                .setPlaceholder('Ahmed → Ahmed1, Ahmed2 ... أو اكتب 0 للترقيم فقط (1, 2, 3)')
+                                .setRequired(true)
+                                .setStyle(TextInputStyle.Short)
+                                .setMaxLength(28)
+                        ));
+                        return i.showModal(modal);
                     };
 
                     await renderScope();
@@ -633,6 +700,26 @@ module.exports = {
 
                         if (i.customId === `stg_dist_${mid}_mode`) {
                             state.mode = i.values[0];
+                            if (state.mode === 'none') {
+                                distCollector.stop('execute');
+                                return executeSmartDistribution(i, state);
+                            }
+                            if (state.mode === 'names') {
+                                return renderNamesConfirm(i);
+                            }
+                            if (state.mode === 'numbers') {
+                                return showNumbersModal(i);
+                            }
+                        }
+
+                        if (i.customId === `stg_dist_${mid}_names_withnum`) {
+                            state.namesWithNumbers = true;
+                            distCollector.stop('execute');
+                            return executeSmartDistribution(i, state);
+                        }
+
+                        if (i.customId === `stg_dist_${mid}_names_nonum`) {
+                            state.namesWithNumbers = false;
                             distCollector.stop('execute');
                             return executeSmartDistribution(i, state);
                         }
@@ -1092,6 +1179,15 @@ module.exports = {
 
                     const subTokens = getSelectedTokens();
                     await interaction.deferUpdate();
+
+                    // ── توزيع ذكي: modal اسم الترقيم ─────────────────────────────
+                    if (interaction.customId === `stg_mod_${mid}_dist_prefix`) {
+                        if (!activeDistributionState) return;
+                        const input = interaction.fields.getTextInputValue('prefix').trim();
+                        activeDistributionState.namePrefix = input === '0' ? '' : input;
+                        if (activeDistributionCollector) activeDistributionCollector.stop('execute');
+                        return executeSmartDistribution(interaction, activeDistributionState);
+                    }
 
             if (interaction.customId === `stg_mod_${mid}_avatar`) {
                 const url = interaction.fields.getTextInputValue('url');
