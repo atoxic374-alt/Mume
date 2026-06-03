@@ -171,13 +171,13 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         const W = width;
         const H = Math.max(52, height);
 
-        const FONT         = '700 24px "DejaVu Sans"';
+        const FONT         = 'bold 24px sans-serif';
         const GUTTER       = 14;   // px between label and rail edge
         const RAIL_H       = 6;
         const KNOB_R       = 10;
-        const LABEL_COLOR  = 'rgba(181,186,196,0.95)';   // Discord secondary text
+        const LABEL_COLOR  = 'rgba(220,222,227,0.97)';   // Discord secondary text
         const RAIL_BG      = 'rgba(65,69,73,0.90)';      // Discord dark input bg
-        const LABEL_SHADOW = 'rgba(0,0,0,0.55)';
+        const LABEL_SHADOW = 'rgba(0,0,0,0.65)';
 
         // Resize canvas to the canonical height
         const cDisc = createCanvas(W, H);
@@ -188,9 +188,10 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         cx.font          = FONT;
         cx.textBaseline  = 'middle';
 
-        // Measure labels (fall back to fixed width if empty)
-        const curW  = currentLabel  ? Math.ceil(cx.measureText(currentLabel).width)  + 4 : 0;
-        const totW  = durationLabel ? Math.ceil(cx.measureText(durationLabel).width) + 4 : 0;
+        // Measure labels (fall back to fixed width if empty or font unmeasurable)
+        const MIN_LABEL_W = 44;
+        const curW  = currentLabel  ? Math.max(MIN_LABEL_W, Math.ceil(cx.measureText(currentLabel).width)  + 4) : 0;
+        const totW  = durationLabel ? Math.max(MIN_LABEL_W, Math.ceil(cx.measureText(durationLabel).width) + 4) : 0;
 
         // Rail geometry
         const railX  = (curW  > 0 ? curW  + GUTTER * 2 : GUTTER);
