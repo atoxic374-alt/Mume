@@ -2887,7 +2887,8 @@ module.exports = {
                             title: `🎶  ${message.guild.name}`,
                             description: buildQueueDescription(player, page, itemsPerPage),
                             components: buildQueueComponents(player, tokenObj, message.id, page, itemsPerPage),
-                            thumbnail: getThumb(),
+                            thumbnail: 'attachment://Queue.png',
+                            files: ['./assets/image/icons/Queue.png'],
                         })).catch(console.error);
 
                         if (!queueMessage || !displaySettings(tokenObj).buttons) return;
@@ -2901,7 +2902,8 @@ module.exports = {
                             title,
                             description: buildQueueDescription(player, page, itemsPerPage),
                             components: buildQueueComponents(player, tokenObj, message.id, page, itemsPerPage),
-                            thumbnail: getThumb(),
+                            thumbnail: 'attachment://Queue.png',
+                            files: ['./assets/image/icons/Queue.png'],
                         }));
 
                         collector.on('collect', async interaction => {
@@ -3655,6 +3657,8 @@ module.exports = {
                                     title: `${interaction.guild.name} Queue`,
                                     description: buildQueueDescription(player, qPage, qItemsPerPage),
                                     components: buildQueueComponents(player, tokenObj, refId, qPage, qItemsPerPage),
+                                    thumbnail: 'attachment://Queue.png',
+                                    files: ['./assets/image/icons/Queue.png'],
                                 }),
                             }).catch(() => null);
                             if (queueMsg) {
@@ -3666,6 +3670,8 @@ module.exports = {
                                     title,
                                     description: buildQueueDescription(player, qPage, qItemsPerPage),
                                     components: buildQueueComponents(player, tokenObj, refId, qPage, qItemsPerPage),
+                                    thumbnail: 'attachment://Queue.png',
+                                    files: ['./assets/image/icons/Queue.png'],
                                 }));
                                 qCollector.on('collect', async i => {
                                     if ((player.data?.queueVersion || 0) !== qVersion) {
