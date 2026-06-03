@@ -36,3 +36,9 @@ id = "GyZDHlyEPOJ8dt9ivlZDT"
 uri = "file://assets/image/bar_cmp_80.png"
 type = "image"
 title = "80px — أسمك"
+
+[[outputs]]
+id = "by1JKNP7Eai4xmxS2SflP"
+uri = "file://assets/image/container_v2_preview.png"
+type = "image"
+title = "Container v2 — محاكاة Discord dark theme"
