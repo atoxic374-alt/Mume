@@ -589,8 +589,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
             .addMediaGalleryComponents(
                 new MediaGalleryBuilder().addItems(
                     new MediaGalleryItemBuilder()
-                        .setURL(`attachment://${progress.name}`)
-                        .setDescription('Playback progress'),
+                        .setURL(`attachment://${progress.name}`),
                 ),
             );
 
