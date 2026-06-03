@@ -28,7 +28,10 @@
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
-  },
+  "preinstall": "npm install sqlite3 --build-from-source",
+  "start": "node server.js"
+    },
+  
   "author": "",
   "license": "ISC"
 }
