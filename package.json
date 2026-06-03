@@ -4,8 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "preinstall": "npm install sqlite3 --build-from-source",
-    
+    "preinstall": "npm install sqlite3 --build-from-source"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
