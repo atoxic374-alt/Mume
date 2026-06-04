@@ -1835,9 +1835,25 @@ module.exports = {
             setInterval(async () => {
                 if (!TrueMusic.readyAt) return;
                 const nodes = [...(TrueMusic.poru?.nodes?.values() || [])];
+                if (!nodes.length) return;
+
+                // ── If ALL nodes are offline (e.g. Lavalink server restarted), force a full re-init ──
+                const allOffline = nodes.every(n => !n.isConnected);
+                if (allOffline) {
+                    console.warn('[PoruHealth] All nodes offline — forcing full re-init');
+                    try { TrueMusic.poru.init(TrueMusic); } catch {}
+                    return;
+                }
+
                 for (const node of nodes) {
-                    if (!node.isConnected) continue;
                     const name = node.options?.name || node.options?.host;
+                    // ── Offline node: try to reconnect directly ──
+                    if (!node.isConnected) {
+                        console.warn(`[PoruHealth] Node ${name} disconnected — attempting reconnect`);
+                        try { node.connect?.(); } catch {}
+                        continue;
+                    }
+                    // ── Connected node: REST health ping ──
                     try {
                         const proto = node.options?.secure ? 'https' : 'http';
                         const url = `${proto}://${node.options.host}:${node.options.port}/version`;
@@ -1848,7 +1864,6 @@ module.exports = {
                         if (!res.ok) throw new Error(`HTTP ${res.status}`);
                     } catch (e) {
                         console.warn(`[PoruHealth] Node ${name} REST unresponsive: ${e.message} — forcing reconnect`);
-                        // Trigger Poru reconnect by disconnecting — Poru will retry per reconnectTries config
                         try { node.disconnect?.(); } catch {}
                         setTimeout(() => { try { node.connect?.(); } catch {} }, 4000);
                     }
@@ -1881,6 +1896,15 @@ module.exports = {
                     // ── Heartbeat: keep activity alive so idle-killer never fires ──
                     botLastActivity.set(token, Date.now());
 
+                    // ── Always check: if all Lavalink nodes offline, force re-init ──
+                    // (runs even when bot is already in the correct VC)
+                    const allNodesOffline = TrueMusic.poru?.nodes?.size > 0 &&
+                        [...(TrueMusic.poru.nodes?.values() || [])].every(n => !n.isConnected);
+                    if (allNodesOffline) {
+                        console.warn('[Poru] All nodes offline — forcing re-init');
+                        try { TrueMusic.poru.init(TrueMusic); } catch {}
+                    }
+
                     let guild = TrueMusic.guilds.cache.get(tokenObj.Server);
                     if (guild) {
                         const musicChannel = guild.channels.cache.get(tokenObj.channel);
@@ -1893,14 +1917,6 @@ module.exports = {
                             if (shouldReconnect) {
                                 if (!TrueMusic.readyAt) return;
                                 if (isStopped()) return; // respect manual stop
-
-                                // ── Fix: if all Lavalink nodes are offline, force re-init ──
-                                const allNodesOffline = TrueMusic.poru?.nodes?.size > 0 &&
-                                    [...(TrueMusic.poru.nodes?.values() || [])].every(n => !n.isConnected);
-                                if (allNodesOffline) {
-                                    console.warn('[Poru] All nodes offline — forcing re-init');
-                                    try { TrueMusic.poru.init(TrueMusic); } catch {}
-                                }
 
                                 try {
                                     await ensureConfiguredVoice(guild, tokenObj, 'periodic_guard');
@@ -1944,16 +1960,20 @@ module.exports = {
                 // Checks stalled playback — runs every 15s here instead of
                 // spawning a dedicated setInterval per bot.
                 const wdNow = Date.now();
-                TrueMusic.poru.players.forEach(player => {
-                    if (!player.currentTrack || player.isPaused) return;
-                    ensurePlayerData(player);
-                    const lastProgress = player.data.lastProgressAt || player.data.trackStartedAt || wdNow;
-                    const length = Number(player.currentTrack.info?.length || 0);
-                    const grace = length && length < 90_000 ? 35_000 : 55_000;
-                    if (wdNow - lastProgress > grace) {
-                        recoverPlayerPlayback(player, 'stalled_progress').catch(() => {});
-                    }
-                });
+                // Skip stall recovery if Lavalink is currently offline — reinit already triggered above
+                const wdNodesOnline = [...(TrueMusic.poru?.nodes?.values() || [])].some(n => n.isConnected);
+                if (wdNodesOnline) {
+                    TrueMusic.poru.players.forEach(player => {
+                        if (!player.currentTrack || player.isPaused) return;
+                        ensurePlayerData(player);
+                        const lastProgress = player.data.lastProgressAt || player.data.trackStartedAt || wdNow;
+                        const length = Number(player.currentTrack.info?.length || 0);
+                        const grace = length && length < 90_000 ? 35_000 : 55_000;
+                        if (wdNow - lastProgress > grace) {
+                            recoverPlayerPlayback(player, 'stalled_progress').catch(() => {});
+                        }
+                    });
+                }
 
             }, 15_000); // ── Optimization: was 5s → 15s (3× fewer fires, same responsiveness for music)
         });
