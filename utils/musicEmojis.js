@@ -19,7 +19,7 @@ const MUSIC_EMOJIS = {
     clear:       { id: '1240135421434925076', name: 'clear' },
     platforms: {
         ytsearch:  { id: '1511837171772821544', name: 'youtube' },
-        ytmsearch: '🎵',
+        ytmsearch: { id: '1511837171772821544', name: 'youtube' },
         scsearch:  { id: '1511837168824356925', name: 'soundcloud' },
         spsearch:  { id: '1511837174323085443', name: 'spotify' },
         amsearch:  { id: '1511837166014169228', name: 'applemusic' },
@@ -33,6 +33,45 @@ function emojiStr(data) {
     if (!emoji.id) return emoji.name || '';
     if (!emoji.name) return emoji.id;
     return `<${emoji.animated ? 'a' : ''}:${emoji.name}:${emoji.id}>`;
+}
+
+function cachedEmoji(data, client = null) {
+    const emoji = parseEmojiData(data);
+    if (!emoji?.id) return null;
+    return client?.emojis?.cache?.get?.(emoji.id)
+        || client?.application?.emojis?.cache?.get?.(emoji.id)
+        || null;
+}
+
+function componentEmoji(data, client = null, fallback = null) {
+    const emoji = parseEmojiData(data);
+    if (!emoji) return fallback;
+    if (!emoji.id) return emoji.name || fallback;
+
+    const cached = cachedEmoji(data, client);
+    if (cached) {
+        return {
+            id: cached.id,
+            name: cached.name || emoji.name || 'emoji',
+            animated: cached.animated === true,
+        };
+    }
+
+    return {
+        id: emoji.id,
+        name: emoji.name || 'emoji',
+        animated: emoji.animated === true,
+    };
+}
+
+function messageEmoji(data, client = null, fallback = '') {
+    const emoji = parseEmojiData(data);
+    if (!emoji) return fallback;
+    if (!emoji.id) return emoji.name || fallback;
+
+    const cached = cachedEmoji(data, client);
+    if (!cached) return fallback;
+    return `<${cached.animated ? 'a' : ''}:${cached.name || emoji.name || 'emoji'}:${cached.id}>`;
 }
 
 function parseEmojiData(data) {
@@ -84,9 +123,38 @@ function emojiResolvable(data, client = null) {
     };
 }
 
+function reactionIdentifier(data) {
+    const emoji = parseEmojiData(data);
+    if (!emoji?.id) return emoji?.name || null;
+    return emoji.name ? `${emoji.name}:${emoji.id}` : emoji.id;
+}
+
+function customEmojiEntries() {
+    const entries = [];
+    const visit = (prefix, value) => {
+        if (!value) return;
+        if (typeof value === 'object' && !Array.isArray(value) && !value.id && !value.name) {
+            Object.entries(value).forEach(([key, child]) => visit(prefix ? `${prefix}.${key}` : key, child));
+            return;
+        }
+
+        const emoji = parseEmojiData(value);
+        if (emoji?.id) entries.push({ key: prefix, emoji });
+    };
+
+    Object.entries(MUSIC_EMOJIS).forEach(([key, value]) => visit(key, value));
+    return entries;
+}
+
+function validateCustomEmojis(client = null) {
+    return customEmojiEntries().filter(entry => !cachedEmoji(entry.emoji, client));
+}
+
 async function react(message, emojiData, fallback = null, client = null) {
+    const resolvedClient = client || message?.client || null;
     const candidates = [
-        emojiResolvable(emojiData, client || message?.client),
+        cachedEmoji(emojiData, resolvedClient),
+        reactionIdentifier(emojiData),
         emojiStr(emojiData),
         fallback,
     ].filter(Boolean);
@@ -111,4 +179,9 @@ module.exports = MUSIC_EMOJIS;
 module.exports.emojiStr = emojiStr;
 module.exports.parseEmojiData = parseEmojiData;
 module.exports.emojiResolvable = emojiResolvable;
+module.exports.componentEmoji = componentEmoji;
+module.exports.messageEmoji = messageEmoji;
+module.exports.reactionIdentifier = reactionIdentifier;
+module.exports.customEmojiEntries = customEmojiEntries;
+module.exports.validateCustomEmojis = validateCustomEmojis;
 module.exports.react = react;

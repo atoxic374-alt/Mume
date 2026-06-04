@@ -27,7 +27,6 @@ module.exports = {
     async execute(client, message, args) {
         const userId = message.author.id;
         const isAdmin = owners.includes(userId);
-        const isGuildOwner = message.guild?.ownerId === userId;
         const mid = message.id;
 
         function disableRows(rows = []) {
@@ -44,15 +43,66 @@ module.exports = {
             });
         }
 
-        // 1. Find user's subscriptions
         let tokens = store.get('tokens') || [];
 
-        // Get unique subscription codes owned by user (or all if admin)
-        const mySubs = tokens.filter(t =>
-            isAdmin ||
-            t.client === userId ||
-            (isGuildOwner && t.Server === message.guild.id)
-        );
+        function parseUserId(value) {
+            return String(value || '').match(/\d{17,20}/)?.[0] || null;
+        }
+
+        function subscriptionOwnersOf(tokenObj) {
+            const raw = Array.isArray(tokenObj?.subOwners)
+                ? tokenObj.subOwners
+                : Array.isArray(tokenObj?.owners)
+                    ? tokenObj.owners
+                    : [];
+            return [...new Set(raw.map(parseUserId).filter(Boolean))];
+        }
+
+        function isSubscriptionController(tokenObj, id = userId) {
+            if (isAdmin) return true;
+            const parsed = parseUserId(id);
+            if (!tokenObj || !parsed) return false;
+            return tokenObj.client === parsed || subscriptionOwnersOf(tokenObj).includes(parsed);
+        }
+
+        function primaryOwnerIdFor(code = selectedCode) {
+            const timeData = store.get('time') || [];
+            const subInfo = timeData.find(t => t.code === code);
+            const entries = (store.get('tokens') || []).filter(t => t.code === code);
+            return parseUserId(subInfo?.user || entries[0]?.client);
+        }
+
+        function subscriptionOwnerIdsFor(code = selectedCode) {
+            const primary = primaryOwnerIdFor(code);
+            const ids = new Set();
+            (store.get('tokens') || [])
+                .filter(t => t.code === code)
+                .forEach(t => subscriptionOwnersOf(t).forEach(id => {
+                    if (id !== primary) ids.add(id);
+                }));
+            return [...ids];
+        }
+
+        function canManageSubscriptionOwners(code = selectedCode) {
+            const primary = primaryOwnerIdFor(code);
+            return isAdmin || (primary && primary === userId);
+        }
+
+        function setSubscriptionOwnersFor(code, ownerIds) {
+            const primary = primaryOwnerIdFor(code);
+            const clean = [...new Set(ownerIds.map(parseUserId).filter(id => id && id !== primary))];
+            tokens = store.get('tokens') || [];
+            tokens.forEach(t => {
+                if (t.code === code) {
+                    t.subOwners = clean;
+                    if (Array.isArray(t.owners)) delete t.owners;
+                }
+            });
+            store.set('tokens', tokens);
+            return clean;
+        }
+
+        const mySubs = tokens.filter(t => isSubscriptionController(t));
         const uniqueCodes = [...new Set(mySubs.map(t => t.code))];
 
         if (uniqueCodes.length === 0) {
@@ -209,6 +259,7 @@ module.exports = {
                     const buckets = distributionBuckets();
                     if (scope === 'idle') return buckets.idle.map(entry => entry.token);
                     if (scope === 'grouped') return buckets.grouped.map(entry => entry.token);
+                    if (scope === 'in_room') return buckets.inRoom.map(entry => entry.token);
                     if (scope === 'all') return buckets.available.map(entry => entry.token);
                     return [];
                 }
@@ -257,6 +308,116 @@ module.exports = {
                                 await wait(750);
                             }
                             return false;
+                        }
+
+                        const SCOPE_LABELS = {
+                            idle: 'الخاملين',
+                            grouped: 'المتجمعين',
+                            in_room: 'الموجودين بالرومات',
+                            all: 'كل المتاحين',
+                        };
+
+                        function buildSimpleProgressBar(done, total, length = 18) {
+                            const safeTotal = Math.max(1, total);
+                            const filled = Math.round((done / safeTotal) * length);
+                            return `\`[${'█'.repeat(filled)}${'░'.repeat(Math.max(0, length - filled))}]\` **${done}/${total}**`;
+                        }
+
+                        function buildProcessEmbed(title, done, total, okCount, failCount, lines = []) {
+                            return new EmbedBuilder()
+                                .setTitle(title)
+                                .setDescription([
+                                    buildSimpleProgressBar(done, total),
+                                    `✅ **Done:** \`${okCount}\`  ❌ **Failed:** \`${failCount}\`  ⏳ **Left:** \`${Math.max(0, total - done)}\``,
+                                ].join('\n'))
+                                .addFields(lines.length ? [{ name: 'Process', value: lines.slice(-10).join('\n'), inline: false }] : [])
+                                .setColor(getEmbedColor(client));
+                        }
+
+                        async function runBotProcess(title, targetTokens, action) {
+                            const targets = targetTokens.filter(Boolean);
+                            let done = 0;
+                            let ok = 0;
+                            let failed = 0;
+                            const lines = [];
+
+                            await mainMsg.edit({
+                                content: `<@${userId}>`,
+                                embeds: [buildProcessEmbed(title, 0, targets.length, 0, 0, [])],
+                                components: [],
+                                allowedMentions: { users: [userId] },
+                            }).catch(() => {});
+
+                            for (const t of targets) {
+                                const bot = runningBots.get(t.token);
+                                const mention = bot?.user?.id ? `<@${bot.user.id}>` : `\`${t.invalidBotName || 'Offline bot'}\``;
+                                lines.push(`⏳ ${mention} loading...`);
+                                await mainMsg.edit({
+                                    content: `<@${userId}>`,
+                                    embeds: [buildProcessEmbed(title, done, targets.length, ok, failed, lines)],
+                                    components: [],
+                                    allowedMentions: { users: [userId] },
+                                }).catch(() => {});
+
+                                try {
+                                    await action(t, bot);
+                                    ok++;
+                                    lines[lines.length - 1] = `✅ ${mention} done`;
+                                } catch (err) {
+                                    failed++;
+                                    lines[lines.length - 1] = `❌ ${mention} ${String(err?.message || 'failed').slice(0, 80)}`;
+                                }
+
+                                done++;
+                                await mainMsg.edit({
+                                    content: `<@${userId}>`,
+                                    embeds: [buildProcessEmbed(title, done, targets.length, ok, failed, lines)],
+                                    components: [],
+                                    allowedMentions: { users: [userId] },
+                                }).catch(() => {});
+                            }
+
+                            return { ok, failed, total: targets.length, lines };
+                        }
+
+                        async function moveTokenToVoice(t, targetChannelId) {
+                            const bot = runningBots.get(t.token);
+                            if (!bot?.poru) throw new Error('bot offline');
+
+                            const guild = bot.guilds.cache.get(t.Server);
+                            if (!guild) throw new Error('bot outside server');
+
+                            const targetChannel = guild.channels.cache.get(targetChannelId)
+                                || await guild.channels.fetch(targetChannelId).catch(() => null);
+                            if (!isVoiceChannel(targetChannel)) throw new Error('invalid voice channel');
+
+                            t.channel = targetChannel.id;
+                            t.backToVoice = 'on';
+
+                            const existing = bot.poru.players.get(guild.id);
+                            if (existing) {
+                                existing.textChannel = t.chat || existing.textChannel || targetChannel.id;
+                                existing.data = existing.data || {};
+                                if (t.chat) existing.data.lastTextChannel = t.chat;
+                                try {
+                                    if (!existing.isConnected || existing.voiceChannel !== targetChannel.id) {
+                                        existing.setVoiceChannel(targetChannel.id, { deaf: true, mute: false });
+                                    }
+                                } catch (err) {
+                                    if (!(err instanceof ReferenceError)) throw err;
+                                }
+                            } else {
+                                await bot.poru.createConnection({
+                                    guildId: guild.id,
+                                    voiceChannel: targetChannel.id,
+                                    textChannel: t.chat || targetChannel.id,
+                                    deaf: true,
+                                    group: t.token,
+                                });
+                            }
+
+                            await waitForBotVoiceChannel(guild, bot, targetChannel.id);
+                            return targetChannel;
                         }
 
                         async function setBotNameAndVerify(bot, targetName, maxRetries = 3) {
@@ -775,6 +936,127 @@ module.exports = {
                     });
                 }
 
+                async function startPinRoom(interaction) {
+                    const subTokens = getSelectedTokens();
+                    const serverId = subTokens[0]?.Server;
+                    if (serverId && message.guild.id !== serverId) {
+                        return interaction.reply({
+                            content: '⚠️ استخدم تثبيت الروم داخل سيرفر الاشتراك حتى تظهر الرومات.',
+                            ephemeral: true,
+                        });
+                    }
+
+                    const state = { scope: null, channelId: null };
+
+                    const renderScope = async (i = interaction) => {
+                        const buckets = distributionBuckets();
+                        const embed = buildDistributionEmbed(
+                            `Pin Bots To Room — ${selectedCode}`,
+                            'اختر مجموعة البوتات التي تريد تثبيتها كلها في روم واحد.',
+                            [
+                                { name: 'Idle', value: `\`${buckets.idle.length}\``, inline: true },
+                                { name: 'Grouped', value: `\`${buckets.grouped.length}\``, inline: true },
+                                { name: 'In Voice', value: `\`${buckets.inRoom.length}\``, inline: true },
+                                { name: 'Available', value: `\`${buckets.available.length}\``, inline: true },
+                            ],
+                        );
+                        const select = new StringSelectMenuBuilder()
+                            .setCustomId(`stg_pin_${mid}_scope`)
+                            .setPlaceholder('Select bots scope')
+                            .addOptions([
+                                { label: 'Idle Only', value: 'idle', description: 'البوتات داخل السيرفر وخارج الفويس' },
+                                { label: 'Grouped Only', value: 'grouped', description: 'البوتات المتجمعة مع بوتات أخرى في نفس الروم' },
+                                { label: 'In Voice Only', value: 'in_room', description: 'كل البوتات الموجودة حالياً داخل رومات' },
+                                { label: 'All Available', value: 'all', description: 'كل البوتات المتصلة والموجودة في السيرفر' },
+                            ]);
+                        return i.update({
+                            content: '',
+                            embeds: [embed],
+                            components: [
+                                new ActionRowBuilder().addComponents(select),
+                                new ActionRowBuilder().addComponents(
+                                    new ButtonBuilder().setCustomId(`stg_pin_${mid}_back`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary),
+                                ),
+                            ],
+                        });
+                    };
+
+                    const renderChannel = async (i) => {
+                        const targets = distributionTargets(state.scope);
+                        if (!targets.length) {
+                            return i.update({
+                                content: '',
+                                embeds: [buildDistributionEmbed('Pin Bots To Room', 'لا توجد بوتات مناسبة لهذا النطاق حالياً.')],
+                                components: [new ActionRowBuilder().addComponents(
+                                    new ButtonBuilder().setCustomId(`stg_pin_${mid}_scope_back`).setLabel('Choose Again').setStyle(ButtonStyle.Secondary),
+                                    new ButtonBuilder().setCustomId(`stg_pin_${mid}_back`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary),
+                                )],
+                            });
+                        }
+
+                        const select = new ChannelSelectMenuBuilder()
+                            .setCustomId(`stg_pin_${mid}_channel`)
+                            .setPlaceholder('Select target voice room')
+                            .setChannelTypes(ChannelType.GuildVoice);
+                        return i.update({
+                            content: '',
+                            embeds: [buildDistributionEmbed(
+                                'Pin Bots To Room',
+                                `النطاق: **${SCOPE_LABELS[state.scope] || state.scope}**\nالبوتات المستهدفة: **${targets.length}**\nاختر الروم الذي سيتم تثبيتهم فيه.`,
+                            )],
+                            components: [
+                                new ActionRowBuilder().addComponents(select),
+                                new ActionRowBuilder().addComponents(
+                                    new ButtonBuilder().setCustomId(`stg_pin_${mid}_scope_back`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary),
+                                ),
+                            ],
+                        });
+                    };
+
+                    await renderScope();
+
+                    const pinCollector = mainMsg.createMessageComponentCollector({
+                        filter: i => i.user.id === userId && i.customId.startsWith(`stg_pin_${mid}_`),
+                        time: 120000,
+                    });
+
+                    pinCollector.on('collect', async i => {
+                        if (i.customId === `stg_pin_${mid}_back`) {
+                            pinCollector.stop('back');
+                            currentPanel = 'ROOMS';
+                            return updatePanel(i);
+                        }
+                        if (i.customId === `stg_pin_${mid}_scope_back`) {
+                            state.scope = null;
+                            return renderScope(i);
+                        }
+                        if (i.customId === `stg_pin_${mid}_scope`) {
+                            state.scope = i.values[0];
+                            return renderChannel(i);
+                        }
+                        if (i.customId === `stg_pin_${mid}_channel`) {
+                            state.channelId = i.values[0];
+                            pinCollector.stop('execute');
+                            await i.update({
+                                content: `<@${userId}>`,
+                                embeds: [buildProcessEmbed('Pin Bots To Room', 0, distributionTargets(state.scope).length, 0, 0, [`⏳ Target room: <#${state.channelId}>`])],
+                                components: [],
+                                allowedMentions: { users: [userId] },
+                            });
+                            const targets = distributionTargets(state.scope);
+                            await runBotProcess(`Pin Bots To Room — ${SCOPE_LABELS[state.scope] || state.scope}`, targets, async (t) => {
+                                await moveTokenToVoice(t, state.channelId);
+                            });
+                            store.set('tokens', tokens);
+                            setTimeout(() => updatePanel(), 3500);
+                        }
+                    });
+
+                    pinCollector.on('end', (_, reason) => {
+                        if (reason === 'time') mainMsg.edit({ components: disableRows(mainMsg.components) }).catch(() => {});
+                    });
+                }
+
         async function updatePanel(interaction = null) {
             try {
                 let embeds = [];
@@ -797,6 +1079,8 @@ module.exports = {
                     const subTokens = getSelectedTokens();
                     const timeData = store.get('time') || [];
                     const subInfo = timeData.find(t => t.code === selectedCode);
+                    const primaryOwnerId = primaryOwnerIdFor(selectedCode) || subInfo?.user || subTokens[0]?.client || allSubTokens[0]?.client;
+                    const subOwnerIds = subscriptionOwnerIdsFor(selectedCode);
                     const display = getDisplay(selectedCode);
                     const chat = chatSummary(subTokens);
                     const backVoice = backToVoiceSummary(allSubTokens);
@@ -814,10 +1098,11 @@ module.exports = {
                         .setTitle(`Subscription Settings — ${selectedCode}`)
                         .setDescription('تحكم سريع ومنظم في البوتات، العرض، الغرف، والمنصة.')
                         .addFields(
-                            { name: 'Owner', value: `<@${subInfo?.user || subTokens[0]?.client || allSubTokens[0]?.client}>`, inline: true },
+                            { name: 'Owner', value: primaryOwnerId ? `<@${primaryOwnerId}>` : '`غير معروف`', inline: true },
                             { name: 'Bots', value: `\`${subTokens.length}\`${waitingCount ? `\nWaiting: \`${waitingCount}\`` : ''}`, inline: true },
                             { name: 'Server', value: `\`${subTokens[0]?.Server || allSubTokens[0]?.Server || 'غير محدد'}\``, inline: true },
                             { name: 'Expires', value: subInfo?.expirationTime ? `<t:${Math.floor(subInfo.expirationTime / 1000)}:R>` : 'غير معروف', inline: true },
+                            { name: 'Subscribe Owners', value: subOwnerIds.length ? subOwnerIds.map(id => `<@${id}>`).join('\n') : '`لا يوجد`', inline: true },
                             { name: 'Display', value: `الأزرار: **${display.buttons ? 'مفعلة' : 'معطلة'}**\nالإيمبد: **${display.embeds ? 'مفعل' : 'معطل'}**\nStatus الروم: **${display.voiceStatus ? 'مفعل' : 'معطل'}**`, inline: true },
                             { name: 'Platform', value: `\`${display.platform}\``, inline: true },
                             { name: 'Back to Voice', value: `${backVoice.label}\n${backVoice.details}`, inline: true },
@@ -837,6 +1122,9 @@ module.exports = {
                                 { label: 'Rooms', value: 'ROOMS', description: 'الغرف، التوزيع الذكي، الروابط، وشات الأوامر' },
                                 { label: 'Display', value: 'DISPLAY', description: 'تفعيل أو تعطيل الأزرار والإيمبد' },
                                 { label: 'Platform', value: 'PLATFORM', description: 'اختيار منصة البحث والتشغيل' },
+                                ...(canManageSubscriptionOwners(selectedCode)
+                                    ? [{ label: 'Subscribe Owners', value: 'OWNERS', description: 'إضافة وإزالة أونرز يتحكمون ببوتات الاشتراك' }]
+                                    : []),
                             ])
                     );
                     const row2 = new ActionRowBuilder().addComponents(
@@ -846,6 +1134,33 @@ module.exports = {
                         row2.addComponents(new ButtonBuilder().setCustomId(`stg_${mid}_back_to_select`).setLabel('Change Subscription').setStyle(ButtonStyle.Secondary));
                     }
                     components.push(row1, row2);
+                }
+                else if (currentPanel === 'OWNERS') {
+                    if (!canManageSubscriptionOwners(selectedCode)) {
+                        currentPanel = 'MAIN';
+                        return updatePanel(interaction);
+                    }
+
+                    const primaryOwnerId = primaryOwnerIdFor(selectedCode);
+                    const subOwnerIds = subscriptionOwnerIdsFor(selectedCode);
+                    const embed = new EmbedBuilder()
+                        .setTitle(`Subscribe Owners — ${selectedCode}`)
+                        .setDescription([
+                            `**مالك الاشتراك:** ${primaryOwnerId ? `<@${primaryOwnerId}>` : '`غير معروف`'}`,
+                            '',
+                            '**الأونرز الحاليين:**',
+                            subOwnerIds.length ? subOwnerIds.map((id, index) => `\`${index + 1}\` <@${id}>`).join('\n') : '`لا يوجد`',
+                            '',
+                            'الأونرز يقدرون يستخدمون Settings وأوامر التحكم بالبـوتات مثل join/setup/settc. نقل الملكية ونقل الاشتراك والسيرفر تبقى للمالك الأصلي فقط.',
+                        ].join('\n'))
+                        .setColor(getEmbedColor(client));
+                    embeds.push(embed);
+
+                    components.push(new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`stg_${mid}_owner_add`).setLabel('Add Owner').setStyle(ButtonStyle.Success),
+                        new ButtonBuilder().setCustomId(`stg_${mid}_owner_remove`).setLabel('Remove Owner').setStyle(ButtonStyle.Danger).setDisabled(subOwnerIds.length === 0),
+                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary),
+                    ));
                 }
                 else if (currentPanel === 'APPEARANCE') {
                     const embed = new EmbedBuilder()
@@ -955,10 +1270,13 @@ module.exports = {
                                         new ButtonBuilder().setCustomId(`stg_${mid}_panel_chat`).setLabel('Command Chat').setStyle(ButtonStyle.Secondary),
                                         new ButtonBuilder().setCustomId(`stg_${mid}_voice_status_emoji`).setLabel('Status Emoji').setStyle(ButtonStyle.Secondary),
                                         new ButtonBuilder().setCustomId(`stg_${mid}_links_all`).setLabel('All Links').setStyle(ButtonStyle.Secondary),
-                                        new ButtonBuilder().setCustomId(`stg_${mid}_links_out`).setLabel('Outside Server').setStyle(ButtonStyle.Secondary),
+                                        new ButtonBuilder().setCustomId(`stg_${mid}_links_out`).setLabel('Outside Server').setStyle(ButtonStyle.Secondary)
+                                    );
+                                    const row3 = new ActionRowBuilder().addComponents(
+                                        new ButtonBuilder().setCustomId(`stg_${mid}_pin_room`).setLabel('Pin Room').setStyle(ButtonStyle.Primary),
                                         new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
                             );
-                            components.push(row1, row2);
+                            components.push(row1, row2, row3);
                         }
                         else if (currentPanel === 'CHAT') {
                             const chat = chatSummary();
@@ -1108,8 +1426,46 @@ module.exports = {
                 await i.showModal(modal);
             }
 
+            if (i.customId === `stg_${mid}_owner_add`) {
+                if (!canManageSubscriptionOwners(selectedCode)) {
+                    return i.reply({ content: '❌ إدارة الأونرز متاحة لمالك الاشتراك فقط.', ephemeral: true });
+                }
+                const modal = new ModalBuilder().setCustomId(`stg_mod_${mid}_owner_add`).setTitle('Add Subscribe Owner');
+                modal.addComponents(new ActionRowBuilder().addComponents(
+                    new TextInputBuilder()
+                        .setCustomId('user')
+                        .setLabel('User ID or mention')
+                        .setPlaceholder('@user or 123456789012345678')
+                        .setRequired(true)
+                        .setStyle(TextInputStyle.Short)
+                ));
+                await i.showModal(modal);
+                return;
+            }
+
+            if (i.customId === `stg_${mid}_owner_remove`) {
+                if (!canManageSubscriptionOwners(selectedCode)) {
+                    return i.reply({ content: '❌ إدارة الأونرز متاحة لمالك الاشتراك فقط.', ephemeral: true });
+                }
+                const modal = new ModalBuilder().setCustomId(`stg_mod_${mid}_owner_remove`).setTitle('Remove Subscribe Owner');
+                modal.addComponents(new ActionRowBuilder().addComponents(
+                    new TextInputBuilder()
+                        .setCustomId('user')
+                        .setLabel('User ID or mention')
+                        .setPlaceholder('@user or 123456789012345678')
+                        .setRequired(true)
+                        .setStyle(TextInputStyle.Short)
+                ));
+                await i.showModal(modal);
+                return;
+            }
+
             if (i.customId === `stg_${mid}_distribute`) {
                 return startSmartDistribution(i);
+            }
+
+            if (i.customId === `stg_${mid}_pin_room`) {
+                return startPinRoom(i);
             }
 
             if (i.customId === `stg_${mid}_chat_select_all`) {
@@ -1233,42 +1589,93 @@ module.exports = {
                         return executeSmartDistribution(interaction, activeDistributionState);
                     }
 
+                    if (interaction.customId === `stg_mod_${mid}_owner_add`) {
+                        if (!canManageSubscriptionOwners(selectedCode)) {
+                            await mainMsg.edit({ content: '❌ إدارة الأونرز متاحة لمالك الاشتراك فقط.', embeds: [], components: [] });
+                            setTimeout(() => updatePanel(), 2500);
+                            return;
+                        }
+                        const targetId = parseUserId(interaction.fields.getTextInputValue('user'));
+                        const primary = primaryOwnerIdFor(selectedCode);
+                        if (!targetId) {
+                            await mainMsg.edit({ content: '❌ اكتب منشن أو ID صحيح.', embeds: [], components: [] });
+                            setTimeout(() => updatePanel(), 2500);
+                            return;
+                        }
+                        if (targetId === primary) {
+                            await mainMsg.edit({ content: '⚠️ مالك الاشتراك موجود أساساً ولا يحتاج إضافته كأونر.', embeds: [], components: [] });
+                            setTimeout(() => updatePanel(), 2500);
+                            return;
+                        }
+                        const current = subscriptionOwnerIdsFor(selectedCode);
+                        const next = setSubscriptionOwnersFor(selectedCode, [...current, targetId]);
+                        await mainMsg.edit({
+                            content: '',
+                            embeds: [new EmbedBuilder()
+                                .setTitle('Subscribe Owner Added')
+                                .setDescription(`تمت إضافة <@${targetId}> كأونر للاشتراك.\n\n**الأونرز الآن:**\n${next.length ? next.map(id => `<@${id}>`).join('\n') : '`لا يوجد`'}`)
+                                .setColor(getEmbedColor(client))],
+                            components: [],
+                        });
+                        setTimeout(() => updatePanel(), 3000);
+                        return;
+                    }
+
+                    if (interaction.customId === `stg_mod_${mid}_owner_remove`) {
+                        if (!canManageSubscriptionOwners(selectedCode)) {
+                            await mainMsg.edit({ content: '❌ إدارة الأونرز متاحة لمالك الاشتراك فقط.', embeds: [], components: [] });
+                            setTimeout(() => updatePanel(), 2500);
+                            return;
+                        }
+                        const targetId = parseUserId(interaction.fields.getTextInputValue('user'));
+                        const primary = primaryOwnerIdFor(selectedCode);
+                        if (!targetId) {
+                            await mainMsg.edit({ content: '❌ اكتب منشن أو ID صحيح.', embeds: [], components: [] });
+                            setTimeout(() => updatePanel(), 2500);
+                            return;
+                        }
+                        if (targetId === primary) {
+                            await mainMsg.edit({ content: '❌ لا يمكن حذف مالك الاشتراك الأصلي من الأونرز.', embeds: [], components: [] });
+                            setTimeout(() => updatePanel(), 2500);
+                            return;
+                        }
+                        const current = subscriptionOwnerIdsFor(selectedCode);
+                        const next = setSubscriptionOwnersFor(selectedCode, current.filter(id => id !== targetId));
+                        await mainMsg.edit({
+                            content: '',
+                            embeds: [new EmbedBuilder()
+                                .setTitle('Subscribe Owner Removed')
+                                .setDescription(`تمت إزالة <@${targetId}> من أونرز الاشتراك.\n\n**الأونرز الآن:**\n${next.length ? next.map(id => `<@${id}>`).join('\n') : '`لا يوجد`'}`)
+                                .setColor(getEmbedColor(client))],
+                            components: [],
+                        });
+                        setTimeout(() => updatePanel(), 3000);
+                        return;
+                    }
+
             if (interaction.customId === `stg_mod_${mid}_avatar`) {
                 const url = interaction.fields.getTextInputValue('url');
-                await mainMsg.edit({ content: '⏳ جاري تغيير الصور...', embeds: [], components: [] });
-                
-                const results = await Promise.allSettled(subTokens.map(async t => {
-                    const bot = runningBots.get(t.token);
-                    if (bot) {
-                        await bot.user.setAvatar(url);
-                        refreshEmbedColor(bot).catch(() => {});
-                    }
-                }));
-
-                const success = results.filter(r => r.status === 'fulfilled').length;
-                await mainMsg.edit({ content: `✅ تم تحديث ${success}/${subTokens.length} بوت بنجاح.` });
+                await runBotProcess('Change Avatars', subTokens, async (t, bot) => {
+                    if (!bot?.user) throw new Error('bot offline');
+                    await bot.user.setAvatar(url);
+                    refreshEmbedColor(bot).catch(() => {});
+                });
                 setTimeout(() => updatePanel(), 3000);
             }
 
                     if (interaction.customId === `stg_mod_${mid}_status`) {
                         const text = interaction.fields.getTextInputValue('text');
-                        await mainMsg.edit({ content: '⏳ جاري تغيير الحالة...', embeds: [], components: [] });
-                
-                // Update tokens.json
-                tokens.forEach(t => { if (t.code === selectedCode) t.status = text; });
-                store.set('tokens', tokens);
+                        tokens = store.get('tokens') || [];
+                        tokens.forEach(t => { if (t.code === selectedCode) t.status = text; });
+                        store.set('tokens', tokens);
 
-                const results = await Promise.allSettled(subTokens.map(async t => {
-                    const bot = runningBots.get(t.token);
-                    if (bot) {
-                        bot.user.setPresence({
-                            activities: [{ name: text, type: 3 }], // WATCHING
-                            status: 'online'
+                        await runBotProcess('Change Status', subTokens, async (t, bot) => {
+                            if (!bot?.user) throw new Error('bot offline');
+                            bot.user.setPresence({
+                                activities: [{ name: text, type: 3 }],
+                                status: 'online'
+                            });
                         });
-                    }
-                }));
-
-                        await mainMsg.edit({ content: `✅ تم تحديث حالة ${results.length} بوت بنجاح.` });
                         setTimeout(() => updatePanel(), 3000);
                     }
 
@@ -1285,27 +1692,22 @@ module.exports = {
                     }
 
                     if (interaction.customId === `stg_mod_${mid}_banner`) {
-                const url = interaction.fields.getTextInputValue('url');
-                await mainMsg.edit({ content: '⏳ جاري تغيير البانر...', embeds: [], components: [] });
-                
-                try {
-                    const response = await axios.get(url, { responseType: 'arraybuffer' });
-                    const base64 = Buffer.from(response.data, 'binary').toString('base64');
-                    const data = `data:${response.headers['content-type']};base64,${base64}`;
+                        const url = interaction.fields.getTextInputValue('url');
+                        try {
+                            const response = await axios.get(url, { responseType: 'arraybuffer' });
+                            const base64 = Buffer.from(response.data, 'binary').toString('base64');
+                            const data = `data:${response.headers['content-type']};base64,${base64}`;
 
-                    const results = await Promise.allSettled(subTokens.map(async t => {
-                        await axios.patch('https://discord.com/api/v9/users/@me', { banner: data }, {
-                            headers: { Authorization: `Bot ${t.token}`, 'Content-Type': 'application/json' }
-                        });
-                    }));
-                    
-                    const success = results.filter(r => r.status === 'fulfilled').length;
-                    await mainMsg.edit({ content: `✅ تم تحديث بانر ${success}/${subTokens.length} بوت بنجاح.` });
-                } catch (e) {
-                    await mainMsg.edit({ content: `❌ فشل تحديث البانر: ${e.message}` });
-                }
-                setTimeout(() => updatePanel(), 3000);
-            }
+                            await runBotProcess('Change Banners', subTokens, async (t) => {
+                                await axios.patch('https://discord.com/api/v9/users/@me', { banner: data }, {
+                                    headers: { Authorization: `Bot ${t.token}`, 'Content-Type': 'application/json' }
+                                });
+                            });
+                        } catch (e) {
+                            await mainMsg.edit({ content: `❌ فشل تحديث البانر: ${e.message}` });
+                        }
+                        setTimeout(() => updatePanel(), 3000);
+                    }
 
                     if (interaction.customId === `stg_mod_${mid}_moveidle`) {
                         const input = interaction.fields.getTextInputValue('channelId');
@@ -1322,55 +1724,12 @@ module.exports = {
                             return info.inServer && !info.inRoom;
                         });
 
-                        await mainMsg.edit({ content: `⏳ جاري إدخال **${idleBots.length}** بوت خامل...`, embeds: [], components: [] });
-
-                        let success = 0;
-                        const results = await Promise.allSettled(idleBots.map(async (t, idx) => {
-                            const bot = runningBots.get(t.token);
-                            if (!bot?.poru) throw new Error('bot is not running');
-
-                            const guild = bot.guilds.cache.get(t.Server);
-                            if (!guild) throw new Error('bot is outside the server');
-
-                            const targetChannelId = channelIds[idx % channelIds.length];
-                            const targetChannel = guild.channels.cache.get(targetChannelId)
-                                || await guild.channels.fetch(targetChannelId).catch(() => null);
-
-                            if (!isVoiceChannel(targetChannel)) {
-                                throw new Error(`invalid voice channel: ${targetChannelId}`);
-                            }
-
-                            t.channel = targetChannel.id;
-                                    const existing = bot.poru.players.get(guild.id);
-                                    if (existing) {
-                                        existing.textChannel = t.chat || existing.textChannel || targetChannel.id;
-                                        existing.data = existing.data || {};
-                                        if (t.chat) existing.data.lastTextChannel = t.chat;
-                                        try {
-                                            if (!existing.isConnected || existing.voiceChannel !== targetChannel.id) {
-                                                existing.setVoiceChannel(targetChannel.id, { deaf: true, mute: false });
-                                            }
-                                        } catch (err) {
-                                            if (!(err instanceof ReferenceError)) throw err;
-                                        }
-                                    } else {
-                                        await bot.poru.createConnection({
-                                            guildId: guild.id,
-                                            voiceChannel: targetChannel.id,
-                                            textChannel: t.chat || targetChannel.id,
-                                            deaf: true,
-                                            group: t.token,
-                                        });
-                                    }
-                            success++;
-                        }));
+                        await runBotProcess('Move Idle Bots', idleBots, async (t) => {
+                            const targetChannelId = channelIds[idleBots.indexOf(t) % channelIds.length];
+                            await moveTokenToVoice(t, targetChannelId);
+                        });
 
                         store.set('tokens', tokens);
-
-                        const failed = results.filter(r => r.status === 'rejected').length;
-                        await mainMsg.edit({
-                            content: `✅ تم إدخال **${success}** بوت خامل.${failed ? ` فشل **${failed}**.` : ''}`
-                        });
                         setTimeout(() => updatePanel(), 3000);
                     }
                 };

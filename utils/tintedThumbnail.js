@@ -3,9 +3,13 @@
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const crypto = require('crypto');
 
 const cache = new Map();
 const MAX_CACHE_ITEMS = 160;
+const MAX_DISK_CACHE_ITEMS = Math.max(100, Number(process.env.TINT_ICON_DISK_CACHE_ITEMS || 5000));
+const DISK_CACHE_DIR = path.resolve(process.env.TINT_ICON_CACHE_DIR || path.join(process.cwd(), '.cache', 'tinted-thumbnails'));
+let lastDiskPruneAt = 0;
 
 function normalizeColor(input) {
     if (typeof input === 'number' && Number.isFinite(input)) {
@@ -35,6 +39,44 @@ function clearOldCacheEntry() {
     if (cache.size < MAX_CACHE_ITEMS) return;
     const firstKey = cache.keys().next().value;
     if (firstKey) cache.delete(firstKey);
+}
+
+function rememberCacheEntry(cacheKey, result) {
+    clearOldCacheEntry();
+    cache.set(cacheKey, result);
+    return result;
+}
+
+function diskCachePath(cacheKey, originalName) {
+    const hash = crypto.createHash('sha1').update(cacheKey).digest('hex');
+    return path.join(DISK_CACHE_DIR, `${hash}-${path.basename(originalName)}`);
+}
+
+function pruneDiskCache() {
+    const now = Date.now();
+    if (now - lastDiskPruneAt < 60_000) return;
+    lastDiskPruneAt = now;
+
+    let entries = [];
+    try {
+        entries = fs.readdirSync(DISK_CACHE_DIR)
+            .filter(name => name.toLowerCase().endsWith('.png'))
+            .map(name => {
+                const filePath = path.join(DISK_CACHE_DIR, name);
+                const stat = fs.statSync(filePath);
+                return { filePath, mtimeMs: stat.mtimeMs };
+            });
+    } catch {
+        return;
+    }
+
+    if (entries.length <= MAX_DISK_CACHE_ITEMS) return;
+    entries
+        .sort((a, b) => a.mtimeMs - b.mtimeMs)
+        .slice(0, entries.length - MAX_DISK_CACHE_ITEMS)
+        .forEach(entry => {
+            try { fs.unlinkSync(entry.filePath); } catch {}
+        });
 }
 
 function blendChannel(target, sourceLuma, targetLuma) {
@@ -239,14 +281,24 @@ function tintPngFile(filePath, color) {
     if (cached) return cached;
 
     const parsed = path.parse(resolvedPath);
+    const diskPath = diskCachePath(cacheKey, parsed.base);
+    const diskResult = { attachment: diskPath, name: parsed.base };
+    if (fs.existsSync(diskPath)) {
+        return rememberCacheEntry(cacheKey, diskResult);
+    }
+
+    fs.mkdirSync(DISK_CACHE_DIR, { recursive: true });
+    const tmpPath = `${diskPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, tintPngBuffer(fs.readFileSync(resolvedPath), color));
+    fs.renameSync(tmpPath, diskPath);
+    pruneDiskCache();
+
     const result = {
-        attachment: tintPngBuffer(fs.readFileSync(resolvedPath), color),
+        attachment: diskPath,
         name: parsed.base,
     };
 
-    clearOldCacheEntry();
-    cache.set(cacheKey, result);
-    return result;
+    return rememberCacheEntry(cacheKey, result);
 }
 
 function tintAttachmentPayload(payload, color) {
@@ -302,7 +354,20 @@ function tintAttachmentPayload(payload, color) {
     }
 }
 
+function warmTintCache(files = [], colors = []) {
+    for (const color of colors) {
+        for (const file of files) {
+            try {
+                if (typeof file === 'string') tintPngFile(file, color);
+            } catch (err) {
+                console.warn(`[ThumbnailTint] warm cache failed for ${file}: ${err?.message || err}`);
+            }
+        }
+    }
+}
+
 module.exports = {
     tintAttachmentPayload,
     tintPngFile,
+    warmTintCache,
 };

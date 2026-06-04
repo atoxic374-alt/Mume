@@ -28,18 +28,17 @@ const fs = require('fs');
 const { Poru } = require('poru');
 
 const { owners, TwitchUrl, statuses } = require(`${process.cwd()}/config`);
-const { getVoiceConnection } = require('@discordjs/voice');
-
 const store = require('./utils/store');
 const likes = require('./utils/likes');
 const { getDisplay } = require('./utils/display');
 const MUSIC_EMOJIS = require('./utils/musicEmojis');
 const { getEmbedColor, refreshEmbedColor } = require('./utils/embedColor');
 const statusStore = require('./statusStore');
-const { tintAttachmentPayload } = require('./utils/tintedThumbnail');
+const { tintAttachmentPayload, warmTintCache } = require('./utils/tintedThumbnail');
 const { buildProgressBarAttachment, normalizeColorNumber } = require('./utils/progressBar');
 
 const runningBots = new Collection();
+const warnedMissingMusicEmojiIds = new Set();
 const botLastActivity = new Map();
 const tempData = new Collection();
 tempData.set("bots", []);
@@ -69,29 +68,56 @@ const FILTER_NAMES = {
 };
 
 const FILTER_OPTIONS = [
-    { label: 'Clear Filters', value: 'clear', description: 'إزالة جميع الفلاتر', emoji: MUSIC_EMOJIS.filters },
-    { label: 'Bass Boost', value: 'bassboost', description: 'جهير أوضح بدون تشويه', emoji: MUSIC_EMOJIS.filters },
-    { label: 'Bass Boost+', value: 'bassboost2', description: 'جهير أقوى وواضح', emoji: MUSIC_EMOJIS.filters },
-    { label: 'Nightcore', value: 'nightcore', description: 'سرعة ونبرة أعلى', emoji: MUSIC_EMOJIS.filters },
-    { label: 'Sped Up', value: 'spedup', description: 'تسريع خفيف بدون رفع مبالغ', emoji: MUSIC_EMOJIS.filters },
-    { label: 'Slow Mode', value: 'slowmode', description: 'إبطاء ناعم للأغنية', emoji: MUSIC_EMOJIS.filters },
-    { label: 'Deep Voice', value: 'deep', description: 'نبرة أعمق وأثقل', emoji: MUSIC_EMOJIS.filters },
-    { label: 'High Pitch', value: 'highpitch', description: 'نبرة عالية وسريعة', emoji: MUSIC_EMOJIS.filters },
-    { label: '8D Audio', value: '8d', description: 'حركة صوتية خفيفة', emoji: MUSIC_EMOJIS.filters },
-    { label: 'Vaporwave', value: 'vaporwave', description: 'أبطأ وأنعم', emoji: MUSIC_EMOJIS.filters },
-    { label: 'Karaoke', value: 'karaoke', description: 'تقليل الصوت البشري', emoji: MUSIC_EMOJIS.filters },
-    { label: 'Tremolo', value: 'tremolo', description: 'اهتزاز مستوى الصوت', emoji: MUSIC_EMOJIS.filters },
-    { label: 'Vibrato', value: 'vibrato', description: 'اهتزاز النبرة', emoji: MUSIC_EMOJIS.filters },
-    { label: 'Low Pass', value: 'lowpass', description: 'صوت أنعم', emoji: MUSIC_EMOJIS.filters },
-    { label: 'Muffled', value: 'muffled', description: 'صوت مكتوم وواضح الفرق', emoji: MUSIC_EMOJIS.filters },
-    { label: 'Channel Mix', value: 'channelmix', description: 'مزج خفيف للقنوات', emoji: MUSIC_EMOJIS.filters },
-    { label: 'Treble Boost', value: 'treble', description: 'إبراز الأصوات العالية', emoji: MUSIC_EMOJIS.filters },
-    { label: 'Pop EQ', value: 'pop', description: 'موازنة مناسبة للأغاني العامة', emoji: MUSIC_EMOJIS.filters },
-    { label: 'Electronic EQ', value: 'electronic', description: 'إيقاع وحدّة أكثر', emoji: MUSIC_EMOJIS.filters },
-    { label: 'Soft EQ', value: 'soft', description: 'صوت أهدأ وأنظف', emoji: MUSIC_EMOJIS.filters },
+    { label: 'Clear Filters', value: 'clear', description: 'إزالة جميع الفلاتر', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Bass Boost', value: 'bassboost', description: 'جهير أوضح بدون تشويه', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Bass Boost+', value: 'bassboost2', description: 'جهير أقوى وواضح', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Nightcore', value: 'nightcore', description: 'سرعة ونبرة أعلى', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Sped Up', value: 'spedup', description: 'تسريع خفيف بدون رفع مبالغ', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Slow Mode', value: 'slowmode', description: 'إبطاء ناعم للأغنية', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Deep Voice', value: 'deep', description: 'نبرة أعمق وأثقل', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'High Pitch', value: 'highpitch', description: 'نبرة عالية وسريعة', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: '8D Audio', value: '8d', description: 'حركة صوتية خفيفة', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Vaporwave', value: 'vaporwave', description: 'أبطأ وأنعم', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Karaoke', value: 'karaoke', description: 'تقليل الصوت البشري', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Tremolo', value: 'tremolo', description: 'اهتزاز مستوى الصوت', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Vibrato', value: 'vibrato', description: 'اهتزاز النبرة', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Low Pass', value: 'lowpass', description: 'صوت أنعم', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Muffled', value: 'muffled', description: 'صوت مكتوم وواضح الفرق', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Channel Mix', value: 'channelmix', description: 'مزج خفيف للقنوات', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Treble Boost', value: 'treble', description: 'إبراز الأصوات العالية', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Pop EQ', value: 'pop', description: 'موازنة مناسبة للأغاني العامة', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Electronic EQ', value: 'electronic', description: 'إيقاع وحدّة أكثر', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Soft EQ', value: 'soft', description: 'صوت أهدأ وأنظف', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
 ];
 
 const ARTIST_MENU_HEADER_VALUE = '__artist_header';
+const TINTED_ICON_FILES = [
+    './assets/image/icons/Queue.png',
+    './assets/image/icons/seek.png',
+    './assets/image/icons/Volumeup.png',
+    './assets/image/icons/Volumedowwn.png',
+    './assets/image/icons/Skip.png',
+    './assets/image/icons/NowPlaying.png',
+    './assets/image/icons/LoopON.png',
+    './assets/image/icons/LoopOFF.png',
+    './assets/image/icons/Error.png',
+    './assets/image/icons/AutoPlay.png',
+    './assets/image/icons/AddSong.png',
+];
+
+function warnUnavailableMusicEmojis(client) {
+    if (typeof MUSIC_EMOJIS.validateCustomEmojis !== 'function') return;
+    const freshMissing = MUSIC_EMOJIS.validateCustomEmojis(client)
+        .filter(({ emoji }) => {
+            const key = `${emoji.id}:${emoji.name || ''}`;
+            if (warnedMissingMusicEmojiIds.has(key)) return false;
+            warnedMissingMusicEmojiIds.add(key);
+            return true;
+        });
+
+    if (!freshMissing.length) return;
+    console.warn(`[MusicEmoji] unavailable custom emojis: ${freshMissing.map(({ key, emoji }) => `${key}(${emoji.name || 'emoji'}:${emoji.id})`).join(', ')}`);
+}
 
 const BASE_FILTERS = {
     volume: 1.0,
@@ -177,6 +203,23 @@ function displaySettings(tokenObj) {
     };
 }
 
+function subscriptionOwnersOf(tokenObj) {
+    const raw = Array.isArray(tokenObj?.subOwners)
+        ? tokenObj.subOwners
+        : Array.isArray(tokenObj?.owners)
+            ? tokenObj.owners
+            : [];
+    return [...new Set(raw.map(id => String(id || '').match(/\d{17,20}/)?.[0]).filter(Boolean))];
+}
+
+function canControlSubscription(tokenObj, userId) {
+    const id = String(userId || '');
+    if (!id) return false;
+    return owners.includes(id)
+        || tokenObj?.client === id
+        || subscriptionOwnersOf(tokenObj).includes(id);
+}
+
 function shortDuration(ms) {
     const value = Number(ms);
     if (!Number.isFinite(value) || value < 0) return 'Live';
@@ -193,7 +236,7 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
             likeInPrevSlot
                 ? new ButtonBuilder()
                     .setCustomId('like')
-                    .setEmoji(liked ? MUSIC_EMOJIS.dislike : MUSIC_EMOJIS.like)
+                    .setEmoji(MUSIC_EMOJIS.componentEmoji(liked ? MUSIC_EMOJIS.dislike : MUSIC_EMOJIS.like))
                     .setStyle(ButtonStyle.Secondary)
                 : new ButtonBuilder()
                     .setCustomId('prev')
@@ -201,34 +244,34 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
                     .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('stop')
-                .setEmoji(MUSIC_EMOJIS.stop)
+                .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.stop))
                 .setStyle(dangerStop ? ButtonStyle.Danger : ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('pause')
-                .setEmoji(MUSIC_EMOJIS.pause)
+                .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.pause))
                 .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('skip')
-                .setEmoji(MUSIC_EMOJIS.skip)
+                .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.skip))
                 .setStyle(ButtonStyle.Secondary),
         );
     const row2 = new ActionRowBuilder()
         .addComponents(
             new ButtonBuilder()
                 .setCustomId('volume_down')
-                .setEmoji(MUSIC_EMOJIS.volumeDown)
+                .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.volumeDown))
                 .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('loop')
-                .setEmoji(MUSIC_EMOJIS.loop)
+                .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.loop))
                 .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('queue_btn')
-                .setEmoji(MUSIC_EMOJIS.queue)
+                .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.queue))
                 .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('volume_up')
-                .setEmoji(MUSIC_EMOJIS.volumeUp)
+                .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.volumeUp))
                 .setStyle(ButtonStyle.Secondary),
         );
 
@@ -236,7 +279,7 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
         row2.addComponents(
             new ButtonBuilder()
                 .setCustomId('like')
-                .setEmoji(liked ? MUSIC_EMOJIS.dislike : MUSIC_EMOJIS.like)
+                .setEmoji(MUSIC_EMOJIS.componentEmoji(liked ? MUSIC_EMOJIS.dislike : MUSIC_EMOJIS.like))
                 .setStyle(ButtonStyle.Secondary),
         );
     }
@@ -254,14 +297,14 @@ function buildMusicComponents({ liked = false, paused = false, artistTracks = []
                 label: 'Suggest For You',
                 value: ARTIST_MENU_HEADER_VALUE,
                 description: 'Songs from the same artist',
-                emoji: MUSIC_EMOJIS.artistTop,
+                emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.artistTop),
                 default: safeSelectedArtistIndex === null,
             },
             ...artistTracks.slice(0, 6).map((t, i) => ({
                 label: (t.info.title || 'Unknown').slice(0, 99),
                 value: String(i),
                 description: `${shortDuration(t.info.length)} · ${(t.info.author || '').slice(0, 50)}`.slice(0, 99),
-                emoji: MUSIC_EMOJIS.artistTop,
+                emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.artistTop),
                 default: safeSelectedArtistIndex === i,
             })),
         ];
@@ -303,7 +346,7 @@ function buildNowPlayingPayload(TrueMusic, tokenObj, track, requester, options =
     const duration = shortDuration(track?.info?.length);
     const requesterName = requester?.displayName || requester?.username || 'Unknown';
     const titleText = uri ? `[${title}](${uri})` : title;
-    const autoPlayLine = autoPlayNowPlayingLine(track?.info);
+    const autoPlayLine = autoPlayNowPlayingLine(track?.info, TrueMusic);
     const components = buildMusicComponents({
         liked: !!options.liked,
         artistTracks: options.artistTracks || [],
@@ -362,10 +405,11 @@ function plainMusicText(value) {
         .trim();
 }
 
-function compactMusicText({ title, description, fields = [] }) {
+function compactMusicText({ title, description, fields = [], footer = null }) {
     const parts = [];
     const cleanTitle = plainMusicText(title);
     const cleanDescription = plainMusicText(description);
+    const cleanFooter = plainMusicText(footer);
     if (cleanTitle) parts.push(`**${cleanTitle}**`);
     if (cleanDescription) parts.push(cleanDescription);
     fields.forEach(field => {
@@ -373,10 +417,11 @@ function compactMusicText({ title, description, fields = [] }) {
         const value = plainMusicText(field?.value);
         if (name && value) parts.push(`**${name}:** ${value}`);
     });
+    if (cleanFooter) parts.push(cleanFooter);
     return parts.join('\n') || 'Done.';
 }
 
-function musicPayload(tokenObj, { title, description, fields = [], components = [], color = undefined, thumbnail = null, files = [] }) {
+function musicPayload(tokenObj, { title, description, fields = [], components = [], color = undefined, thumbnail = null, files = [], footer = null }) {
     const settings = displaySettings(tokenObj);
     const colorSource = tokenObj?.token ? runningBots.get(tokenObj.token) : null;
     const embedColor = getEmbedColor(colorSource, color);
@@ -390,11 +435,12 @@ function musicPayload(tokenObj, { title, description, fields = [], components = 
         if (description) embed.setDescription(description);
         if (thumbnail) embed.setThumbnail(thumbnail);
         if (fields.length) embed.addFields(fields);
+        if (footer) embed.setFooter(typeof footer === 'string' ? { text: footer } : footer);
         payload.embeds = [embed];
         if (files.length) payload.files = files;
         return tintAttachmentPayload(payload, embedColor);
     } else {
-        payload.content = compactMusicText({ title, description, fields });
+        payload.content = compactMusicText({ title, description, fields, footer });
         payload.embeds = [];
     }
 
@@ -413,11 +459,11 @@ function escapeMarkdownLinkText(value, maxLength = 100) {
         .replace(/\]/g, '\\]');
 }
 
-function autoPlayNowPlayingLine(info) {
+function autoPlayNowPlayingLine(info, client = null) {
     if (info?.autoPlay !== true) return '';
-    const emoji = MUSIC_EMOJIS.emojiStr?.(MUSIC_EMOJIS.smartSearch) || '🎵';
+    const emoji = MUSIC_EMOJIS.messageEmoji?.(MUSIC_EMOJIS.smartSearch, client, '') || '';
     const artist = cleanInlineText(info.autoPlayArtist, '', 48);
-    return `${emoji} Auto Play${artist ? ` : ${artist}` : ''}`;
+    return `${emoji ? `${emoji} ` : ''}Auto Play${artist ? ` : ${artist}` : ''}`;
 }
 
 function isHttpUrl(value) {
@@ -472,7 +518,7 @@ function buildNowPlayingFallbackPayload(tokenObj, player, requester) {
     const titleText = cleanInlineText(current.title, 'Unknown track', 96);
     const authorText = cleanInlineText(current.author, 'Unknown artist', 72);
     const requesterName = requester?.displayName || requester?.globalName || requester?.username || requester?.tag || 'Unknown';
-    const autoPlayLine = autoPlayNowPlayingLine(current);
+    const autoPlayLine = autoPlayNowPlayingLine(current, player?.client);
 
     return musicPayload(tokenObj, {
         title: 'Now Playing',
@@ -519,12 +565,16 @@ function buildNowPlayingMetaRow(tokenObj, currentTime, totalTime, refId = 'np', 
     const emojiKey = platformEmojiKey(platform);
     const buttons = [];
     if (options.platform !== false) {
-        buttons.push(new ButtonBuilder()
+        const platformEmoji = MUSIC_EMOJIS.platforms[emojiKey]
+            ? MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.platforms[emojiKey])
+            : null;
+        const platformButton = new ButtonBuilder()
             .setCustomId(`${refId}_platform`)
             .setLabel(`Platform : ${compactPlatformName(platform)}`.slice(0, 80))
-            .setEmoji(MUSIC_EMOJIS.platforms[emojiKey] || '🎵')
             .setStyle(ButtonStyle.Secondary)
-            .setDisabled(true));
+            .setDisabled(true);
+        if (platformEmoji) platformButton.setEmoji(platformEmoji);
+        buttons.push(platformButton);
     }
     if (options.time !== false) {
         buttons.push(new ButtonBuilder()
@@ -574,7 +624,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
         const _reqName = cleanInlineText(_req?.displayName || _req?.globalName || _req?.username || _req?.tag, 'Unknown', 48);
         const { currentTime: _ct, totalTime: _tt } = safeProgressTimes(player, track, options);
         const _bar = buildInlineProgressBar(_ct, _tt, 20, `👤 ${_reqName}`);
-        const _autoPlayLine = autoPlayNowPlayingLine(current);
+        const _autoPlayLine = autoPlayNowPlayingLine(current, TrueMusic);
         const _ctr = new ContainerBuilder()
             .addTextDisplayComponents(new TextDisplayBuilder().setContent([
                 `### ${_title}`,
@@ -590,7 +640,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     const author = cleanInlineText(current.author, 'Unknown artist', 72);
     const uri = isHttpUrl(current.uri) ? current.uri : null;
     const titleLine = uri ? `[${escapeMarkdownLinkText(title, 96)}](${uri})` : title;
-    const autoPlayLine = autoPlayNowPlayingLine(current);
+    const autoPlayLine = autoPlayNowPlayingLine(current, TrueMusic);
     const requester = options.requester || current.requester || message?.author;
     const requesterName = cleanInlineText(
         requester?.displayName || requester?.globalName || requester?.username || requester?.tag,
@@ -713,7 +763,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     };
 }
 
-function platformDisplay(source) {
+function platformDisplay(source, client = null) {
     const names = {
         auto: 'Smart Search',
         ytsearch: 'YouTube',
@@ -724,10 +774,8 @@ function platformDisplay(source) {
         dzsearch: 'Deezer',
     };
     const emojiData = MUSIC_EMOJIS.platforms[source];
-    const emoji = emojiData
-        ? (typeof emojiData === 'object' ? `<:${emojiData.name}:${emojiData.id}>` : String(emojiData))
-        : '🎵';
-    return `${emoji} ${names[source] || source || 'YouTube'}`;
+    const emoji = emojiData ? MUSIC_EMOJIS.messageEmoji(emojiData, client, typeof emojiData === 'string' ? emojiData : '') : '';
+    return `${emoji ? `${emoji} ` : ''}${names[source] || source || 'YouTube'}`;
 }
 
 function buildBotInfoEmbed(TrueMusic, tokenObj, guildId) {
@@ -775,7 +823,7 @@ function buildBotInfoEmbed(TrueMusic, tokenObj, guildId) {
             {
                 name: 'Music',
                 value: [
-                    `**Platform :** ${platformDisplay(settings.platform)}`,
+                    `**Platform :** ${platformDisplay(settings.platform, TrueMusic)}`,
                     `**Voice :** ${voiceChannel ? `<#${voiceChannel.id}>` : '`Not Connected`'}`,
                     `**Node :** \`${nodeName}\``,
                 ].join('\n'),
@@ -850,7 +898,7 @@ function clearProgressInterval(player, reason = '') {
     if (!player?.data?.progressInterval) return;
     clearInterval(player.data.progressInterval);
     player.data.progressInterval = null;
-    if (reason) console.warn(`[ProgressUpdate] cleared interval: ${reason}`);
+    if (reason && process.env.DEBUG_PROGRESS) console.warn(`[ProgressUpdate] cleared interval: ${reason}`);
 }
 
 /**
@@ -930,6 +978,24 @@ function registerQueuePanel(player, message, version) {
     data.queuePanels.set(message.id, { message, version });
 }
 
+function totalDuration(tracks = []) {
+    return tracks.reduce((sum, track) => {
+        const length = Number(track?.info?.length || 0);
+        return Number.isFinite(length) && length > 0 ? sum + length : sum;
+    }, 0);
+}
+
+function queueTitle(guildName, client = null) {
+    const emoji = MUSIC_EMOJIS.messageEmoji?.(MUSIC_EMOJIS.queue, client, '') || '';
+    return `${emoji ? `${emoji} ` : ''}${guildName} Queue`;
+}
+
+function buildQueueFooter(player, page = 0, itemsPerPage = 8) {
+    const totalPages = Math.max(1, Math.ceil(player.queue.length / itemsPerPage));
+    const safePage = Math.max(0, Math.min(page, totalPages - 1));
+    return `Track : ${player.queue.length} | Page : ${safePage + 1}/${totalPages} | Total time : ${shortDuration(totalDuration(Array.from(player.queue || [])))}`;
+}
+
 function buildQueueDescription(player, page = 0, itemsPerPage = 8) {
     const totalPages = Math.max(1, Math.ceil(player.queue.length / itemsPerPage));
     const safePage = Math.max(0, Math.min(page, totalPages - 1));
@@ -952,19 +1018,19 @@ function buildQueueDescription(player, page = 0, itemsPerPage = 8) {
 
     const queuedLines = pageTracks.map((track, i) => {
         const absolute = safePage * itemsPerPage + i + 1;
-        return `\`${absolute}.\` ${queueTrackLink(track, 76)}`;
+        return `**#${absolute} : ** ${queueTrackLink(track, 82)}`;
     });
 
-    const upcomingHeader = player.queue.length > 0
-        ? `**Upcoming** • ${player.queue.length} ${player.queue.length === 1 ? 'track' : 'tracks'} • Page ${safePage + 1}/${totalPages}`
-        : '**Upcoming**';
+    const upcomingHeader = '**Upcoming :**';
 
     return [
         '**Now Playing**',
         npLine,
         '',
+        '',
         upcomingHeader,
-        queuedLines.length ? queuedLines.join('\n') : '> No queued songs.',
+        '',
+        queuedLines.length ? queuedLines.join('\n\n') : '> No queued songs.',
     ].join('\n');
 }
 
@@ -996,12 +1062,12 @@ function buildQueueComponents(player, tokenObj, refId, page = 0, itemsPerPage = 
     rows.push(new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId(`queue_${refId}_prev`)
-            .setEmoji(MUSIC_EMOJIS.pagePrev)
+            .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.pagePrev))
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(safePage === 0),
         new ButtonBuilder()
             .setCustomId(`queue_${refId}_next`)
-            .setEmoji(MUSIC_EMOJIS.pageNext)
+            .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.pageNext))
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(safePage >= totalPages - 1),
         new ButtonBuilder()
@@ -1064,6 +1130,15 @@ function runBackground(label, task) {
     });
 }
 
+function firePlayerAction(label, task) {
+    try {
+        Promise.resolve(task())
+            .catch(err => console.warn(`[${label}] ${err?.message || err}`));
+    } catch (err) {
+        console.warn(`[${label}] ${err?.message || err}`);
+    }
+}
+
 function finalUiOptionsFor(player, track, options = {}) {
     return {
         track,
@@ -1073,11 +1148,12 @@ function finalUiOptionsFor(player, track, options = {}) {
     };
 }
 
-async function stopPlayerAudio(player) {
+async function stopPlayerAudio(player, options = {}) {
     if (!player) return false;
     const hadTrack = !!player.currentTrack;
+    let stopRequest = Promise.resolve();
     if (player.currentTrack && player.node?.rest) {
-        await player.node.rest.updatePlayer({
+        stopRequest = player.node.rest.updatePlayer({
             guildId: player.guildId,
             data: { track: { encoded: null } },
         }).catch(() => {});
@@ -1085,6 +1161,7 @@ async function stopPlayerAudio(player) {
     player.currentTrack = null;
     player.isPlaying = false;
     player.isPaused = false;
+    if (options.wait !== false) await stopRequest;
     return hadTrack;
 }
 
@@ -1106,9 +1183,24 @@ function wait(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function promiseWithTimeout(promise, ms, label = 'operation timed out') {
+    let timer;
+    try {
+        return await Promise.race([
+            Promise.resolve(promise),
+            new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error(label)), ms);
+            }),
+        ]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 async function resolveWithNodeRetry(client, options, retries = 1) {
     const poru = client?.poru;
     if (!poru) throw new Error('Poru is not initialized.');
+    const timeoutMs = Math.max(5000, Number(process.env.MUSIC_RESOLVE_TIMEOUT_MS || 9000));
 
     for (let attempt = 0; attempt <= retries; attempt++) {
         if (!hasConnectedPoruNode(poru)) {
@@ -1117,17 +1209,26 @@ async function resolveWithNodeRetry(client, options, retries = 1) {
         }
 
         try {
-            return await poru.resolve(options);
+            return await promiseWithTimeout(
+                poru.resolve(options),
+                timeoutMs,
+                `Lavalink resolve timed out after ${timeoutMs}ms`,
+            );
         } catch (err) {
             const message = err?.message || String(err || '');
             const noNodes = /no nodes are available/i.test(message);
-            if (!noNodes || attempt >= retries) throw err;
+            const retryable = noNodes || /timed out|timeout|econnreset|etimedout/i.test(message);
+            if (!retryable || attempt >= retries) throw err;
             try { poru.init(client); } catch {}
             await wait(1200);
         }
     }
 
-    return poru.resolve(options);
+    return promiseWithTimeout(
+        poru.resolve(options),
+        timeoutMs,
+        `Lavalink resolve timed out after ${timeoutMs}ms`,
+    );
 }
 
 function isMemberDeafened(member) {
@@ -1281,8 +1382,9 @@ function rankTracksForQuery(tracks, query, { strict = false } = {}) {
 }
 
 async function resolveSmartTracks(poru, query, source, limit = 20, options = {}) {
+    const timeoutMs = Math.max(4000, Number(process.env.MUSIC_SMART_RESOLVE_TIMEOUT_MS || 8000));
     if (isProbablyUrl(query)) {
-        const result = await poru.resolve({ query });
+        const result = await withTimeout(poru.resolve({ query }), timeoutMs, null);
         return dedupeTracks(result?.tracks || []).slice(0, limit);
     }
 
@@ -1299,7 +1401,11 @@ async function resolveSmartTracks(poru, query, source, limit = 20, options = {})
     for (const searchSource of sources) {
         for (const variant of variants) {
             if (tracks.length >= prefetchLimit) break;
-            const result = await poru.resolve({ query: variant, source: searchSource }).catch(() => null);
+            const result = await withTimeout(
+                poru.resolve({ query: variant, source: searchSource }).catch(() => null),
+                timeoutMs,
+                null,
+            );
             if (result?.tracks?.length) tracks.push(...result.tracks.slice(0, perResolveLimit));
         }
     }
@@ -1337,6 +1443,7 @@ const NORMALIZED_LABEL_NAMES = KNOWN_LABEL_NAMES.map(normalizeSearchText).filter
 const ARTIST_TRACK_CACHE_TTL_MS = 10 * 60 * 1000;
 const ARTIST_TRACK_CACHE_MAX = 200;
 const AUTOPLAY_HISTORY_MAX = 30;
+const ARTIST_RANDOM_SOURCES = ['ytmsearch', 'spsearch', 'scsearch'];
 const artistTrackCache = new Map();
 
 function trimArtistCandidate(value) {
@@ -1542,6 +1649,46 @@ function setAutoPlayState(player, enabled) {
     return data.autoPlay;
 }
 
+function hasHumanVoiceListener(client, player) {
+    const guild = client?.guilds?.cache?.get?.(player?.guildId);
+    const channelId = player?.voiceChannel || guild?.members?.me?.voice?.channelId;
+    const states = guild?.voiceStates?.cache;
+    if (!guild || !channelId || !states) return true;
+
+    for (const state of states.values()) {
+        if (state.channelId !== channelId) continue;
+        if (state.id === client.user?.id) continue;
+        const cachedUser = client.users?.cache?.get?.(state.id);
+        const isBot = state.member?.user?.bot === true || cachedUser?.bot === true;
+        if (!isBot) return true;
+    }
+
+    return false;
+}
+
+function disableIdlePlaybackModesIfAlone(client, player, reason = 'idle_voice') {
+    if (!player || hasHumanVoiceListener(client, player)) return false;
+
+    let changed = false;
+    if (player.loop && player.loop !== 'NONE') {
+        player.setLoop('NONE');
+        changed = true;
+    }
+    if (player.data?.autoPlay) {
+        setAutoPlayState(player, false);
+        changed = true;
+    }
+
+    if (changed) {
+        ensurePlayerData(player).lastIdleModeDisableReason = reason;
+        if (process.env.DEBUG_IDLE_MODES) {
+            console.warn(`[IdleModes] disabled loop/autoplay for ${player.guildId}: ${reason}`);
+        }
+    }
+
+    return changed;
+}
+
 function filterArtistTracks(tracks, currentTrack, limit, artistName = '', options = {}) {
     const currentId = currentTrack?.info?.uri || currentTrack?.info?.identifier;
     const unique = dedupeTracks(tracks)
@@ -1574,11 +1721,20 @@ function buildArtistCatalogQueries(artistName) {
 }
 
 function artistSearchSources(source) {
-    const primary = source === 'auto' ? 'ytmsearch' : (source || 'ytsearch');
-    const preferred = source === 'auto'
-        ? ['ytmsearch', 'spsearch', 'scsearch', 'ytsearch']
-        : [primary, 'ytmsearch', 'spsearch', 'scsearch', 'ytsearch'];
-    return [...new Set(preferred.filter(Boolean))];
+    const normalized = String(source || 'auto').toLowerCase();
+    const mapped = normalized === 'ytsearch' ? 'ytmsearch' : normalized;
+    const sources = ARTIST_RANDOM_SOURCES.includes(mapped)
+        ? [mapped, ...ARTIST_RANDOM_SOURCES.filter(item => item !== mapped)]
+        : ARTIST_RANDOM_SOURCES;
+    return shuffleTracks(sources);
+}
+
+function withTimeout(promise, ms, fallback = []) {
+    let timer;
+    return Promise.race([
+        Promise.resolve(promise),
+        new Promise(resolve => { timer = setTimeout(() => resolve(fallback), ms); }),
+    ]).finally(() => clearTimeout(timer));
 }
 
 function randomTrack(tracks) {
@@ -1608,18 +1764,23 @@ async function resolveQuickAutoPlayTrack(poru, artistQuery, source, currentTrack
         names.push(fallbackName);
     }
 
-    for (const name of names) {
-        for (const searchSource of sourceOrder) {
-            const query = `${trimArtistCandidate(name)} songs`;
-            const tracks = await resolveSmartTracks(poru, query, searchSource, 6, {
-                variants: [query],
+    for (const name of shuffleTracks(names)) {
+        const artist = trimArtistCandidate(name);
+        const query = `${artist} songs`;
+        const variants = shuffleTracks([query, artist]).filter(Boolean);
+        const results = await Promise.allSettled(sourceOrder.map(searchSource => withTimeout(
+            resolveSmartTracks(poru, query, searchSource, 5, {
+                variants,
                 prefetchMultiplier: 1,
-                perResolveLimit: 6,
-            }).catch(() => []);
-            const candidates = filterArtistTracks(tracks, currentTrack, 6, name, { historySet });
-            const picked = randomTrack(candidates);
-            if (picked) return picked;
-        }
+                perResolveLimit: 5,
+            }),
+            2500,
+            [],
+        )));
+        const tracks = shuffleTracks(results.flatMap(item => item.status === 'fulfilled' ? item.value || [] : []));
+        const candidates = filterArtistTracks(tracks, currentTrack, 12, name, { historySet });
+        const picked = randomTrack(candidates);
+        if (picked) return picked;
     }
 
     return null;
@@ -1630,45 +1791,66 @@ async function resolveCachedArtistQuery(poru, query, source, limit) {
     let tracks = getCachedArtistTracks(key);
 
     if (!tracks) {
-        tracks = [];
         const sources = artistSearchSources(source);
-        const perSourceLimit = Math.max(2, Math.min(4, Math.ceil(limit / Math.min(3, sources.length)) + 1));
-        for (const artistSource of sources) {
-            const found = await resolveSmartTracks(poru, query, artistSource, perSourceLimit, {
+        const perSourceLimit = Math.max(4, Math.min(8, limit));
+        const results = await Promise.allSettled(sources.map(artistSource => withTimeout(
+            resolveSmartTracks(poru, query, artistSource, perSourceLimit, {
                 variants: [query],
                 prefetchMultiplier: 1,
                 perResolveLimit: perSourceLimit,
-            }).catch(() => []);
-            tracks.push(...found);
-            if (tracks.length >= limit) break;
-        }
+            }),
+            3500,
+            [],
+        )));
+        tracks = dedupeTracks(results.flatMap(item => item.status === 'fulfilled' ? item.value || [] : []));
         setCachedArtistTracks(key, tracks);
     }
 
-    return tracks;
+    return shuffleTracks(tracks);
 }
 
 async function resolveArtistCatalogTracks(poru, artistName, source, limit) {
-    const queries = buildArtistCatalogQueries(artistName);
-    const tracks = [];
-    const perQueryLimit = Math.max(1, Math.min(8, limit));
+    const queries = shuffleTracks(buildArtistCatalogQueries(artistName));
+    const perQueryLimit = Math.max(4, Math.min(8, limit));
+    const results = await Promise.allSettled(queries.map(query => (
+        resolveCachedArtistQuery(poru, query, source, perQueryLimit).catch(() => [])
+    )));
+    const tracks = results.flatMap(item => item.status === 'fulfilled' ? item.value || [] : []);
 
-    for (const query of queries) {
-        const found = await resolveCachedArtistQuery(poru, query, source, perQueryLimit).catch(() => []);
-        tracks.push(...found);
-        if (tracks.length >= limit) break;
-    }
-
-    return dedupeTracks(tracks);
+    return shuffleTracks(dedupeTracks(tracks));
 }
 
-async function resolveArtistTracks(poru, artistQuery, source, currentTrack, limit = 5) {
+async function resolveFreshArtistCatalogTracks(poru, artistName, source, limit) {
+    const artist = trimArtistCandidate(artistName);
+    const sources = artistSearchSources(source);
+    const perSourceLimit = Math.max(4, Math.min(8, limit));
+    const query = `${artist} songs`;
+    const variants = shuffleTracks([query, artist]).filter(Boolean);
+
+    const tasks = sources.map(artistSource => withTimeout(
+        resolveSmartTracks(poru, query, artistSource, perSourceLimit, {
+            variants,
+            prefetchMultiplier: 1,
+            perResolveLimit: perSourceLimit,
+        }),
+        3500,
+        [],
+    ));
+
+    const results = await Promise.allSettled(tasks);
+    return shuffleTracks(dedupeTracks(results.flatMap(item => item.status === 'fulfilled' ? item.value || [] : [])));
+}
+
+async function resolveArtistTracks(poru, artistQuery, source, currentTrack, limit = 5, options = {}) {
     const artistName = typeof artistQuery === 'string' ? artistQuery : artistQuery?.primary;
     const fallbackName = typeof artistQuery === 'object' ? artistQuery.fallback : '';
     if (!artistName) return [];
+    const filterOptions = {
+        historySet: options.historySet instanceof Set ? options.historySet : null,
+    };
 
-    const tracks = await resolveArtistCatalogTracks(poru, artistName, source || 'auto', Math.max(6, limit + 2));
-    const primaryTracks = filterArtistTracks(tracks, currentTrack, limit, artistName);
+    const tracks = await resolveFreshArtistCatalogTracks(poru, artistName, source || 'auto', Math.max(18, limit * 4));
+    const primaryTracks = filterArtistTracks(tracks, currentTrack, limit, artistName, filterOptions);
     const needsFallback = fallbackName
         && normalizeSearchText(fallbackName) !== normalizeSearchText(artistName)
         && primaryTracks.length < Math.min(3, limit);
@@ -1676,10 +1858,11 @@ async function resolveArtistTracks(poru, artistQuery, source, currentTrack, limi
     if (!needsFallback) return primaryTracks;
 
     const fallbackTracks = filterArtistTracks(
-        await resolveArtistCatalogTracks(poru, fallbackName, source || 'auto', Math.max(6, limit + 2)),
+        await resolveFreshArtistCatalogTracks(poru, fallbackName, source || 'auto', Math.max(18, limit * 4)),
         currentTrack,
         limit,
         fallbackName,
+        filterOptions,
     );
 
     return dedupeTracks([...primaryTracks, ...fallbackTracks]).slice(0, limit);
@@ -1866,6 +2049,7 @@ module.exports = {
         });
 
         const voiceEnsureLocks = new Map();
+        const playConnectionLocks = new Map();
 
         // Tracks when the user manually stopped the bot.
         // Auto-reconnect and voice-guard are suppressed for this duration.
@@ -2124,8 +2308,10 @@ module.exports = {
         });
 
         TrueMusic.once('clientReady', async () => {
-            refreshEmbedColor(TrueMusic).catch(() => {});
-            TrueMusic.application?.emojis?.fetch?.().catch(() => {});
+            await refreshEmbedColor(TrueMusic).catch(() => {});
+            await TrueMusic.application?.emojis?.fetch?.().catch(() => {});
+            warnUnavailableMusicEmojis(TrueMusic);
+            warmTintCache(TINTED_ICON_FILES, [getEmbedColor(TrueMusic)]);
             try { TrueMusic.poru.init(TrueMusic); } catch (e) { console.error(`[Poru] فشل الاتصال بـ Lavalink: ${e.message}`); }
             collection.set(TrueMusic.user.id, TrueMusic);
 
@@ -2322,33 +2508,38 @@ module.exports = {
 
                             .setThumbnail("https://cdn.discordapp.com/attachments/1091536665912299530/1264225405465002025/O.png?ex=669d1928&is=669bc7a8&hm=ee36f6e8facc4eb99721570bc7f32dff9551bc5bea89d7a027c09408cafba604&")
                             .setDescription([
-                                '**Music Commands**',
-                                '**play [track]** - `Adds the track to the queue.`',
-                                '**search [track]** - `Searching from YouTube`',
-                                '**join** - `Joins the voice channel`',
-                                '**leave** - `Leaves the voice channel`',
-                                '**pause** - `Pauses the playback`',
-                                '**resume** - `Resumes the playback`',
-                                '**skip** - `Skips the currently playing track`',
-                                '**queue** - `Displays the current queue`',
-                                '**stop** - `Stop playing songs`',
-                                '**autoplay** - `Play songs on the first song`',
-                                '**nowplaying** - `Displays the currently playing track`',
-                                '**seek [timestamp]** - `Sets the track position to the timestamp`',
-                                '**remove [position]** - `Removes the track from the queue`',
-                                '**loop [ON/OFF]** - `Repeat play song`',
-                                '**forward [Time]** - `Present a specific time of the song`',
-                                '**volume [volume]** - `Sets the bot volume`',
+                                '***Music Commands :***',
                                 '',
-                                '**Owner Commands**',
-                                '**setname [name]** - `Sets the name of the bot`',
-                                '**setavatar [attach a picture]** - `Sets the avatar of the bot`',
-                                '**streaming** - `Sets the status the bot displays`',
-                                '**setprefix [setprefix/unsetprefix]** - `Add and delete prefix`',
-                                '**setvc [setvc/leave]** - `Set the voice bot and name it as voice.`',
-                                '**settc [settc/unchat]** - `Sets the text channel for playing music`',
-                                '**Settings** - `Control all bots`',
-                                '**restart** - `Restart the bot`',
+                                '``play`` : Play a song or add it to the queue',
+                                '``search`` : Search across the enabled music platforms',
+                                '``autoplay`` : Toggle auto music player',
+                                '``stop`` : Stop the music and clear playback',
+                                '``skip`` : Skip the current song',
+                                '``volume`` : Set the music volume',
+                                '``nowplaying`` : Show the song playing now',
+                                '``queue`` : Show the server playlist',
+                                '``loop`` : Loop the current song',
+                                '``pause`` : Pause the music',
+                                '``resume`` : Resume the music',
+                                '``seek`` : Seek to a specific time',
+                                '``forward`` : Move forward in the current song',
+                                '``remove`` : Remove a song from the queue',
+                                '``mylikes`` : Show your liked songs',
+                                '',
+                                '***Owner Commands :***',
+                                '',
+                                '``join`` / ``come`` / ``setvc`` : Set bot voice channel enable 24/7',
+                                '``leave`` : Leave voice channel disable 24/7',
+                                '``setchat`` / ``chat`` / ``settc`` : Set commands chat',
+                                '``unchat`` : Clear commands chat',
+                                '``setprefix`` : Change the bot prefix',
+                                '``unsetprefix`` : Remove the bot prefix',
+                                '``settings`` : Display subscription bot settings',
+                                '``setname`` : Change the bot name',
+                                '``setavatar`` : Change the bot avatar',
+                                '``streaming`` : Change the bot status',
+                                '``restart`` : Restart the bot',
+                                '``ping`` : Show bot response speed',
                             ].join('\n'))
 
 
@@ -2381,7 +2572,7 @@ module.exports = {
                     }
 
 
-                    if (!owners.includes(message.author.id) && !message.member.permissions.has('ADMINISTRATOR')) {
+                    if (!canControlSubscription(tokenObj, message.author.id)) {
                         return;
                     }
                     if (args[0] == 'restart' || args[0] == 'اعاده') {
@@ -2603,7 +2794,6 @@ module.exports = {
     });
 
     TrueMusic.poru.on('trackError', async (player, track, data) => {
-        console.warn(`[TrackError] ${data?.type || 'unknown'} ${data?.reason || data?.exception?.message || ''}`.trim());
         if (data?.type === 'TrackStuckEvent') {
             ensurePlayerData(player);
             const stuckTrack = track || player.currentTrack || player.data.lastTrack;
@@ -2615,10 +2805,11 @@ module.exports = {
                 player.data.stuckRecoveryIdentity = identity;
                 player.data.stuckRecoveryAt = Date.now();
                 player.data.stuckResumePosition = Math.max(0, Number(player.position || player.data.lastPosition || 0) - 2000);
-                console.warn(`[TrackStuck] Requeued stuck track for recovery at ${player.data.stuckResumePosition}ms`);
+                if (process.env.DEBUG_RECOVERY) console.warn(`[TrackStuck] requeued stuck track for recovery at ${player.data.stuckResumePosition}ms`);
                 return;
             }
         }
+        console.warn(`[TrackError] ${data?.type || 'unknown'} ${data?.reason || data?.exception?.message || ''}`.trim());
         await finalizePlayerUi(player);
         await bumpQueueVersion(player, 'track_error');
         setTimeout(() => recoverPlayerPlayback(player, 'track_error').catch(() => {}), 2500);
@@ -2647,9 +2838,13 @@ module.exports = {
       }
       // ─────────────────────────────────────────────────────────────────────────
 
-      if (!naturalEnd && reason !== 'stopped' && reason !== 'replaced') {
-          console.warn(`[TrackEnd] non-natural end for ${trackIdentity(track) || 'unknown'}: ${reason}`);
-      }
+	      if (!naturalEnd && reason !== 'stopped' && reason !== 'replaced') {
+	          console.warn(`[TrackEnd] non-natural end for ${trackIdentity(track) || 'unknown'}: ${reason}`);
+	      }
+
+	      if (naturalEnd) {
+	          disableIdlePlaybackModesIfAlone(TrueMusic, player, 'track_end_alone');
+	      }
 
       // Guard: if the new track already started and its panel is live, skip UI finalization
       // to avoid disabling the new panel by mistake (race condition with trackStart).
@@ -2663,8 +2858,9 @@ module.exports = {
       await bumpQueueVersion(player, `track_end:${reason}`);
             });
 
-            TrueMusic.poru.on("queueEnd", async (player) => {
-              await finalizePlayerUi(player, { complete: player?.data?.lastTrackEndNatural === true });
+	            TrueMusic.poru.on("queueEnd", async (player) => {
+	              disableIdlePlaybackModesIfAlone(TrueMusic, player, 'queue_end_alone');
+	              await finalizePlayerUi(player, { complete: player?.data?.lastTrackEndNatural === true });
               await bumpQueueVersion(player, 'queue_end');
               const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
               await updatePlaybackVoiceStatus(TrueMusic, tokenObj2, player, null);
@@ -2765,11 +2961,18 @@ module.exports = {
         return selected;
     }
 
-            // ── trackStart: always publish the normal now-playing panel ──────────
-            TrueMusic.poru.on('trackStart', async (player, track) => {
-        await bumpQueueVersion(player, 'track_start');
-        ensurePlayerData(player);
-        clearStopped();
+	            // ── trackStart: always publish the normal now-playing panel ──────────
+	            TrueMusic.poru.on('trackStart', async (player, track) => {
+	        ensurePlayerData(player);
+	        const identity = trackIdentity(track);
+	        const startLock = player.data.nowPlayingSendLock;
+	        if (identity && startLock?.identity === identity && Date.now() - Number(startLock.at || 0) < 15_000) {
+	            if (process.env.DEBUG_NP) console.warn(`[NowPlaying] early duplicate trackStart suppressed for ${identity}`);
+	            return;
+	        }
+	        if (identity) player.data.nowPlayingSendLock = { identity, at: Date.now(), starting: true };
+	        await bumpQueueVersion(player, 'track_start');
+	        clearStopped();
 
         // ── Recovery cleanup ──────────────────────────────────────────────────
         // If trackEnd(replaced) was suppressed by the recovery guard, _recovering
@@ -2778,62 +2981,63 @@ module.exports = {
         player.data._recovering = false;
         player.data._recoveryTrackId = null;
         player.data._recoveryAt = null;
-        // ─────────────────────────────────────────────────────────────────────
+	        // ─────────────────────────────────────────────────────────────────────
 
-        const identity = trackIdentity(track);
-        const previousContext = player.data.nowPlayingContext;
-        const previousIdentity = player.data.nowPlayingTrackIdentity || trackIdentity(previousContext?.track);
-        if (player.data.nowPlayingMessage && previousIdentity) {
-            if (identity && previousIdentity === identity) {
-                warnPlayerOnce(
-                    player,
-                    `duplicate-panel:${identity}`,
-                    `[NowPlaying] duplicate trackStart suppressed for ${identity}${wasRecovering ? ' (recovery-ok)' : ''}`,
-                    10_000,
-                );
-                // If this is a recovery restart, reset timing so progress bar stays accurate
-                if (wasRecovering) {
-                    player.data.lastProgressAt = Date.now();
-                    player.data.trackStartedAt = Date.now();
-                    player.data.recoveryAttempts = 0;
-                }
-                return;
-            }
+	        const stuckRecoveryIdentity = player.data.stuckRecoveryIdentity;
+	        const stuckResumePosition = Math.max(0, Number(player.data.stuckResumePosition || 0));
+	        const shouldResumeStuckTrack = stuckRecoveryIdentity && stuckRecoveryIdentity === identity;
+	        const applyStuckRecoveryResume = () => {
+	            delete player.data.stuckRecoveryIdentity;
+	            delete player.data.stuckRecoveryAt;
+	            delete player.data.stuckResumePosition;
+	            if (stuckResumePosition > 0) {
+	                setTimeout(() => {
+	                    const stillSameTrack = player.currentTrack && trackIdentity(player.currentTrack) === identity;
+	                    if (!stillSameTrack) return;
+	                    const seek = typeof player.seekTo === 'function' ? player.seekTo.bind(player) : player.seek?.bind(player);
+	                    if (seek) Promise.resolve(seek(stuckResumePosition)).catch(() => {});
+	                }, 1200);
+	            }
+	        };
+	        const previousContext = player.data.nowPlayingContext;
+	        const previousIdentity = player.data.nowPlayingTrackIdentity || trackIdentity(previousContext?.track);
+	        if (player.data.nowPlayingMessage && previousIdentity) {
+	            if (identity && previousIdentity === identity) {
+	                if (wasRecovering || shouldResumeStuckTrack) {
+	                    if (process.env.DEBUG_NP) console.warn(`[NowPlaying] recovered duplicate trackStart for ${identity}`);
+	                } else {
+	                    warnPlayerOnce(
+	                        player,
+	                        `duplicate-panel:${identity}`,
+	                        `[NowPlaying] duplicate trackStart suppressed for ${identity}`,
+	                        10_000,
+	                    );
+	                }
+	                // If this is a recovery restart, reset timing so progress bar stays accurate
+	                if (wasRecovering || shouldResumeStuckTrack) {
+	                    player.data.lastTrack = track;
+	                    player.data.lastProgressAt = Date.now();
+	                    player.data.trackStartedAt = Date.now();
+	                    player.data.lastPosition = shouldResumeStuckTrack ? stuckResumePosition : 0;
+	                    player.data.recoveryAttempts = 0;
+	                    if (shouldResumeStuckTrack) applyStuckRecoveryResume();
+	                }
+	                return;
+	            }
             // Normal when skipping — demote to debug to avoid log noise
             if (process.env.DEBUG_NP) console.warn(`[NowPlaying] finalizing stale panel before new track: ${previousIdentity} -> ${identity || 'unknown'}`);
             await finalizePlayerUi(player, { complete: false, track: previousContext?.track });
             ensurePlayerData(player);
         }
-        if (identity) {
-            const sendLock = player.data.nowPlayingSendLock;
-            if (sendLock?.identity === identity && Date.now() - Number(sendLock.at || 0) < 10_000) {
-                warnPlayerOnce(player, `send-lock:${identity}`, `[NowPlaying] send lock suppressed duplicate panel for ${identity}`, 10_000);
-                return;
-            }
-            player.data.nowPlayingSendLock = { identity, at: Date.now() };
-        }
-        const stuckRecoveryIdentity = player.data.stuckRecoveryIdentity;
-        const stuckResumePosition = Math.max(0, Number(player.data.stuckResumePosition || 0));
-        const shouldResumeStuckTrack = stuckRecoveryIdentity && stuckRecoveryIdentity === trackIdentity(track);
-                player.data.lastTrack = track;
-        rememberAutoPlayHistory(player, track);
+	                player.data.lastTrack = track;
+	        rememberAutoPlayHistory(player, track);
         player.data.trackStartedAt = Date.now();
         player.data.lastProgressAt = Date.now();
         player.data.lastPosition = 0;
         player.data.recoveryAttempts = 0;
-        if (shouldResumeStuckTrack) {
-            delete player.data.stuckRecoveryIdentity;
-            delete player.data.stuckRecoveryAt;
-            delete player.data.stuckResumePosition;
-            if (stuckResumePosition > 0) {
-                setTimeout(() => {
-                    const stillSameTrack = player.currentTrack && trackIdentity(player.currentTrack) === trackIdentity(track);
-                    if (!stillSameTrack) return;
-                    const seek = typeof player.seekTo === 'function' ? player.seekTo.bind(player) : player.seek?.bind(player);
-                    if (seek) Promise.resolve(seek(stuckResumePosition)).catch(() => {});
-                }, 1200);
-            }
-        }
+	        if (shouldResumeStuckTrack) {
+	            applyStuckRecoveryResume();
+	        }
 
                 const requester = track.info?.requester;
                 const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
@@ -2964,7 +3168,9 @@ module.exports = {
 
                 try {
                     const source = displaySettings(tokenObj2).platform;
-                    const artistTracks = await resolveArtistTracks(TrueMusic.poru, artistQuery, source || 'auto', track, 6);
+                    const artistTracks = await resolveArtistTracks(TrueMusic.poru, artistQuery, source || 'auto', track, 6, {
+                        historySet: autoPlayHistorySet(player),
+                    });
             player.data.ui.artistTracks = artistTracks;
             if (player.data.nowPlayingMessage?.id === msg.id && player.currentTrack === track) {
                 const payload = buildNowPlayingV2Payload(TrueMusic, tokenObj2, player, { author: requester }, {
@@ -3061,11 +3267,10 @@ module.exports = {
                                         return runMyLikesCommand(myLikesArgs);
                                     }
 
-                                    let memberVoice = message.member?.voice?.channel;
-                            if (!memberVoice) return;
+	                                    let memberVoice = message.member?.voice?.channel;
+	                            if (!memberVoice) return;
 
-            let clientVoice = message.guild.members?.me?.voice?.channel;
-            if (!clientVoice || memberVoice.id !== clientVoice.id) return;
+	            let clientVoice = message.guild.members?.me?.voice?.channel;
 
             const prefix = tokenObj.prefix || "";
 
@@ -3092,11 +3297,17 @@ module.exports = {
                 remove: [`remove`, `Remove`, `rm`, `حذف`],
                 autoplay: [`autoplay`, `Autoplay`, `Ap`, `ap`],
                 search: [`search`, `ys`, `بحث`],
-                queue: [`queue`, `قائمة`, `اغاني`, `q`, `qu`, `Q`, `Qu`, `Queue`],
+	                queue: [`queue`, `قائمة`, `اغاني`, `q`, `qu`, `Q`, `Qu`, `Queue`],
 
-            };
+	            };
 
-            if (cmdsArray.play.includes(command)) {
+	            const isPlayCommand = cmdsArray.play.includes(command);
+	            const canWakeForPlay = isPlayCommand
+	                && !clientVoice
+	                && (!tokenObj.channel || tokenObj.channel === memberVoice.id);
+	            if ((!clientVoice || memberVoice.id !== clientVoice.id) && !canWakeForPlay) return;
+
+	            if (isPlayCommand) {
                 const song = args.join(' ');
                         if (!song) {
                             return message.channel.send(musicPayload(tokenObj, {
@@ -3113,31 +3324,40 @@ module.exports = {
                             return message.reply(deafenedPlaybackPayload(tokenObj));
                         }
 
-                                let player = TrueMusic.poru.players.get(message.guild.id);
-                        if (player) rememberTextChannel(player, message.channel.id);
+	                                let player = TrueMusic.poru.players.get(message.guild.id);
+	                        if (player) {
+	                            ensurePlayerData(player);
+	                            rememberTextChannel(player, message.channel.id);
+	                            if (!player.isConnected || player.voiceChannel !== message.member.voice.channel.id) {
+	                                try {
+	                                    player.setVoiceChannel(message.member.voice.channel.id, { deaf: true, mute: false });
+	                                } catch (err) {
+	                                    if (!(err instanceof ReferenceError)) throw err;
+	                                }
+	                            }
+	                        }
+	                        message.channel.sendTyping().catch(() => {});
 
-                        if (!player) {
-                            try {
-                                const voiceConnection = getVoiceConnection(message.guild.id);
-                        if (voiceConnection) {
-                            voiceConnection.destroy();
-                            await new Promise(res => setTimeout(res, 500));
-                        }
-                    } catch { }
-
-                            player = await TrueMusic.poru.createConnection({
-                                guildId: message.guild.id,
-                                voiceChannel: message.member.voice.channel.id,
-                                textChannel: message.channel.id,
-                                deaf: true,
-                                autoPlay: false,
-                                group: tokenObj.token,
-                            });
-                            ensurePlayerData(player);
-                                    rememberTextChannel(player, message.channel.id);
-                                    setAutoPlayState(player, false);
-
-                                }
+	                        if (!player) {
+	                            const lockKey = message.guild.id;
+	                            if (!playConnectionLocks.has(lockKey)) {
+	                                const task = TrueMusic.poru.createConnection({
+	                                    guildId: message.guild.id,
+	                                    voiceChannel: message.member.voice.channel.id,
+	                                    textChannel: message.channel.id,
+	                                    deaf: true,
+	                                    autoPlay: false,
+	                                    group: tokenObj.token,
+	                                }).finally(() => {
+	                                    setTimeout(() => playConnectionLocks.delete(lockKey), 1500);
+	                                });
+	                                playConnectionLocks.set(lockKey, task);
+	                            }
+	                            player = await playConnectionLocks.get(lockKey);
+	                            ensurePlayerData(player);
+	                            rememberTextChannel(player, message.channel.id);
+	                            setAutoPlayState(player, false);
+	                        }
 
                         try {
                                     const searchSource = displaySettings(tokenObj).platform;
@@ -3223,7 +3443,7 @@ module.exports = {
                                 setAutoPlayState(player, false);
                                 clearStoppedPlaybackCaches(player);
                                 clearProgressInterval(player, 'message stop');
-                                await stopPlayerAudio(player);
+                                firePlayerAction('message stop audio', () => stopPlayerAudio(player, { wait: false }));
                                 reactCustom(message, MUSIC_EMOJIS.stop, '🔴');
                                 runBackground('stop cleanup', async () => {
                                     await finalizePlayerUi(player, finalOptions);
@@ -3306,10 +3526,10 @@ module.exports = {
                 if (!memberVoice || !clientVoice || memberVoice.id !== clientVoice.id) return;
 
                 if (player.isPaused) {
-                    await player.pause(false);
+                    firePlayerAction('message resume', () => player.pause(false));
                     reactCustom(message, MUSIC_EMOJIS.skip, '▶️');
                 } else {
-                    await player.pause(true);
+                    firePlayerAction('message pause', () => player.pause(true));
                     reactCustom(message, MUSIC_EMOJIS.pause, '⏸️');
                 }
             }
@@ -3347,11 +3567,12 @@ module.exports = {
                         const getThumb = () => trackArtworkUrl(player.currentTrack, TrueMusic);
 
                         const queueMessage = await message.reply(musicPayload(tokenObj, {
-                            title: `<:${MUSIC_EMOJIS.queue.name}:${MUSIC_EMOJIS.queue.id}>  ${message.guild.name}`,
+                            title: queueTitle(message.guild.name, TrueMusic),
                             description: buildQueueDescription(player, page, itemsPerPage),
                             components: buildQueueComponents(player, tokenObj, message.id, page, itemsPerPage),
                             thumbnail: 'attachment://Queue.png',
                             files: ['./assets/image/icons/Queue.png'],
+                            footer: buildQueueFooter(player, page, itemsPerPage),
                         })).catch(console.error);
 
                         if (!queueMessage || !displaySettings(tokenObj).buttons) return;
@@ -3361,12 +3582,13 @@ module.exports = {
                         const filter = interaction => interaction.user.id === message.author.id && interaction.customId.startsWith(`queue_${message.id}_`);
                         const collector = queueMessage.createMessageComponentCollector({ filter, time: 120000 });
 
-                        const renderQueue = (interaction, title = `<:${MUSIC_EMOJIS.queue.name}:${MUSIC_EMOJIS.queue.id}>  ${message.guild.name}`) => interaction.update(musicPayload(tokenObj, {
+                        const renderQueue = (interaction, title = queueTitle(message.guild.name, TrueMusic)) => interaction.update(musicPayload(tokenObj, {
                             title,
                             description: buildQueueDescription(player, page, itemsPerPage),
                             components: buildQueueComponents(player, tokenObj, message.id, page, itemsPerPage),
                             thumbnail: 'attachment://Queue.png',
                             files: ['./assets/image/icons/Queue.png'],
+                            footer: buildQueueFooter(player, page, itemsPerPage),
                         }));
 
                         collector.on('collect', async interaction => {
@@ -3393,6 +3615,8 @@ module.exports = {
                                 return interaction.update(musicPayload(tokenObj, {
                                     title: 'Queue Cleared',
                                     description: '**تم حذف قائمة الانتظار بالكامل.**',
+                                    thumbnail: 'attachment://Queue.png',
+                                    files: ['./assets/image/icons/Queue.png'],
                                 }));
                             }
 
@@ -3442,13 +3666,24 @@ module.exports = {
 
                 const currentTrack = player.currentTrack;
 
+                        if (player.queue.length === 0 && player.data?.autoPlay) {
+                            const skippedTrack = currentTrack;
+                            firePlayerAction('message skip autoplay', () => player.skip());
+                            return message.reply(musicPayload(tokenObj, {
+                                title: 'Skipped',
+                                description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
+                                thumbnail: 'attachment://Skip.png',
+                                files: ['./assets/image/icons/Skip.png'],
+                            }));
+                        }
+
                         if (player.queue.length === 0) {
                             const finalOptions = finalUiOptionsFor(player, currentTrack);
                             markStopped();
                             setAutoPlayState(player, false);
                             clearStoppedPlaybackCaches(player);
                             clearProgressInterval(player, 'message skip end');
-                            await stopPlayerAudio(player);
+                            firePlayerAction('message skip end audio', () => stopPlayerAudio(player, { wait: false }));
                             runBackground('skip end cleanup', async () => {
                                 await finalizePlayerUi(player, finalOptions);
                                 await bumpQueueVersion(player, 'skip_end');
@@ -3462,7 +3697,7 @@ module.exports = {
                     }));
                         } else {
                             const skippedTrack = currentTrack;
-                            await player.skip();
+                            firePlayerAction('message skip', () => player.skip());
                             runBackground('skip cleanup', () => bumpQueueVersion(player, 'skip'));
 
                     return message.reply(musicPayload(tokenObj, {
@@ -3515,7 +3750,7 @@ module.exports = {
                     }));
                 }
 
-                player.setVolume(volume);
+                firePlayerAction('message volume', () => player.setVolume(volume));
 
                 return message.reply(musicPayload(tokenObj, {
                     title: 'Volume',
@@ -3574,7 +3809,7 @@ module.exports = {
                 }
 
                 const seekTime = Math.min(seconds * 1000, player.currentTrack.info.length);
-                await player.seekTo(seekTime);
+                firePlayerAction('message seek', () => player.seekTo(seekTime));
 
                 reactCustom(message, MUSIC_EMOJIS.skip, '✅');
             }
@@ -3626,7 +3861,7 @@ module.exports = {
 
                 const currentPosition = Number(player.position || 0);
                 const newPosition = Math.min(currentPosition + seconds * 1000, player.currentTrack.info.length - 1000);
-                await player.seekTo(newPosition);
+                firePlayerAction('message forward', () => player.seekTo(newPosition));
                 reactCustom(message, MUSIC_EMOJIS.skip, '⏩');
             }
 
@@ -3668,11 +3903,23 @@ module.exports = {
             }
 
             else if (cmdsArray.search.includes(command)) {
-                const searchQuery = args.join(' ');
-                if (!searchQuery) {
+                const rawSearchQuery = args.join(' ').replace(/\s+/g, ' ').trim();
+                const searchQuery = rawSearchQuery.split(' ').slice(0, 2).join(' ');
+                const searchQueryNote = rawSearchQuery && rawSearchQuery !== searchQuery
+                    ? `\n> تم استخدام أول كلمتين فقط: **${searchQuery}**`
+                    : '';
+                const smartSearchThumbnail = {
+                    thumbnail: 'attachment://AutoPlay.png',
+                    files: ['./assets/image/icons/AutoPlay.png'],
+                };
+                const searchExpiredThumbnail = {
+                    thumbnail: TrueMusic.user?.displayAvatarURL?.({ extension: 'png', size: 128 }) || null,
+                };
+                if (!rawSearchQuery) {
                     return message.channel.send(musicPayload(tokenObj, {
                         title: 'Search',
                         description: '*Please write the name of the song*.',
+                        ...smartSearchThumbnail,
                     }));
                 }
 
@@ -3680,6 +3927,7 @@ module.exports = {
                     return message.channel.send(musicPayload(tokenObj, {
                         title: 'Search',
                         description: '*Search menus are disabled for this subscription. Use `play <song>` or enable buttons from settings.*',
+                        ...smartSearchThumbnail,
                     }));
                 }
 
@@ -3691,14 +3939,82 @@ module.exports = {
                 let completed = false;
 
                         const platformOptions = [
-                            { label: 'Smart Search', value: 'auto', emoji: MUSIC_EMOJIS.smartSearch, description: 'All Source' },
-                            { label: 'YouTube', value: 'ytsearch', emoji: MUSIC_EMOJIS.platforms.ytsearch },
-                            { label: 'YouTube Music', value: 'ytmsearch', emoji: MUSIC_EMOJIS.platforms.ytmsearch },
-                    { label: 'SoundCloud', value: 'scsearch', emoji: MUSIC_EMOJIS.platforms.scsearch },
-                    { label: 'Spotify', value: 'spsearch', emoji: MUSIC_EMOJIS.platforms.spsearch },
-                    { label: 'Apple Music', value: 'amsearch', emoji: MUSIC_EMOJIS.platforms.amsearch },
-                    { label: 'Deezer', value: 'dzsearch', emoji: MUSIC_EMOJIS.platforms.dzsearch },
+                            { label: 'Smart Search', value: 'auto', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.smartSearch), description: 'All Source' },
+                            { label: 'YouTube', value: 'ytsearch', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.platforms.ytsearch) },
+                            { label: 'YouTube Music', value: 'ytmsearch', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.platforms.ytmsearch) },
+                    { label: 'SoundCloud', value: 'scsearch', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.platforms.scsearch) },
+                    { label: 'Spotify', value: 'spsearch', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.platforms.spsearch) },
+                    { label: 'Apple Music', value: 'amsearch', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.platforms.amsearch) },
+                    { label: 'Deezer', value: 'dzsearch', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.platforms.dzsearch) },
                 ];
+
+                const advancedSearchSources = ['ytmsearch', 'ytsearch', 'scsearch', 'spsearch', 'amsearch', 'dzsearch'];
+                const sourceEmoji = (source) => {
+                    const key = String(source || '').toLowerCase();
+                    const data = MUSIC_EMOJIS.platforms[key];
+                    return data ? MUSIC_EMOJIS.messageEmoji(data, TrueMusic, '') : '';
+                };
+                const sourceKeyFromTrack = (track) => {
+                    const source = String(track?.info?.sourceName || '').toLowerCase();
+                    if (source.includes('youtube')) return 'ytsearch';
+                    if (source.includes('soundcloud')) return 'scsearch';
+                    if (source.includes('spotify')) return 'spsearch';
+                    if (source.includes('apple')) return 'amsearch';
+                    if (source.includes('deezer')) return 'dzsearch';
+                    return selectedSource && selectedSource !== 'auto' ? selectedSource : '';
+                };
+                const buildSearchProgress = (counts, activeSource = null) => {
+                    const lines = advancedSearchSources.map(source => {
+                        const found = counts[source];
+                        const prefix = activeSource === source ? '⏳' : found == null ? '▫️' : '✅';
+                        return `${prefix} ${sourceEmoji(source)} **${platformDisplay(source, TrueMusic)}** : \`${found ?? 0}\``;
+                    });
+                    const total = Object.values(counts).reduce((sum, n) => sum + Number(n || 0), 0);
+                    return [
+                        `**يتم البحث عن:** ${searchQuery}${searchQueryNote}`,
+                        `**إجمالي النتائج المحصلة:** \`${total}\``,
+                        '',
+                        ...lines,
+                    ].join('\n');
+                };
+
+                const resolveSearchTracks = async (source) => {
+                    if (source !== 'auto') {
+                        return resolveSmartTracks(TrueMusic.poru, searchQuery, source, 60, {
+                            strict: false,
+                            variants: [searchQuery, `${searchQuery} official audio`],
+                            prefetchMultiplier: 4,
+                            perResolveLimit: 10,
+                        });
+                    }
+
+                    const counts = {};
+                    const merged = [];
+                    for (const searchSource of advancedSearchSources) {
+                        await sourceMessage.edit(musicPayload(tokenObj, {
+                            title: 'Advanced Search',
+                            description: buildSearchProgress(counts, searchSource),
+                            ...smartSearchThumbnail,
+                        })).catch(() => {});
+
+                        const tracks = await resolveSmartTracks(TrueMusic.poru, searchQuery, searchSource, 14, {
+                            strict: false,
+                            variants: [searchQuery],
+                            prefetchMultiplier: 3,
+                            perResolveLimit: 10,
+                        }).catch(() => []);
+                        counts[searchSource] = tracks.length;
+                        merged.push(...tracks);
+
+                        await sourceMessage.edit(musicPayload(tokenObj, {
+                            title: 'Advanced Search',
+                            description: buildSearchProgress(counts),
+                            ...smartSearchThumbnail,
+                        })).catch(() => {});
+                    }
+
+                    return rankTracksForQuery(dedupeTracks(merged), searchQuery, { strict: false }).slice(0, 60);
+                };
 
                 const controlRow = (showBack = false, showContinue = false) => {
                     const row = new ActionRowBuilder();
@@ -3707,7 +4023,7 @@ module.exports = {
                             new ButtonBuilder()
                                 .setCustomId(`${searchId}_back`)
                                 .setLabel('Back')
-                                .setEmoji(MUSIC_EMOJIS.pagePrev)
+                                .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.pagePrev))
                                 .setStyle(ButtonStyle.Secondary)
                         );
                     }
@@ -3741,23 +4057,24 @@ module.exports = {
                 const hasMoreSearchResults = () => searchOffset + currentTracks.length < allSearchTracks.length;
 
                 const buildTrackRows = (tracks) => {
-                    const platformEmoji = selectedSource
-                        ? (() => {
-                            const e = MUSIC_EMOJIS.platforms[selectedSource];
-                            return e ? (typeof e === 'object' ? { id: e.id, name: e.name } : { name: e }) : undefined;
-                        })()
-                        : undefined;
                     return [
                         new ActionRowBuilder().addComponents(
                             new StringSelectMenuBuilder()
                                 .setCustomId(`${searchId}_song`)
                                 .setPlaceholder('Choose a track')
-                                .addOptions(tracks.map((track, index) => ({
-                                    label: (track.info.title || 'Unknown').slice(0, 99),
-                                    value: String(index),
-                                    description: `${shortDuration(track.info.length)} - ${(track.info.author || 'Unknown').slice(0, 50)}`.slice(0, 99),
-                                    ...(platformEmoji ? { emoji: platformEmoji } : {}),
-                                })))
+                                .addOptions(tracks.map((track, index) => {
+                                    const platformKey = sourceKeyFromTrack(track);
+                                    const platformEmoji = platformKey && MUSIC_EMOJIS.platforms[platformKey]
+                                        ? MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.platforms[platformKey])
+                                        : undefined;
+                                    const sourceLabel = platformKey ? platformDisplay(platformKey, TrueMusic).replace(/<a?:\w+:\d+>/g, '').trim() : 'Source';
+                                    return {
+                                        label: (track.info.title || 'Unknown').slice(0, 99),
+                                        value: String(index),
+                                        description: `${sourceLabel} • ${shortDuration(track.info.length)} - ${(track.info.author || 'Unknown').slice(0, 42)}`.slice(0, 99),
+                                        ...(platformEmoji ? { emoji: platformEmoji } : {}),
+                                    };
+                                }))
                         ),
                         controlRow(true, hasMoreSearchResults()),
                     ];
@@ -3765,13 +4082,14 @@ module.exports = {
 
                 const sourceMessage = await message.channel.send(musicPayload(tokenObj, {
                     title: 'Search',
-                    description: `**البحث عن : ${searchQuery}\nاختر المنصة التي تريد البحث فيها.**`,
+                    description: `**البحث عن : ${searchQuery}\nاختر المنصة التي تريد البحث فيها.**${searchQueryNote}`,
                     components: buildPlatformRows(),
+                    ...smartSearchThumbnail,
                 }));
 
                 const collector = sourceMessage.createMessageComponentCollector({
                     filter: i => i.user.id === message.author.id && i.customId.startsWith(searchId),
-                    time: 60000,
+                    time: 120000,
                 });
 
                 collector.on('collect', async interaction => {
@@ -3781,6 +4099,7 @@ module.exports = {
                         return interaction.update(musicPayload(tokenObj, {
                             title: 'Search Cancelled',
                             description: '*تم إلغاء البحث*.',
+                            ...smartSearchThumbnail,
                         }));
                     }
 
@@ -3791,8 +4110,9 @@ module.exports = {
                         searchOffset = 0;
                         return interaction.update(musicPayload(tokenObj, {
                             title: 'Search',
-                            description: `*البحث عن : ${searchQuery}\nاختر المنصة التي تريد البحث فيها*.`,
+                            description: `*البحث عن : ${searchQuery}\nاختر المنصة التي تريد البحث فيها*.${searchQueryNote}`,
                             components: buildPlatformRows(),
+                            ...smartSearchThumbnail,
                         }));
                     }
 
@@ -3800,26 +4120,31 @@ module.exports = {
                                 selectedSource = interaction.values[0];
                                 searchOffset = 0;
                                 await interaction.update(musicPayload(tokenObj, {
-                                    title: 'Searching',
-                                    description: `**يتم البحث في : ${platformDisplay(selectedSource)} عن ${searchQuery}**...`,
+                                    title: selectedSource === 'auto' ? 'Advanced Search' : 'Searching',
+                                    description: selectedSource === 'auto'
+                                        ? buildSearchProgress({})
+                                        : `**يتم البحث في : ${platformDisplay(selectedSource, TrueMusic)} عن ${searchQuery}**...${searchQueryNote}`,
+                                    ...smartSearchThumbnail,
                                 }));
 
                                 try {
-                                    allSearchTracks = await resolveSmartTracks(TrueMusic.poru, searchQuery, selectedSource, 60, { strict: true });
+                                    allSearchTracks = await resolveSearchTracks(selectedSource);
                                     currentTracks = allSearchTracks.slice(searchOffset, searchOffset + 10);
 
                                     if (currentTracks.length === 0) {
                                 return sourceMessage.edit(musicPayload(tokenObj, {
                                     title: 'No Results',
-                                    description: `*لم يتم العثور على نتائج في ${platformDisplay(selectedSource)}.*`,
+                                    description: `*لم يتم العثور على نتائج في ${platformDisplay(selectedSource, TrueMusic)}.*${searchQueryNote}`,
                                     components: [controlRow(true)],
+                                    ...smartSearchThumbnail,
                                 }));
                             }
 
                                     return sourceMessage.edit(musicPayload(tokenObj, {
                                         title: 'Search Results',
-                                        description: `**النتائج من ${platformDisplay(selectedSource)}.\nاختر أغنية من القائمة**.`,
+                                        description: `**النتائج من ${platformDisplay(selectedSource, TrueMusic)}: \`${allSearchTracks.length}\`\nاختر أغنية من القائمة**.${searchQueryNote}`,
                                         components: buildTrackRows(currentTracks),
+                                        ...smartSearchThumbnail,
                                     }));
                         } catch (err) {
                             console.error('Error searching for videos:', err);
@@ -3827,6 +4152,7 @@ module.exports = {
                                 title: 'Search Error',
                                 description: '**حدث خطأ أثناء البحث. يمكنك الرجوع واختيار منصة أخرى.**',
                                 components: [controlRow(true)],
+                                ...smartSearchThumbnail,
                             }));
                         }
                     }
@@ -3837,6 +4163,7 @@ module.exports = {
                                 title: 'Search',
                                 description: '*اختر منصة البحث أولاً*.',
                                 components: buildPlatformRows(),
+                                ...smartSearchThumbnail,
                             }));
                         }
 
@@ -3844,8 +4171,9 @@ module.exports = {
                         if (nextOffset >= allSearchTracks.length) {
                             return interaction.update(musicPayload(tokenObj, {
                                 title: 'Search Results',
-                                description: `**لا توجد نتائج إضافية من ${platformDisplay(selectedSource)} لهذا البحث**.`,
+                                description: `**لا توجد نتائج إضافية من ${platformDisplay(selectedSource, TrueMusic)} لهذا البحث.\nإجمالي النتائج: \`${allSearchTracks.length}\`**${searchQueryNote}`,
                                 components: buildTrackRows(currentTracks),
+                                ...smartSearchThumbnail,
                             }));
                         }
 
@@ -3853,8 +4181,9 @@ module.exports = {
                         currentTracks = allSearchTracks.slice(searchOffset, searchOffset + 10);
                         return interaction.update(musicPayload(tokenObj, {
                             title: 'Search Results',
-                            description: `**نتائج إضافية من ${platformDisplay(selectedSource)} • مطابقة للبحث.\nتم استبدال القائمة السابقة.**`,
+                            description: `**نتائج إضافية من ${platformDisplay(selectedSource, TrueMusic)} • \`${searchOffset + 1}-${Math.min(searchOffset + currentTracks.length, allSearchTracks.length)}\` من \`${allSearchTracks.length}\`.\nتم استبدال القائمة السابقة.**${searchQueryNote}`,
                             components: buildTrackRows(currentTracks),
+                            ...smartSearchThumbnail,
                         }));
                     }
 
@@ -3870,6 +4199,7 @@ module.exports = {
                                 title: 'Search',
                                 description: '*لم يعد هذا الاختيار متاحاً. ارجع واختر نتيجة أخرى.*',
                                 components: [controlRow(true)],
+                                ...smartSearchThumbnail,
                             }));
                         }
 
@@ -3894,11 +4224,10 @@ module.exports = {
                                 completed = true;
                         collector.stop('selected');
 
-                                const artworkUrl = trackArtworkUrl(queuedTrack, TrueMusic);
                                 await sourceMessage.edit(musicPayload(tokenObj, {
                                     title: player.isPlaying ? 'Add Song' : 'Playing',
-                                    description: `**Song :** ${queuedTrack.info.title}\n**Source :** ${platformDisplay(selectedSource)}\n**Added by :** ${message.author.displayName}`,
-                                    thumbnail: artworkUrl || null,
+                                    description: `**Song :** ${queuedTrack.info.title}\n**Source :** ${platformDisplay(sourceKeyFromTrack(queuedTrack) || selectedSource, TrueMusic)}\n**Added by :** ${message.author.displayName}`,
+                                    ...smartSearchThumbnail,
                                 }));
 
                                 await safePlay(player);
@@ -3910,6 +4239,7 @@ module.exports = {
                         sourceMessage.edit(musicPayload(tokenObj, {
                             title: 'Search Expired',
                             description: '*انتهى وقت البحث بدون اختيار.*',
+                            ...searchExpiredThumbnail,
                         })).catch(() => {});
                     }
                 });
@@ -4052,7 +4382,7 @@ module.exports = {
                         }
                     }
 
-                    await interaction.deferReply({ ephemeral: true }).catch(() => {});
+                    await interaction.deferUpdate().catch(() => {});
                     let responseMessage = '';
 
                     if (interaction.customId === 'loop') {
@@ -4063,10 +4393,10 @@ module.exports = {
 
                     if (interaction.customId === 'pause') {
                         if (player.isPaused) {
-                            await player.pause(false);
+                            firePlayerAction('button resume', () => player.pause(false));
                             responseMessage = '**Done resume the music.**';
                         } else {
-                            await player.pause(true);
+                            firePlayerAction('button pause', () => player.pause(true));
                             responseMessage = '**Done pause the music.**';
                         }
                         runBackground('pause panel edit', () => editPanel(!!ui.liked));
@@ -4074,13 +4404,13 @@ module.exports = {
 
                     if (interaction.customId === 'volume_down') {
                         const newVolume = Math.max(player.volume - 10, 0);
-                        await player.setVolume(newVolume);
+                        firePlayerAction('button volume down', () => player.setVolume(newVolume));
                         responseMessage = `**Volume is now __${newVolume}%__.**`;
                     }
 
                     if (interaction.customId === 'volume_up') {
                         const newVolume = Math.min(player.volume + 10, 130);
-                        await player.setVolume(newVolume);
+                        firePlayerAction('button volume up', () => player.setVolume(newVolume));
                         responseMessage = `**Volume is now __${newVolume}%__.**`;
                     }
 
@@ -4088,13 +4418,16 @@ module.exports = {
                                 const currentTrack = player.currentTrack;
                                 if (!currentTrack) {
                                     responseMessage = '*لا توجد أغنية للتخطي*.';
+                                } else if (player.queue.length === 0 && player.data?.autoPlay) {
+                                    firePlayerAction('button skip autoplay', () => player.skip());
+                                    responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                 } else if (player.queue.length === 0) {
                                     const finalOptions = finalUiOptionsFor(player, currentTrack);
                                     markStopped();
                                     setAutoPlayState(player, false);
                                     clearStoppedPlaybackCaches(player);
                                     clearProgressInterval(player, 'button skip end');
-                                    await stopPlayerAudio(player);
+                                    firePlayerAction('button skip end audio', () => stopPlayerAudio(player, { wait: false }));
                                     runBackground('button skip end cleanup', async () => {
                                         await finalizePlayerUi(player, finalOptions);
                                         await bumpQueueVersion(player, 'button_skip_end');
@@ -4102,7 +4435,7 @@ module.exports = {
                                     });
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                 } else {
-                                    await player.skip();
+                                    firePlayerAction('button skip', () => player.skip());
                                     runBackground('button skip cleanup', () => bumpQueueVersion(player, 'button_skip'));
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                 }
@@ -4116,11 +4449,11 @@ module.exports = {
                             const prevTrack = player.queue.previous;
                             player.queue.unshift(player.currentTrack);
                             player.queue.unshift(prevTrack);
-                            await player.skip();
+                            firePlayerAction('button prev skip', () => player.skip());
                             runBackground('button prev cleanup', () => bumpQueueVersion(player, 'button_prev'));
                             responseMessage = `⏮ رجعنا للأغنية السابقة.`;
                         } else {
-                            await player.seek(0);
+                            firePlayerAction('button prev seek', () => player.seek(0));
                             runBackground('prev panel edit', () => editPanel(!!ui.liked));
                             responseMessage = `⏮ تم إعادة الأغنية من البداية.`;
                         }
@@ -4135,7 +4468,7 @@ module.exports = {
                         setAutoPlayState(player, false);
                         clearStoppedPlaybackCaches(player);
                         clearProgressInterval(player, 'button stop');
-                        await stopPlayerAudio(player);
+                        firePlayerAction('button stop audio', () => stopPlayerAudio(player, { wait: false }));
                         runBackground('button stop cleanup', async () => {
                             await finalizePlayerUi(player, finalOptions);
                             await bumpQueueVersion(player, 'button_stop');
@@ -4153,11 +4486,12 @@ module.exports = {
                             const refId = interaction.id;
                             const queueMsg = await interaction.followUp({
                                 ...musicPayload(tokenObj, {
-                                    title: `${interaction.guild.name} Queue`,
+                                    title: queueTitle(interaction.guild.name, TrueMusic),
                                     description: buildQueueDescription(player, qPage, qItemsPerPage),
                                     components: buildQueueComponents(player, tokenObj, refId, qPage, qItemsPerPage),
                                     thumbnail: 'attachment://Queue.png',
                                     files: ['./assets/image/icons/Queue.png'],
+                                    footer: buildQueueFooter(player, qPage, qItemsPerPage),
                                 }),
                             }).catch(() => null);
                             if (queueMsg) {
@@ -4165,12 +4499,13 @@ module.exports = {
                                 registerQueuePanel(player, queueMsg, qVersion);
                                 const qFilter = i => i.customId.startsWith(`queue_${refId}_`);
                                 const qCollector = queueMsg.createMessageComponentCollector({ filter: qFilter, time: 120000 });
-                                const renderQ = (i, title = `${interaction.guild.name} Queue`) => i.update(musicPayload(tokenObj, {
+                                const renderQ = (i, title = queueTitle(interaction.guild.name, TrueMusic)) => i.update(musicPayload(tokenObj, {
                                     title,
                                     description: buildQueueDescription(player, qPage, qItemsPerPage),
                                     components: buildQueueComponents(player, tokenObj, refId, qPage, qItemsPerPage),
                                     thumbnail: 'attachment://Queue.png',
                                     files: ['./assets/image/icons/Queue.png'],
+                                    footer: buildQueueFooter(player, qPage, qItemsPerPage),
                                 }));
                                 qCollector.on('collect', async i => {
                                     if ((player.data?.queueVersion || 0) !== qVersion) {
@@ -4179,7 +4514,17 @@ module.exports = {
                                     }
                                     if (i.customId === `queue_${refId}_prev`) { if (qPage > 0) qPage--; return renderQ(i); }
                                     if (i.customId === `queue_${refId}_next`) { const tot = Math.max(1, Math.ceil(player.queue.length / qItemsPerPage)); if (qPage < tot - 1) qPage++; return renderQ(i); }
-                                    if (i.customId === `queue_${refId}_clear`) { player.queue.clear(); await bumpQueueVersion(player, 'queue_clear'); qCollector.stop('cleared'); return i.update(musicPayload(tokenObj, { title: 'Queue Cleared', description: '**تم حذف قائمة الانتظار بالكامل**.' })); }
+                                    if (i.customId === `queue_${refId}_clear`) {
+                                        player.queue.clear();
+                                        await bumpQueueVersion(player, 'queue_clear');
+                                        qCollector.stop('cleared');
+                                        return i.update(musicPayload(tokenObj, {
+                                            title: 'Queue Cleared',
+                                            description: '**تم حذف قائمة الانتظار بالكامل**.',
+                                            thumbnail: 'attachment://Queue.png',
+                                            files: ['./assets/image/icons/Queue.png'],
+                                        }));
+                                    }
                                     if (i.customId === `queue_${refId}_close`) { qCollector.stop('closed'); return i.update({ components: disableComponents(queueMsg.components) }); }
                                     if (i.customId === `queue_${refId}_reorder`) {
                                         if (typeof player.queue.splice !== 'function' || typeof player.queue.unshift !== 'function') return i.reply({ content: 'تعذر ترتيب الطابور.', ephemeral: true });
@@ -4223,7 +4568,7 @@ module.exports = {
                         }
                     }
 
-                    await interaction.editReply(responseMessage || '*Done*.');
+                    await replyEphemeral(responseMessage || '*Done*.');
                     setTimeout(() => interaction.deleteReply().catch(() => {}), 8000);
                 });
 
