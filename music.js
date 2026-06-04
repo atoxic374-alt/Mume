@@ -2887,11 +2887,19 @@ module.exports = {
                                 player.setLoop('NONE');
                                 player.queue.clear();
                                 player.data.autoPlay = false;
-                                markStopped(90_000); // suppress auto-reconnect for 90s
                                 await finalizePlayerUi(player);
                                 await bumpQueueVersion(player, 'stop');
                                 await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
-                                await player.destroy();
+                                // Stop audio but stay in VC — avoids disconnect/reconnect cycle
+                                if (player.currentTrack && player.node?.rest) {
+                                    await player.node.rest.updatePlayer({
+                                        guildId: player.guildId,
+                                        data: { track: { encoded: null } },
+                                    }).catch(() => {});
+                                }
+                                player.currentTrack = null;
+                                player.isPlaying = false;
+                                player.isPaused = false;
                                 reactCustom(message, MUSIC_EMOJIS.stop, '🔴');
             }
 
@@ -3109,7 +3117,16 @@ module.exports = {
                             await finalizePlayerUi(player);
                             await bumpQueueVersion(player, 'skip_end');
                             await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
-                            await player.destroy();
+                            // Stay in VC — stop audio without disconnecting
+                            if (player.currentTrack && player.node?.rest) {
+                                await player.node.rest.updatePlayer({
+                                    guildId: player.guildId,
+                                    data: { track: { encoded: null } },
+                                }).catch(() => {});
+                            }
+                            player.currentTrack = null;
+                            player.isPlaying = false;
+                            player.isPaused = false;
                             return message.reply(musicPayload(tokenObj, {
                         title: 'Skipped',
                         description: `**${currentTrack.info.title}\nBy : ${message.author.displayName}**`,
@@ -3733,7 +3750,16 @@ module.exports = {
                                     await finalizePlayerUi(player);
                                     await bumpQueueVersion(player, 'button_skip_end');
                                     await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
-                                    await player.destroy();
+                                    // Stay in VC — stop audio without disconnecting
+                                    if (player.currentTrack && player.node?.rest) {
+                                        await player.node.rest.updatePlayer({
+                                            guildId: player.guildId,
+                                            data: { track: { encoded: null } },
+                                        }).catch(() => {});
+                                    }
+                                    player.currentTrack = null;
+                                    player.isPlaying = false;
+                                    player.isPaused = false;
                                     responseMessage = `** Done skiped : ${currentTrack.info.title || 'الأغنية'}**`;
                                 } else {
                                     await finalizePlayerUi(player);
@@ -3764,11 +3790,22 @@ module.exports = {
                     }
 
                     if (interaction.customId === 'stop') {
-                        markStopped(90_000); // suppress auto-reconnect for 90s
+                        player.setLoop('NONE');
+                        player.queue.clear();
+                        player.data.autoPlay = false;
                         await finalizePlayerUi(player);
                         await bumpQueueVersion(player, 'button_stop');
                         await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
-                        await player.destroy();
+                        // Stop audio but stay in VC — avoids disconnect/reconnect cycle
+                        if (player.currentTrack && player.node?.rest) {
+                            await player.node.rest.updatePlayer({
+                                guildId: player.guildId,
+                                data: { track: { encoded: null } },
+                            }).catch(() => {});
+                        }
+                        player.currentTrack = null;
+                        player.isPlaying = false;
+                        player.isPaused = false;
                         responseMessage = '*⏹ Done Stoped The Song*.';
                     }
 
