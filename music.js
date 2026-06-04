@@ -192,7 +192,7 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
                 ? new ButtonBuilder()
                     .setCustomId('like')
                     .setEmoji(liked ? MUSIC_EMOJIS.dislike : MUSIC_EMOJIS.like)
-                    .setStyle(liked ? ButtonStyle.Danger : ButtonStyle.Secondary)
+                    .setStyle(ButtonStyle.Secondary)
                 : new ButtonBuilder()
                     .setCustomId('prev')
                     .setEmoji('⏮')
@@ -235,7 +235,7 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
             new ButtonBuilder()
                 .setCustomId('like')
                 .setEmoji(liked ? MUSIC_EMOJIS.dislike : MUSIC_EMOJIS.like)
-                .setStyle(liked ? ButtonStyle.Danger : ButtonStyle.Secondary),
+                .setStyle(ButtonStyle.Secondary),
         );
     }
 
@@ -683,7 +683,11 @@ function platformDisplay(source) {
         amsearch: 'Apple Music',
         dzsearch: 'Deezer',
     };
-    return `${MUSIC_EMOJIS.platforms[source] || '🎵'} ${names[source] || source || 'YouTube'}`;
+    const emojiData = MUSIC_EMOJIS.platforms[source];
+    const emoji = emojiData
+        ? (typeof emojiData === 'object' ? `<:${emojiData.name}:${emojiData.id}>` : String(emojiData))
+        : '🎵';
+    return `${emoji} ${names[source] || source || 'YouTube'}`;
 }
 
 function buildBotInfoEmbed(TrueMusic, tokenObj, guildId) {
@@ -908,23 +912,23 @@ function buildQueueDescription(player, page = 0, itemsPerPage = 8) {
     const npAuthor = cleanInlineText(nowPlaying?.info?.author, '', 40);
     const npLine = [
         `**${queueTrackLink(nowPlaying, 72)}**`,
-        npAuthor ? `\`${dur(nowPlaying)}\`  •  ${npAuthor}` : `\`${dur(nowPlaying)}\``,
+        '',
+        npAuthor ? `⏱ \`${dur(nowPlaying)}\`  ·  ${npAuthor}` : `⏱ \`${dur(nowPlaying)}\``,
     ].join('\n> ');
 
     // Queue entries
     const queuedLines = pageTracks.map((track, i) => {
         const absolute = safePage * itemsPerPage + i + 1;
         const author = cleanInlineText(track.info?.author, '', 36);
-        const numStr = String(absolute).padStart(2, '0');
-        const titleLine = `**\`${numStr}\`- ${queueTrackLink(track)}**`;
+        const titleLine = `**${absolute}. ${queueTrackLink(track)}**`;
         const metaLine  = author
-            ? `**\`${dur(track)}\` • ${author}**`
-            : `**\`${dur(track)}\`**`;
-        return `**${titleLine}\n\n└ ${metaLine}**`;
+            ? `\`${dur(track)}\` · ${author}`
+            : `\`${dur(track)}\``;
+        return `${titleLine}\n└ ${metaLine}`;
     });
 
     const upcomingHeader = player.queue.length > 0
-        ? `**Upcoming** • ${player.queue.length} track : ${player.queue.length === 1 ? '' : 's'}`
+        ? `**Upcoming** • ${player.queue.length} ${player.queue.length === 1 ? 'track' : 'tracks'}`
         : '**Upcoming**';
 
     return [
@@ -2676,9 +2680,14 @@ module.exports = {
 
 
 
-        const reactCustom = (msg, emojiId, fallback) => {
-            const emoji = TrueMusic.emojis.cache.get(emojiId);
-            return msg.react(emoji ?? fallback).catch(() => {});
+        const reactCustom = (msg, emojiData, fallback) => {
+            const id = typeof emojiData === 'object' ? emojiData?.id : emojiData;
+            const name = typeof emojiData === 'object' ? emojiData?.name : null;
+            const guildEmoji = id ? TrueMusic.emojis.cache.get(id) : null;
+            const appEmoji = !guildEmoji && id ? TrueMusic.application?.emojis?.cache?.get(id) : null;
+            const customStr = !guildEmoji && !appEmoji && id && name ? `<:${name}:${id}>` : null;
+            const resolved = guildEmoji || appEmoji || customStr || fallback;
+            return msg.react(resolved).catch(() => msg.react(fallback).catch(() => {}));
         };
 
         TrueMusic.on('messageCreate', async (message) => {
@@ -3038,7 +3047,7 @@ module.exports = {
                         const getThumb = () => trackArtworkUrl(player.currentTrack, TrueMusic);
 
                         const queueMessage = await message.reply(musicPayload(tokenObj, {
-                            title: `🎶  ${message.guild.name}`,
+                            title: `<:${MUSIC_EMOJIS.queue.name}:${MUSIC_EMOJIS.queue.id}>  ${message.guild.name}`,
                             description: buildQueueDescription(player, page, itemsPerPage),
                             components: buildQueueComponents(player, tokenObj, message.id, page, itemsPerPage),
                             thumbnail: 'attachment://Queue.png',
@@ -3052,7 +3061,7 @@ module.exports = {
                         const filter = interaction => interaction.user.id === message.author.id && interaction.customId.startsWith(`queue_${message.id}_`);
                         const collector = queueMessage.createMessageComponentCollector({ filter, time: 120000 });
 
-                        const renderQueue = (interaction, title = `🎶  ${message.guild.name}`) => interaction.update(musicPayload(tokenObj, {
+                        const renderQueue = (interaction, title = `<:${MUSIC_EMOJIS.queue.name}:${MUSIC_EMOJIS.queue.id}>  ${message.guild.name}`) => interaction.update(musicPayload(tokenObj, {
                             title,
                             description: buildQueueDescription(player, page, itemsPerPage),
                             components: buildQueueComponents(player, tokenObj, message.id, page, itemsPerPage),
@@ -3434,19 +3443,28 @@ module.exports = {
 
                 const hasMoreSearchResults = () => searchOffset + currentTracks.length < allSearchTracks.length;
 
-                const buildTrackRows = (tracks) => [
-                    new ActionRowBuilder().addComponents(
-                        new StringSelectMenuBuilder()
-                            .setCustomId(`${searchId}_song`)
-                            .setPlaceholder('Choose a track')
-                            .addOptions(tracks.map((track, index) => ({
-                                label: (track.info.title || 'Unknown').slice(0, 99),
-                                value: String(index),
-                                description: `${shortDuration(track.info.length)} - ${(track.info.author || 'Unknown').slice(0, 50)}`.slice(0, 99),
-                            })))
-                    ),
-                    controlRow(true, hasMoreSearchResults()),
-                ];
+                const buildTrackRows = (tracks) => {
+                    const platformEmoji = selectedSource
+                        ? (() => {
+                            const e = MUSIC_EMOJIS.platforms[selectedSource];
+                            return e ? (typeof e === 'object' ? { id: e.id, name: e.name } : { name: e }) : undefined;
+                        })()
+                        : undefined;
+                    return [
+                        new ActionRowBuilder().addComponents(
+                            new StringSelectMenuBuilder()
+                                .setCustomId(`${searchId}_song`)
+                                .setPlaceholder('Choose a track')
+                                .addOptions(tracks.map((track, index) => ({
+                                    label: (track.info.title || 'Unknown').slice(0, 99),
+                                    value: String(index),
+                                    description: `${shortDuration(track.info.length)} - ${(track.info.author || 'Unknown').slice(0, 50)}`.slice(0, 99),
+                                    ...(platformEmoji ? { emoji: platformEmoji } : {}),
+                                })))
+                        ),
+                        controlRow(true, hasMoreSearchResults()),
+                    ];
+                };
 
                 const sourceMessage = await message.channel.send(musicPayload(tokenObj, {
                     title: 'Search',
@@ -3579,9 +3597,11 @@ module.exports = {
                                 completed = true;
                         collector.stop('selected');
 
+                                const artworkUrl = trackArtworkUrl(queuedTrack, TrueMusic);
                                 await sourceMessage.edit(musicPayload(tokenObj, {
                                     title: player.isPlaying ? 'Add Song' : 'Playing',
-                                    description: `**${queuedTrack.info.title}\nBy ${message.author.displayName}**`,
+                                    description: `**Song :** ${queuedTrack.info.title}\n**Source :** ${platformDisplay(selectedSource)}\n**Added by :** ${message.author.displayName}`,
+                                    thumbnail: artworkUrl || null,
                                 }));
 
                                 await safePlay(player);
@@ -3896,8 +3916,8 @@ module.exports = {
                                     try {
                                         const { liked } = await likes.toggle(interaction.user.id, currentTrack);
                                         responseMessage = liked
-                                            ? `** Done Liked  **${currentTrack.info.title || 'الأغنية'} In Likelist** .`
-                                            : `**Done Unlike : \n${currentTrack.info.title || 'الأغنية'} From Likelist**.`;
+                                            ? `✅ Added **${currentTrack.info.title || 'الأغنية'}** to liked songs.`
+                                            : `💔 Removed **${currentTrack.info.title || 'الأغنية'}** from liked songs.`;
                                         if (!requesterId || interaction.user.id === requesterId) {
                                             await editPanel(liked);
                                         }

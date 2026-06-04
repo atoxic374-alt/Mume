@@ -8,6 +8,7 @@ const {
 } = require('discord.js');
 const { getLikes, getAllLikes } = require('../../utils/likes');
 const { getEmbedColor } = require('../../utils/embedColor');
+const MUSIC_EMOJIS = require('../../utils/musicEmojis');
 
 const PAGE = 5;
 
@@ -27,8 +28,6 @@ function cleanText(value, fallback = 'Unknown', max = 80) {
 }
 
 function escapeLinkText(value, max = 80) {
-    // Only escape ] to avoid breaking the link syntax.
-    // Escaping ( ) or \ creates visible backslashes in Discord.
     return cleanText(value, 'Unknown', max)
         .replace(/\]/g, '\\]');
 }
@@ -130,22 +129,21 @@ function buildQueueEmbed(client, message, player, added, label) {
     const upcoming = Array.from(player.queue || []).slice(0, 8);
 
     const lines = upcoming.map((track, index) => {
-        const num = String(index + 1).padStart(2, '0');
-        const author = cleanText(track.info?.author, 'Unknown', 36);
+        const num = index + 1;
         const dur = fmt(track.info?.length);
-        return `\`${num}\` ${trackLink(track.info?.title, track.info?.uri, 52)}\n└ \`${dur}\` · ${author}`;
+        return `**${num}.** ${trackLink(track.info?.title, track.info?.uri, 52)} · \`${dur}\``;
     });
 
     return new EmbedBuilder()
         .setColor(getEmbedColor(client))
-        .setTitle('🎶 Queue Updated')
+        .setTitle('Queue Updated')
         .setDescription([
             `> Added **${added}** liked track${added === 1 ? '' : 's'} from **${label}**.`,
             current
-                ? `> ▶ Now playing: ${trackLink(current.info?.title, current.info?.uri, 60)}`
-                : '> ▶ Playback will start now.',
+                ? `> Now playing: ${trackLink(current.info?.title, current.info?.uri, 60)}`
+                : '> Playback will start now.',
             '',
-            lines.length ? `**Up Next**\n${lines.join('\n\n')}` : '',
+            lines.length ? `**Up Next**\n${lines.join('\n')}` : '',
         ].filter(Boolean).join('\n'))
         .setFooter({
             text: `Requested by ${message.author.displayName}`,
@@ -163,7 +161,6 @@ module.exports = {
         const getData = () => getLikes(userId, { offset: page * PAGE, limit: PAGE });
         const getAll  = () => getAllLikes(userId);
 
-        // ── Embed ─────────────────────────────────────────────────────────
         function buildEmbed(rows, total) {
             const pages = Math.max(1, Math.ceil(total / PAGE));
             const start = page * PAGE;
@@ -180,14 +177,12 @@ module.exports = {
                     .setDescription(
                         '> **No liked songs yet.**\n> شغّل أغنية واضغط ❤️ لحفظها هنا.'
                     )
-                    .setFooter({ text: 'Liked songs are personal to your account' });
+                    .setFooter({ text: `All songs : 0 | Page 1 / 1` });
             }
 
             const lines = rows.map((r, i) => {
-                const num = String(start + i + 1).padStart(2, '0');
-                const dur = fmt(r.duration);
-                const artist = cleanText(r.author, '—', 40);
-                return `\`${num}\` **${trackLink(r.title, r.uri, 58)}**\n└ \`${dur}\`  ·  ${artist}`;
+                const num = start + i + 1;
+                return `**#${num}** ─ ${trackLink(r.title, r.uri, 72)}`;
             });
 
             return new EmbedBuilder()
@@ -198,40 +193,34 @@ module.exports = {
                 })
                 .setThumbnail(avatarURL)
                 .setDescription(lines.join('\n\n'))
-                .addFields({
-                    name: '\u200b',
-                    value: `🎵 **${total}** saved tracks  ·  Page **${page + 1}** / **${pages}**`,
-                    inline: false,
-                })
                 .setFooter({
-                    text: 'Select tracks below to queue them · Play All to queue everything',
+                    text: `All songs : ${total} | Page ${page + 1} / ${pages}`,
                 });
         }
 
-        // ── Buttons ───────────────────────────────────────────────────────
         function buildNav(total) {
             const pages = Math.max(1, Math.ceil(total / PAGE));
             return new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
                     .setCustomId(`ml_prev_${message.id}`)
-                    .setEmoji('◀️')
+                    .setEmoji(MUSIC_EMOJIS.pagePrev)
                     .setStyle(ButtonStyle.Secondary)
                     .setDisabled(page === 0),
                 new ButtonBuilder()
                     .setCustomId(`ml_next_${message.id}`)
-                    .setEmoji('▶️')
+                    .setEmoji(MUSIC_EMOJIS.pageNext)
                     .setStyle(ButtonStyle.Secondary)
                     .setDisabled(page >= pages - 1),
                 new ButtonBuilder()
                     .setCustomId(`ml_all_${message.id}`)
+                    .setEmoji(MUSIC_EMOJIS.skip)
                     .setLabel('Play All')
-                    .setEmoji('🎶')
-                    .setStyle(ButtonStyle.Success)
+                    .setStyle(ButtonStyle.Secondary)
                     .setDisabled(total === 0),
                 new ButtonBuilder()
                     .setCustomId(`ml_close_${message.id}`)
+                    .setEmoji(MUSIC_EMOJIS.stop)
                     .setLabel('Close')
-                    .setEmoji('✖️')
                     .setStyle(ButtonStyle.Danger),
             );
         }
@@ -241,14 +230,14 @@ module.exports = {
             return new ActionRowBuilder().addComponents(
                 new StringSelectMenuBuilder()
                     .setCustomId(`ml_queue_${message.id}`)
-                    .setPlaceholder('🎵 Select tracks to queue...')
+                    .setPlaceholder('Select tracks to queue...')
                     .setMinValues(1)
                     .setMaxValues(Math.min(rows.length, 25))
                     .addOptions(rows.slice(0, 25).map((r, i) => ({
                         label: r.title.length > 99 ? r.title.slice(0, 96) + '…' : r.title,
                         value: String(offset + i),
-                        description: `${fmt(r.duration)} · ${(r.author || '').slice(0, 50)}`.slice(0, 99),
-                        emoji: '🎵',
+                        description: `${fmt(r.duration)}`.slice(0, 99),
+                        emoji: MUSIC_EMOJIS.like,
                     })))
             );
         }
@@ -258,7 +247,6 @@ module.exports = {
             return [buildNav(total), ...(sr ? [sr] : [])];
         }
 
-        // ── Render ────────────────────────────────────────────────────────
         let { rows, total } = await getData().catch(() => ({ rows: [], total: 0 }));
 
         const msg = await message.reply({
@@ -267,7 +255,6 @@ module.exports = {
             allowedMentions: { repliedUser: false },
         });
 
-        // ── Collector ─────────────────────────────────────────────────────
         const col = msg.createMessageComponentCollector({
             filter: i => i.user.id === userId && i.customId.endsWith(`_${message.id}`),
             time: 300000,
@@ -287,7 +274,6 @@ module.exports = {
             if (i.customId === `ml_next_${message.id}`)  { page++; return re(i); }
             if (i.customId === `ml_close_${message.id}`) { col.stop('closed'); return i.update({ components: [] }); }
 
-            // ── Play All ─────────────────────────────────────────────────
             if (i.customId === `ml_all_${message.id}`) {
                 await i.deferReply({ ephemeral: true });
                 await i.editReply({ content: '> ⏳ Loading liked tracks...' }).catch(() => {});
@@ -317,7 +303,6 @@ module.exports = {
                 return i.editReply({ content: `> ✅ Queued **${tracks.length}** liked tracks` });
             }
 
-            // ── Queue Selected ───────────────────────────────────────────
             if (i.customId === `ml_queue_${message.id}`) {
                 await i.deferReply({ ephemeral: true });
                 await i.editReply({ content: '> ⏳ Loading selected tracks...' }).catch(() => {});

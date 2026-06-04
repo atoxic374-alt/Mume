@@ -258,11 +258,28 @@ function tintPngFile(filePath, color) {
 }
 
 function tintAttachmentPayload(payload, color) {
-    if (!payload?.thumbnail || !Array.isArray(payload.files) || !payload.files.length) {
-        return payload;
+    if (!Array.isArray(payload.files) || !payload.files.length) return payload;
+
+    // Find the attachment thumbnail URL — check top-level first, then first embed
+    let thumbnailUrl = payload.thumbnail || null;
+    let embedRef = null;
+
+    if (!thumbnailUrl) {
+        const firstEmbed = payload.embeds?.[0];
+        if (firstEmbed) {
+            const data = typeof firstEmbed.toJSON === 'function'
+                ? firstEmbed.toJSON()
+                : (firstEmbed.data || firstEmbed);
+            thumbnailUrl = data?.thumbnail?.url || null;
+            if (thumbnailUrl && typeof firstEmbed.setThumbnail === 'function') {
+                embedRef = firstEmbed;
+            }
+        }
     }
 
-    const match = String(payload.thumbnail).match(/^attachment:\/\/(.+)$/i);
+    if (!thumbnailUrl) return payload;
+
+    const match = String(thumbnailUrl).match(/^attachment:\/\/(.+)$/i);
     if (!match) return payload;
 
     const requestedName = match[1];
@@ -277,9 +294,13 @@ function tintAttachmentPayload(payload, color) {
         const tinted = tintPngFile(payload.files[index], color);
         const nextFiles = [...payload.files];
         nextFiles[index] = tinted;
+        const tintedUrl = `attachment://${tinted.name}`;
+
+        if (embedRef) embedRef.setThumbnail(tintedUrl);
+
         return {
             ...payload,
-            thumbnail: `attachment://${tinted.name}`,
+            ...(payload.thumbnail ? { thumbnail: tintedUrl } : {}),
             files: nextFiles,
         };
     } catch (err) {
