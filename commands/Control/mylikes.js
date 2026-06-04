@@ -10,7 +10,7 @@ const { getLikes, getAllLikes } = require('../../utils/likes');
 const { getEmbedColor } = require('../../utils/embedColor');
 const MUSIC_EMOJIS = require('../../utils/musicEmojis');
 
-const PAGE = 5;
+const PAGE = 8;
 
 function fmt(ms) {
     if (!ms) return '—';
@@ -129,19 +129,17 @@ function buildQueueEmbed(client, message, player, added, label) {
     const upcoming = Array.from(player.queue || []).slice(0, 8);
 
     const lines = upcoming.map((track, index) => {
-        const num = index + 1;
-        const dur = fmt(track.info?.length);
-        return `**${num}.** ${trackLink(track.info?.title, track.info?.uri, 52)} · \`${dur}\``;
+        return `\`${index + 1}.\` ${trackLink(track.info?.title, track.info?.uri, 64)}`;
     });
 
     return new EmbedBuilder()
         .setColor(getEmbedColor(client))
         .setTitle('Queue Updated')
         .setDescription([
-            `> Added **${added}** liked track${added === 1 ? '' : 's'} from **${label}**.`,
+            `**Added:** ${added} liked track${added === 1 ? '' : 's'} from **${label}**`,
             current
-                ? `> Now playing: ${trackLink(current.info?.title, current.info?.uri, 60)}`
-                : '> Playback will start now.',
+                ? `**Now Playing:** ${trackLink(current.info?.title, current.info?.uri, 64)}`
+                : '**Playback:** starting now',
             '',
             lines.length ? `**Up Next**\n${lines.join('\n')}` : '',
         ].filter(Boolean).join('\n'))
@@ -182,7 +180,8 @@ module.exports = {
 
             const lines = rows.map((r, i) => {
                 const num = start + i + 1;
-                return `**#${num}** ─ ${trackLink(r.title, r.uri, 72)}`;
+                const meta = [cleanText(r.author, '', 34), fmt(r.duration)].filter(Boolean).join(' • ');
+                return `\`${num}.\` ${trackLink(r.title, r.uri, 72)}${meta ? `\n> ${meta}` : ''}`;
             });
 
             return new EmbedBuilder()
@@ -192,7 +191,7 @@ module.exports = {
                     iconURL: avatarURL,
                 })
                 .setThumbnail(avatarURL)
-                .setDescription(lines.join('\n\n'))
+                .setDescription(lines.join('\n'))
                 .setFooter({
                     text: `All songs : ${total} | Page ${page + 1} / ${pages}`,
                 });

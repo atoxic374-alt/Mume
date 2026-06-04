@@ -895,7 +895,7 @@ function buildQueueDescription(player, page = 0, itemsPerPage = 8) {
     const safePage = Math.max(0, Math.min(page, totalPages - 1));
     const pageTracks = player.queue.slice(safePage * itemsPerPage, (safePage + 1) * itemsPerPage);
 
-    const queueTrackLink = (track, max = 62) => {
+    const queueTrackLink = (track, max = 68) => {
         const title = escapeMarkdownLinkText(track?.info?.title || 'Unknown', max);
         const url = isHttpUrl(track?.info?.uri) ? track.info.uri : null;
         return url ? `[${title}](${url})` : title;
@@ -904,39 +904,27 @@ function buildQueueDescription(player, page = 0, itemsPerPage = 8) {
     const dur = (track) => shortDuration(track?.info?.length);
     const nowPlaying = player.currentTrack;
 
-    // Total queue duration
-    const totalMs = player.queue.reduce((sum, t) => sum + (t?.info?.length || 0), 0);
-    const totalDurStr = shortDuration(totalMs);
-
-    // Now Playing section
     const npAuthor = cleanInlineText(nowPlaying?.info?.author, '', 40);
     const npLine = [
-        `**${queueTrackLink(nowPlaying, 72)}**`,
-        '',
-        npAuthor ? `⏱ \`${dur(nowPlaying)}\`  ·  ${npAuthor}` : `⏱ \`${dur(nowPlaying)}\``,
-    ].join('\n> ');
+        `> ${queueTrackLink(nowPlaying, 74)}`,
+        `> \`${dur(nowPlaying)}\`${npAuthor ? ` • ${npAuthor}` : ''}`,
+    ].join('\n');
 
-    // Queue entries
     const queuedLines = pageTracks.map((track, i) => {
         const absolute = safePage * itemsPerPage + i + 1;
-        const author = cleanInlineText(track.info?.author, '', 36);
-        const titleLine = `**${absolute}. ${queueTrackLink(track)}**`;
-        const metaLine  = author
-            ? `\`${dur(track)}\` · ${author}`
-            : `\`${dur(track)}\``;
-        return `${titleLine}\n└ ${metaLine}`;
+        return `\`${absolute}.\` ${queueTrackLink(track, 76)}`;
     });
 
     const upcomingHeader = player.queue.length > 0
-        ? `**Upcoming** • ${player.queue.length} ${player.queue.length === 1 ? 'track' : 'tracks'}`
+        ? `**Upcoming** • ${player.queue.length} ${player.queue.length === 1 ? 'track' : 'tracks'} • Page ${safePage + 1}/${totalPages}`
         : '**Upcoming**';
 
     return [
         '**Now Playing**',
-        `> ${npLine}`,
+        npLine,
         '',
         upcomingHeader,
-        queuedLines.length ? queuedLines.join('\n\n') : '> No queued songs.',
+        queuedLines.length ? queuedLines.join('\n') : '> No queued songs.',
     ].join('\n');
 }
 
@@ -1823,6 +1811,7 @@ module.exports = {
 
         TrueMusic.once('clientReady', async () => {
             refreshEmbedColor(TrueMusic).catch(() => {});
+            TrueMusic.application?.emojis?.fetch?.().catch(() => {});
             try { TrueMusic.poru.init(TrueMusic); } catch (e) { console.error(`[Poru] فشل الاتصال بـ Lavalink: ${e.message}`); }
             collection.set(TrueMusic.user.id, TrueMusic);
 
@@ -2015,41 +2004,35 @@ module.exports = {
                             .setColor(getEmbedColor(TrueMusic))
 
                             .setThumbnail("https://cdn.discordapp.com/attachments/1091536665912299530/1264225405465002025/O.png?ex=669d1928&is=669bc7a8&hm=ee36f6e8facc4eb99721570bc7f32dff9551bc5bea89d7a027c09408cafba604&")
-                            .setDescription(`
-              \`\`\`*Music Commands*\`\`\`**
-                play [track] - \`Adds the track to the queue.\`
-                search [track] - \`Searching from YouTube\`
-
-                join - \`Joins the voice channel\`
-                leave - \`Leaves the voice channel\`
-                pause - \`Pauses the playback\`
-                resume - \`Resumes the playback\`
-
-                skip - \`Skips the currently playing track\`
-                queue - \`Displays the current queue\`
-                stop - \`Stop playing songs\`
-                autoplay - \`Play songs on the first song\`
-                nowplaying - \`Displays the currently playing track\`
-                seek [timestamp] - \`Sets the track's position to the timestamp\`
-                remove [position] - \`Removes the track from the queue\`
-                loop [ON/OFF] - \`Repeat play song\`
-                forward [Time] - \`Present a specific time of the song\`
-                volume [volume] - \`Sets the bot's volume\`
-
-              \`\`\`Owner Commands\`\`\`
-
-                setname [name] - \`Sets the name of the bot\`
-                setavatar [attach a picture] - \`Sets the avatar of the bot\`
-                streaming - \`Sets the status the bot displays\`
-
-                setprefix [setprefix/unsetprefix] - \`Add and delete prefix\`
-                setvc [setvc/leave] - \`set the voice bot and name it as voice.\`
-                settc [settc/unchat] - \`Sets the text channel for playing music\`
-
-                Settings - \`Control all bots \`
-                restart - \`Restart the bot**\`
-              
-              `)
+                            .setDescription([
+                                '**Music Commands**',
+                                '**play [track]** - `Adds the track to the queue.`',
+                                '**search [track]** - `Searching from YouTube`',
+                                '**join** - `Joins the voice channel`',
+                                '**leave** - `Leaves the voice channel`',
+                                '**pause** - `Pauses the playback`',
+                                '**resume** - `Resumes the playback`',
+                                '**skip** - `Skips the currently playing track`',
+                                '**queue** - `Displays the current queue`',
+                                '**stop** - `Stop playing songs`',
+                                '**autoplay** - `Play songs on the first song`',
+                                '**nowplaying** - `Displays the currently playing track`',
+                                '**seek [timestamp]** - `Sets the track position to the timestamp`',
+                                '**remove [position]** - `Removes the track from the queue`',
+                                '**loop [ON/OFF]** - `Repeat play song`',
+                                '**forward [Time]** - `Present a specific time of the song`',
+                                '**volume [volume]** - `Sets the bot volume`',
+                                '',
+                                '**Owner Commands**',
+                                '**setname [name]** - `Sets the name of the bot`',
+                                '**setavatar [attach a picture]** - `Sets the avatar of the bot`',
+                                '**streaming** - `Sets the status the bot displays`',
+                                '**setprefix [setprefix/unsetprefix]** - `Add and delete prefix`',
+                                '**setvc [setvc/leave]** - `Set the voice bot and name it as voice.`',
+                                '**settc [settc/unchat]** - `Sets the text channel for playing music`',
+                                '**Settings** - `Control all bots`',
+                                '**restart** - `Restart the bot`',
+                            ].join('\n'))
 
 
 
@@ -2680,15 +2663,7 @@ module.exports = {
 
 
 
-        const reactCustom = (msg, emojiData, fallback) => {
-            const id = typeof emojiData === 'object' ? emojiData?.id : emojiData;
-            const name = typeof emojiData === 'object' ? emojiData?.name : null;
-            const guildEmoji = id ? TrueMusic.emojis.cache.get(id) : null;
-            const appEmoji = !guildEmoji && id ? TrueMusic.application?.emojis?.cache?.get(id) : null;
-            const customStr = !guildEmoji && !appEmoji && id && name ? `<:${name}:${id}>` : null;
-            const resolved = guildEmoji || appEmoji || customStr || fallback;
-            return msg.react(resolved).catch(() => msg.react(fallback).catch(() => {}));
-        };
+        const reactCustom = (msg, emojiData, fallback) => MUSIC_EMOJIS.react(msg, emojiData, fallback, TrueMusic);
 
         TrueMusic.on('messageCreate', async (message) => {
             if (message.author.bot || !message.guild) return;
@@ -3170,7 +3145,7 @@ module.exports = {
 
                     return message.reply(musicPayload(tokenObj, {
                         title: 'Skipped',
-                        description: `**${skippedTrack.info.title}\nBy :${message.author.displayName}**`,
+                        description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
                         thumbnail: 'attachment://Skip.png',
                         files: ['./assets/image/icons/Skip.png'],
                     }));
@@ -3203,7 +3178,7 @@ module.exports = {
                 if (isNaN(volume)) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'Volume',
-                        description: `*Current volume is ${currentVolume}%**.`,
+                        description: `**Current volume is \`${currentVolume}%\`.**`,
                         thumbnail: 'attachment://Volumeup.png',
                         files: ['./assets/image/icons/Volumeup.png'],
                     }));
@@ -3222,7 +3197,7 @@ module.exports = {
 
                 return message.reply(musicPayload(tokenObj, {
                     title: 'Volume',
-                    description: `**Volume changed from__${currentVolume}%__ to __${volume}%__.**`,
+                    description: `**Volume changed from __${currentVolume}%__ to __${volume}%__.**`,
                     thumbnail: `attachment://${volume < currentVolume ? 'Volumedowwn' : 'Volumeup'}.png`,
                     files: [`./assets/image/icons/${volume < currentVolume ? 'Volumedowwn' : 'Volumeup'}.png`],
                 }));
@@ -3678,7 +3653,7 @@ module.exports = {
 
                                     const activePanelId = player.data?.nowPlayingMessage?.id;
                                     if (activePanelId && interaction.message?.id !== activePanelId) {
-                                        return replyEphemeral('انتهت صلاحية لوحة التحكم لأن الأغنية* تغيّرت*.');
+                                        return replyEphemeral('انتهت صلاحية لوحة التحكم لأن الأغنية تغيّرت.');
                                     }
 
                             const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
@@ -3727,7 +3702,7 @@ module.exports = {
                                     await editPanel(liked, interaction);
 
                                     await safePlay(player);
-                                    return replyEphemeral(`**تمت إضافة **${queuedTrack.info.title || 'الأغنية'} للطابور.**`);
+                                    return replyEphemeral(`**تمت إضافة ${queuedTrack.info.title || 'الأغنية'} للطابور.**`);
                                 }
 
                         if (interaction.customId === 'np_filter') {
@@ -3741,7 +3716,7 @@ module.exports = {
                                                 player.data.ui = ui;
                                         await editPanel(ui.liked);
                                 const label = FILTER_NAMES[applied] || applied;
-                                return replyEphemeral(applied === 'clear' ? '*Filter Stoped.*' : `>**Done applied : ${label}**.`);
+                                return replyEphemeral(applied === 'clear' ? '**Filter stopped.**' : `**Done applied : ${label}.**`);
                             } catch (err) {
                                 console.error('[Filters] failed:', err?.message || err);
                                 return replyEphemeral('Failed to apply.');
@@ -3755,16 +3730,16 @@ module.exports = {
                     if (interaction.customId === 'loop') {
                         const newLoopMode = player.loop === 'NONE' ? 'TRACK' : 'NONE';
                         player.setLoop(newLoopMode);
-                        responseMessage = `Loop is : **${newLoopMode === 'TRACK' ? 'ON' : 'OFF'}**`;
+                        responseMessage = `**Loop is ${newLoopMode === 'TRACK' ? 'ON' : 'OFF'}.**`;
                     }
 
                     if (interaction.customId === 'pause') {
                         if (player.isPaused) {
                             await player.pause(false);
-                            responseMessage = '**>Done resume the music**.';
+                            responseMessage = '**Done resume the music.**';
                         } else {
                             await player.pause(true);
-                            responseMessage = '**>Done puase the music.**';
+                            responseMessage = '**Done pause the music.**';
                         }
                         const liked = await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false);
                         await editPanel(liked);
@@ -3773,13 +3748,13 @@ module.exports = {
                     if (interaction.customId === 'volume_down') {
                         const newVolume = Math.max(player.volume - 10, 0);
                         await player.setVolume(newVolume);
-                        responseMessage = `**Volume Now __${newVolume}%__**`;
+                        responseMessage = `**Volume is now __${newVolume}%__.**`;
                     }
 
                     if (interaction.customId === 'volume_up') {
                         const newVolume = Math.min(player.volume + 10, 130);
                         await player.setVolume(newVolume);
-                        responseMessage = `**Volume Now : __${newVolume}%__**`;
+                        responseMessage = `**Volume is now __${newVolume}%__.**`;
                     }
 
                             if (interaction.customId === 'skip') {
@@ -3800,12 +3775,12 @@ module.exports = {
                                     player.currentTrack = null;
                                     player.isPlaying = false;
                                     player.isPaused = false;
-                                    responseMessage = `** Done skiped : ${currentTrack.info.title || 'الأغنية'}**`;
+                                    responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                 } else {
                                     await finalizePlayerUi(player);
                                     await bumpQueueVersion(player, 'button_skip');
                                     await player.skip();
-                                    responseMessage = `** Done Skiped : ${currentTrack.info.title || 'الأغنية'}**`;
+                                    responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                 }
                     }
 
@@ -3846,7 +3821,7 @@ module.exports = {
                         player.currentTrack = null;
                         player.isPlaying = false;
                         player.isPaused = false;
-                        responseMessage = '*⏹ Done Stoped The Song*.';
+                        responseMessage = '**Done stopped the song.**';
                     }
 
                     if (interaction.customId === 'queue_btn') {

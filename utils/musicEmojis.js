@@ -28,11 +28,87 @@ const MUSIC_EMOJIS = {
 };
 
 function emojiStr(data) {
-    if (!data) return '';
-    if (typeof data === 'string') return data;
-    if (data.id && data.name) return `<:${data.name}:${data.id}>`;
+    const emoji = parseEmojiData(data);
+    if (!emoji) return '';
+    if (!emoji.id) return emoji.name || '';
+    if (!emoji.name) return emoji.id;
+    return `<${emoji.animated ? 'a' : ''}:${emoji.name}:${emoji.id}>`;
+}
+
+function parseEmojiData(data) {
+    if (!data) return null;
+
+    if (typeof data === 'string') {
+        const value = data.trim();
+        const custom = value.match(/^<(?<animated>a?):(?<name>[A-Za-z0-9_~.-]+):(?<id>\d{17,20})>$/);
+        if (custom?.groups) {
+            return {
+                id: custom.groups.id,
+                name: custom.groups.name,
+                animated: custom.groups.animated === 'a',
+            };
+        }
+        if (/^\d{17,20}$/.test(value)) return { id: value };
+        return { name: value };
+    }
+
+    if (typeof data === 'object') {
+        const id = data.id ? String(data.id) : null;
+        const name = data.name ? String(data.name) : null;
+        if (!id && !name) return null;
+        return {
+            id,
+            name,
+            animated: data.animated === true,
+        };
+    }
+
+    return null;
+}
+
+function emojiResolvable(data, client = null) {
+    const emoji = parseEmojiData(data);
+    if (!emoji) return null;
+    if (!emoji.id) return emoji.name || null;
+
+    const guildEmoji = client?.emojis?.cache?.get?.(emoji.id);
+    if (guildEmoji) return guildEmoji;
+
+    const appEmoji = client?.application?.emojis?.cache?.get?.(emoji.id);
+    if (appEmoji) return appEmoji;
+
+    return {
+        id: emoji.id,
+        name: emoji.name || 'emoji',
+        animated: emoji.animated === true,
+    };
+}
+
+async function react(message, emojiData, fallback = null, client = null) {
+    const candidates = [
+        emojiResolvable(emojiData, client || message?.client),
+        emojiStr(emojiData),
+        fallback,
+    ].filter(Boolean);
+
+    const seen = new Set();
+    for (const candidate of candidates) {
+        const key = typeof candidate === 'string'
+            ? candidate
+            : `${candidate.animated ? 'a:' : ''}${candidate.name || ''}:${candidate.id || ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        try {
+            return await message.react(candidate);
+        } catch {}
+    }
+
     return '';
 }
 
 module.exports = MUSIC_EMOJIS;
 module.exports.emojiStr = emojiStr;
+module.exports.parseEmojiData = parseEmojiData;
+module.exports.emojiResolvable = emojiResolvable;
+module.exports.react = react;
