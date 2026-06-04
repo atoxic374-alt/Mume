@@ -536,7 +536,17 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     const current = track.info;
     const settings = displaySettings(tokenObj);
     if (!settings.embeds) {
-        return buildNowPlayingFallbackPayload(tokenObj, player, options.requester || current.requester || message?.author);
+        // Always return an IS_COMPONENTS_V2 payload so edits stay compatible
+        // (returning a content-based payload would break editing a V2 message)
+        const _title = cleanInlineText(current.title, 'Unknown', 96);
+        const _author = cleanInlineText(current.author, 'Unknown', 72);
+        const _req = options.requester || current.requester || message?.author;
+        const _reqName = cleanInlineText(_req?.displayName || _req?.globalName || _req?.username || _req?.tag, 'Unknown', 48);
+        const { currentTime: _ct, totalTime: _tt } = safeProgressTimes(player, track, options);
+        const _bar = buildInlineProgressBar(_ct, _tt, 20, `👤 ${_reqName}`);
+        const _ctr = new ContainerBuilder()
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ${_title}\n*${_author}*\n${_bar}`));
+        return { flags: MessageFlags.IsComponentsV2, components: [_ctr], allowedMentions: { parse: [] } };
     }
 
     const { currentTime, totalTime } = safeProgressTimes(player, track, options);
@@ -797,6 +807,32 @@ function clearProgressInterval(player, reason = '') {
     clearInterval(player.data.progressInterval);
     player.data.progressInterval = null;
     if (reason) console.warn(`[ProgressUpdate] cleared interval: ${reason}`);
+}
+
+/**
+ * Safe wrapper for editing a Discord message.
+ * Components V2 messages (IS_COMPONENTS_V2 flag) cannot have `content`,
+ * `embeds`, or `tts` fields. If the target message is V2 and the new
+ * payload would include those fields, we skip the edit to avoid the
+ * MESSAGE_CANNOT_USE_LEGACY_FIELDS_WITH_COMPONENTS_V2 API error.
+ */
+async function safeEditMessage(msg, payload) {
+    if (!msg || !payload) return;
+    const isV2 = msg.flags?.has?.(MessageFlags.IsComponentsV2);
+    if (isV2) {
+        const payloadIsV2 = !!(payload.flags & MessageFlags.IsComponentsV2);
+        if (!payloadIsV2) {
+            // Payload is content/embed-based but message is V2 — skip to avoid API error
+            return;
+        }
+        // Strip any accidental legacy fields
+        const safe = { ...payload };
+        delete safe.content;
+        delete safe.embeds;
+        delete safe.tts;
+        return msg.edit(safe);
+    }
+    return msg.edit(payload);
 }
 
 function safeProgressTimes(player, track, options = {}) {
@@ -1432,9 +1468,15 @@ async function finalizePlayerUi(player, options = {}) {
                 durationOverride: totalTime,
             });
             payload.components = disableComponents(payload.components);
-            await msg.edit(payload).catch(() => {});
+            await safeEditMessage(msg, payload).catch(() => {});
         } else {
-            await msg.edit({ components: disableComponents(msg.components) }).catch(() => {});
+            // Disable components without touching content/flags
+            const isV2 = msg.flags?.has?.(MessageFlags.IsComponentsV2);
+            if (isV2) {
+                await msg.edit({ components: disableComponents(msg.components) }).catch(() => {});
+            } else {
+                await msg.edit({ components: disableComponents(msg.components) }).catch(() => {});
+            }
         }
     }
     if (player?.data) {
@@ -1506,10 +1548,10 @@ module.exports = {
 
         TrueMusic.poru = new Poru(TrueMusic, hostConfig, {
             defaultPlatform: 'ytsearch',
-            reconnectTries: 8,
-            reconnectTimeout: 3000,
+            reconnectTries: 20,
+            reconnectTimeout: 6000,
             resumeKey: `ens-${token.slice(-10)}`,
-            resumeTimeout: 90,
+            resumeTimeout: 180,
             autoResume: true,
             bypassChecks: false,
         });
@@ -1529,6 +1571,12 @@ module.exports = {
         });
 
         const voiceEnsureLocks = new Map();
+
+        // Tracks when the user manually stopped the bot.
+        // Auto-reconnect and voice-guard are suppressed for this duration.
+        let stopUntil = 0;
+        function markStopped(durationMs = 90_000) { stopUntil = Date.now() + durationMs; }
+        function isStopped() { return Date.now() < stopUntil; }
 
         async function ensureConfiguredVoice(guild, tokenObj, reason = 'guard') {
             if (!guild || !tokenObj?.channel || tokenObj.awaitingReplacement) return null;
@@ -1582,6 +1630,11 @@ module.exports = {
 
         async function restartCurrentTrack(player, reason = 'recover') {
             if (!player?.currentTrack?.track || !player?.node?.rest) return false;
+            ensurePlayerData(player);
+            // Mark recovery so trackEnd(replaced) is suppressed and doesn't break UI
+            player.data._recovering = true;
+            player.data._recoveryTrackId = trackIdentity(player.currentTrack);
+            player.data._recoveryAt = Date.now();
             await player.node.rest.updatePlayer({
                 guildId: player.guildId,
                 data: {
@@ -1592,7 +1645,6 @@ module.exports = {
             });
             player.isPlaying = true;
             player.isPaused = false;
-            ensurePlayerData(player);
             player.data.lastProgressAt = Date.now();
             player.data.lastRecoveryReason = reason;
             return true;
@@ -1632,11 +1684,17 @@ module.exports = {
         }
 
         function scheduleNodeRecovery(node, reason = 'node_reconnect') {
+            // Wait 8s (was 6s) to allow the node session to fully establish
+            // before attempting to restart player tracks. Also check node is
+            // still connected and player isn't paused before recovering.
             setTimeout(() => {
+                if (!node.isConnected) return; // node went offline again — skip
                 TrueMusic.poru.players.forEach(player => {
-                    if (player.node === node) recoverPlayerPlayback(player, reason).catch(() => {});
+                    if (player.node !== node) return;
+                    if (player.isPaused) return;
+                    recoverPlayerPlayback(player, reason).catch(() => {});
                 });
-            }, 6000);
+            }, 8000);
         }
 
         // ── Optimization: watchdog merged into main interval below ──────────────
@@ -1720,6 +1778,7 @@ module.exports = {
         TrueMusic.on('voiceStateUpdate', async (oldState, newState) => {
             if (newState.member?.id !== TrueMusic.user?.id) return;
             if (voiceReturnLock) return;
+            if (isStopped()) return; // user manually stopped — don't auto-return
 
             const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
             if (!tokenObj?.channel || tokenObj.awaitingReplacement) return;
@@ -1768,6 +1827,35 @@ module.exports = {
                 player.skip?.().catch(() => {});
             });
 
+            // ── Lavalink REST health monitor ──────────────────────────────────────
+            // Poru may report isConnected=true on a stale WebSocket. This check
+            // pings the Lavalink REST endpoint every 90s and forces a reconnect if
+            // the node is unresponsive. Catches cases where Lavalink restarts
+            // without closing the WebSocket cleanly.
+            setInterval(async () => {
+                if (!TrueMusic.readyAt) return;
+                const nodes = [...(TrueMusic.poru?.nodes?.values() || [])];
+                for (const node of nodes) {
+                    if (!node.isConnected) continue;
+                    const name = node.options?.name || node.options?.host;
+                    try {
+                        const proto = node.options?.secure ? 'https' : 'http';
+                        const url = `${proto}://${node.options.host}:${node.options.port}/version`;
+                        const res = await fetch(url, {
+                            headers: { Authorization: node.options.password },
+                            signal: AbortSignal.timeout(6000),
+                        });
+                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    } catch (e) {
+                        console.warn(`[PoruHealth] Node ${name} REST unresponsive: ${e.message} — forcing reconnect`);
+                        // Trigger Poru reconnect by disconnecting — Poru will retry per reconnectTries config
+                        try { node.disconnect?.(); } catch {}
+                        setTimeout(() => { try { node.connect?.(); } catch {} }, 4000);
+                    }
+                }
+            }, 90_000);
+            // ─────────────────────────────────────────────────────────────────────
+
             let int = setInterval(async () => {
                 if (!TrueMusic.readyAt) return;
 
@@ -1804,11 +1892,13 @@ module.exports = {
 
                             if (shouldReconnect) {
                                 if (!TrueMusic.readyAt) return;
+                                if (isStopped()) return; // respect manual stop
 
                                 // ── Fix: if all Lavalink nodes are offline, force re-init ──
                                 const allNodesOffline = TrueMusic.poru?.nodes?.size > 0 &&
                                     [...(TrueMusic.poru.nodes?.values() || [])].every(n => !n.isConnected);
                                 if (allNodesOffline) {
+                                    console.warn('[Poru] All nodes offline — forcing re-init');
                                     try { TrueMusic.poru.init(TrueMusic); } catch {}
                                 }
 
@@ -2216,7 +2306,27 @@ module.exports = {
       const naturalEnd = isNaturalTrackEnd(reason);
       player.data.lastTrackEndReason = reason;
       player.data.lastTrackEndNatural = naturalEnd;
-      if (!naturalEnd && reason !== 'stopped') console.warn(`[TrackEnd] non-natural end for ${trackIdentity(track) || 'unknown'}: ${reason}`);
+
+      // ── Recovery guard ────────────────────────────────────────────────────────
+      // When restartCurrentTrack() is called (e.g. watchdog recovery), Lavalink
+      // fires trackEnd(replaced) then trackStart for the SAME track. Without this
+      // guard, finalizePlayerUi() would disable buttons and clear the panel, then
+      // trackStart suppresses the duplicate → player goes silent with no UI.
+      if (reason === 'replaced' && player.data._recovering) {
+          const recoveryAge = Date.now() - (player.data._recoveryAt || 0);
+          if (recoveryAge < 15_000) {
+              player.data._recovering = false;
+              if (process.env.DEBUG_NP) console.warn(`[TrackEnd] suppressed finalizePlayerUi during recovery (replaced, age=${recoveryAge}ms)`);
+              await bumpQueueVersion(player, `track_end:${reason}`);
+              return;
+          }
+      }
+      // ─────────────────────────────────────────────────────────────────────────
+
+      if (!naturalEnd && reason !== 'stopped' && reason !== 'replaced') {
+          console.warn(`[TrackEnd] non-natural end for ${trackIdentity(track) || 'unknown'}: ${reason}`);
+      }
+
       // Guard: if the new track already started and its panel is live, skip UI finalization
       // to avoid disabling the new panel by mistake (race condition with trackStart).
       const endingIdentity = trackIdentity(track);
@@ -2327,6 +2437,16 @@ module.exports = {
             TrueMusic.poru.on('trackStart', async (player, track) => {
         await bumpQueueVersion(player, 'track_start');
         ensurePlayerData(player);
+
+        // ── Recovery cleanup ──────────────────────────────────────────────────
+        // If trackEnd(replaced) was suppressed by the recovery guard, _recovering
+        // may still be true here. Clear it and keep the existing panel alive.
+        const wasRecovering = !!player.data._recovering;
+        player.data._recovering = false;
+        player.data._recoveryTrackId = null;
+        player.data._recoveryAt = null;
+        // ─────────────────────────────────────────────────────────────────────
+
         const identity = trackIdentity(track);
         const previousContext = player.data.nowPlayingContext;
         const previousIdentity = player.data.nowPlayingTrackIdentity || trackIdentity(previousContext?.track);
@@ -2335,9 +2455,15 @@ module.exports = {
                 warnPlayerOnce(
                     player,
                     `duplicate-panel:${identity}`,
-                    `[NowPlaying] duplicate trackStart suppressed for ${identity}`,
+                    `[NowPlaying] duplicate trackStart suppressed for ${identity}${wasRecovering ? ' (recovery-ok)' : ''}`,
                     10_000,
                 );
+                // If this is a recovery restart, reset timing so progress bar stays accurate
+                if (wasRecovering) {
+                    player.data.lastProgressAt = Date.now();
+                    player.data.trackStartedAt = Date.now();
+                    player.data.recoveryAttempts = 0;
+                }
                 return;
             }
             // Normal when skipping — demote to debug to avoid log noise
@@ -2491,7 +2617,7 @@ module.exports = {
                                     useEmbedAccent: false,
                                     progressWidth: PLAY_PROGRESS_WIDTH,
                                 });
-                await msg.edit(payload3).catch((err) => {
+                await safeEditMessage(msg, payload3).catch((err) => {
                     warnPlayerOnce(player, `edit-failed:${msg.id}`, `[ProgressUpdate] edit failed for ${msg.id}: ${err?.message || err}`);
                 });
             } catch (err) {
@@ -2521,7 +2647,7 @@ module.exports = {
                             useEmbedAccent: false,
                             progressWidth: PLAY_PROGRESS_WIDTH,
                         });
-                await msg.edit(payload).catch(() => {});
+                await safeEditMessage(msg, payload).catch(() => {});
             }
         } catch (err) {
             console.error('[TopSongs] failed:', err?.message || err);
@@ -2761,6 +2887,7 @@ module.exports = {
                                 player.setLoop('NONE');
                                 player.queue.clear();
                                 player.data.autoPlay = false;
+                                markStopped(90_000); // suppress auto-reconnect for 90s
                                 await finalizePlayerUi(player);
                                 await bumpQueueVersion(player, 'stop');
                                 await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
@@ -3637,6 +3764,7 @@ module.exports = {
                     }
 
                     if (interaction.customId === 'stop') {
+                        markStopped(90_000); // suppress auto-reconnect for 90s
                         await finalizePlayerUi(player);
                         await bumpQueueVersion(player, 'button_stop');
                         await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
