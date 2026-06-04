@@ -91,6 +91,8 @@ const FILTER_OPTIONS = [
     { label: 'Soft EQ', value: 'soft', description: 'صوت أهدأ وأنظف', emoji: MUSIC_EMOJIS.filters },
 ];
 
+const ARTIST_MENU_HEADER_VALUE = '__artist_header';
+
 const BASE_FILTERS = {
     volume: 1.0,
     equalizer: [],
@@ -246,25 +248,39 @@ function buildMusicComponents({ liked = false, paused = false, artistTracks = []
     const rows = [];
 
     if (showControls && artistTracks.length > 0) {
-        const artistMenu = new StringSelectMenuBuilder()
-            .setCustomId('np_artist')
-            .setPlaceholder('Suggest For You')
-            .addOptions(artistTracks.slice(0, 5).map((t, i) => ({
+        const safeSelectedArtistIndex = Number.isInteger(selectedArtistIndex) ? selectedArtistIndex : null;
+        const artistOptions = [
+            {
+                label: 'Suggest For You',
+                value: ARTIST_MENU_HEADER_VALUE,
+                description: 'Songs from the same artist',
+                emoji: MUSIC_EMOJIS.artistTop,
+                default: safeSelectedArtistIndex === null,
+            },
+            ...artistTracks.slice(0, 5).map((t, i) => ({
                 label: (t.info.title || 'Unknown').slice(0, 99),
                 value: String(i),
                 description: `${shortDuration(t.info.length)} · ${(t.info.author || '').slice(0, 50)}`.slice(0, 99),
                 emoji: MUSIC_EMOJIS.artistTop,
-            })));
+                default: safeSelectedArtistIndex === i,
+            })),
+        ];
+        const artistMenu = new StringSelectMenuBuilder()
+            .setCustomId('np_artist')
+            .setPlaceholder('Suggest For You')
+            .addOptions(artistOptions);
         rows.push(new ActionRowBuilder().addComponents(artistMenu));
     }
 
     if (showControls) {
-        const activeFilterName = FILTER_NAMES[selectedFilter] || FILTER_NAMES.clear;
+        const safeSelectedFilter = FILTER_NAMES[selectedFilter] ? selectedFilter : 'clear';
+        const activeFilterName = FILTER_NAMES[safeSelectedFilter] || FILTER_NAMES.clear;
         const filterMenu = new StringSelectMenuBuilder()
             .setCustomId('np_filter')
             .setPlaceholder(` Current Filter : ${activeFilterName}`)
             .addOptions(FILTER_OPTIONS.map(option => ({
                 ...option,
+                default: option.value === safeSelectedFilter,
             })));
         rows.push(new ActionRowBuilder().addComponents(filterMenu));
     }
@@ -287,6 +303,7 @@ function buildNowPlayingPayload(TrueMusic, tokenObj, track, requester, options =
     const duration = shortDuration(track?.info?.length);
     const requesterName = requester?.displayName || requester?.username || 'Unknown';
     const titleText = uri ? `[${title}](${uri})` : title;
+    const autoPlayLine = autoPlayNowPlayingLine(track?.info);
     const components = buildMusicComponents({
         liked: !!options.liked,
         artistTracks: options.artistTracks || [],
@@ -300,7 +317,10 @@ function buildNowPlayingPayload(TrueMusic, tokenObj, track, requester, options =
             .setColor(embedColor)
             .setTitle('Now Playing')
             .setThumbnail('attachment://NowPlaying.png')
-            .setDescription(`**${titleText}**`)
+            .setDescription([
+                `**${titleText}**`,
+                autoPlayLine ? `*${autoPlayLine}*` : null,
+            ].filter(Boolean).join('\n'))
             .addFields(
                 { name: 'Duration', value: `\`${duration}\``, inline: true },
                 { name: 'By', value: `**${requesterName}**`, inline: true },
@@ -322,10 +342,11 @@ function buildNowPlayingPayload(TrueMusic, tokenObj, track, requester, options =
         content: [
             '**Now Playing**',
             `**${title}**`,
+            autoPlayLine ? `*${autoPlayLine}*` : null,
             author !== 'Unknown artist'
                 ? `**${author}** | By : **${requesterName}**`
                 : `By : **${requesterName}**`,
-        ].join('\n'),
+        ].filter(Boolean).join('\n'),
         embeds: [],
         components,
     };
@@ -392,6 +413,13 @@ function escapeMarkdownLinkText(value, maxLength = 100) {
         .replace(/\]/g, '\\]');
 }
 
+function autoPlayNowPlayingLine(info) {
+    if (info?.autoPlay !== true) return '';
+    const emoji = MUSIC_EMOJIS.emojiStr?.(MUSIC_EMOJIS.smartSearch) || '🎵';
+    const artist = cleanInlineText(info.autoPlayArtist, '', 48);
+    return `${emoji} Auto Play${artist ? ` : ${artist}` : ''}`;
+}
+
 function isHttpUrl(value) {
     return /^https?:\/\//i.test(String(value || '').trim());
 }
@@ -444,11 +472,13 @@ function buildNowPlayingFallbackPayload(tokenObj, player, requester) {
     const titleText = cleanInlineText(current.title, 'Unknown track', 96);
     const authorText = cleanInlineText(current.author, 'Unknown artist', 72);
     const requesterName = requester?.displayName || requester?.globalName || requester?.username || requester?.tag || 'Unknown';
+    const autoPlayLine = autoPlayNowPlayingLine(current);
 
     return musicPayload(tokenObj, {
         title: 'Now Playing',
         description:
             `**${titleText}**\n` +
+            (autoPlayLine ? `*${autoPlayLine}*\n` : '') +
             (authorText !== 'Unknown artist'
                 ? `**${authorText}** | By : **${requesterName}**`
                 : `By : **${requesterName}**`),
@@ -544,8 +574,14 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
         const _reqName = cleanInlineText(_req?.displayName || _req?.globalName || _req?.username || _req?.tag, 'Unknown', 48);
         const { currentTime: _ct, totalTime: _tt } = safeProgressTimes(player, track, options);
         const _bar = buildInlineProgressBar(_ct, _tt, 20, `👤 ${_reqName}`);
+        const _autoPlayLine = autoPlayNowPlayingLine(current);
         const _ctr = new ContainerBuilder()
-            .addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ${_title}\n*${_author}*\n${_bar}`));
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent([
+                `### ${_title}`,
+                _autoPlayLine ? `*${_autoPlayLine}*` : null,
+                `*${_author}*`,
+                _bar,
+            ].filter(Boolean).join('\n')));
         return { flags: MessageFlags.IsComponentsV2, components: [_ctr], allowedMentions: { parse: [] } };
     }
 
@@ -554,6 +590,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     const author = cleanInlineText(current.author, 'Unknown artist', 72);
     const uri = isHttpUrl(current.uri) ? current.uri : null;
     const titleLine = uri ? `[${escapeMarkdownLinkText(title, 96)}](${uri})` : title;
+    const autoPlayLine = autoPlayNowPlayingLine(current);
     const requester = options.requester || current.requester || message?.author;
     const requesterName = cleanInlineText(
         requester?.displayName || requester?.globalName || requester?.username || requester?.tag,
@@ -585,7 +622,10 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
 
     const section = new SectionBuilder()
         .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(`### ${titleLine}`),
+            new TextDisplayBuilder().setContent([
+                `### ${titleLine}`,
+                autoPlayLine ? `*${autoPlayLine}*` : null,
+            ].filter(Boolean).join('\n')),
         );
 
     if (artworkUrl) {
@@ -1016,6 +1056,38 @@ async function safePlay(player) {
     return true;
 }
 
+function runBackground(label, task) {
+    setImmediate(() => {
+        Promise.resolve()
+            .then(task)
+            .catch(err => console.warn(`[${label}] ${err?.message || err}`));
+    });
+}
+
+function finalUiOptionsFor(player, track, options = {}) {
+    return {
+        track,
+        complete: options.complete === true,
+        positionOverride: Math.max(0, Number(player?.position || player?.data?.lastPosition || 0)),
+        durationOverride: Math.max(0, Number(track?.info?.length || 0)),
+    };
+}
+
+async function stopPlayerAudio(player) {
+    if (!player) return false;
+    const hadTrack = !!player.currentTrack;
+    if (player.currentTrack && player.node?.rest) {
+        await player.node.rest.updatePlayer({
+            guildId: player.guildId,
+            data: { track: { encoded: null } },
+        }).catch(() => {});
+    }
+    player.currentTrack = null;
+    player.isPlaying = false;
+    player.isPaused = false;
+    return hadTrack;
+}
+
 function isProbablyUrl(value) {
     if (!value) return false;
     try {
@@ -1200,6 +1272,7 @@ async function resolveSmartTracks(poru, query, source, limit = 20, options = {})
 }
 
 const PLAY_PROGRESS_WIDTH = 400;
+const STOP_RECONNECT_SUPPRESS_MS = Math.max(90_000, Number(process.env.MUSIC_STOP_RECONNECT_SUPPRESS_MS || 90_000));
 const GENERIC_LABEL_WORDS_PATTERN = /\b(?:records?|recordings?|label|music|musics|official|channel|productions?|producer|publisher|publishing|studios?|entertainment|media|network|group|company|distribution|distributor|digital|sound|audio|video|tv|vevo|youtube)\b|ري?كورد(?:ز)?|ميوزك|موسيقي|موسيقى|قناه|قناة|رسمي|رسميه|الرسمية|شركة|شركه|انتاج|الانتاج|للانتاج|للإنتاج|توزيع|ناشر|نشر|استوديو|ستوديو|ميديا|شبكه|شبكة|جروب|مجموعة|قروب|ساوند|صوت|تلفزيون|يوتيوب/i;
 const KNOWN_LABEL_NAMES = [
     'rotana', 'rotana music', 'rotana audio', 'rotana video', 'rotana records',
@@ -1227,12 +1300,17 @@ const KNOWN_LABEL_NAMES = [
 const NORMALIZED_LABEL_NAMES = KNOWN_LABEL_NAMES.map(normalizeSearchText).filter(Boolean);
 const ARTIST_TRACK_CACHE_TTL_MS = 10 * 60 * 1000;
 const ARTIST_TRACK_CACHE_MAX = 200;
+const AUTOPLAY_HISTORY_MAX = 30;
 const artistTrackCache = new Map();
 
 function trimArtistCandidate(value) {
     return String(value || '')
         .replace(/\[[^\]]*\]|\([^)]*\)/g, ' ')
-        .replace(/\b(official|video|audio|lyrics?|lyric|clip|remix|hd|4k|music)\b/ig, ' ')
+        .replace(/\s*(?:-|–|—)?\s*topic$/i, ' ')
+        .replace(/\bvevo\b/ig, ' ')
+        .replace(/\b(official|video|audio|lyrics?|lyric|clip|remix|hd|4k|music|channel)\b/ig, ' ')
+        .replace(/\b(?:feat(?:uring)?|ft\.?|with|prod\.?)\b.*$/ig, ' ')
+        .replace(/(?:مع|بمشاركة|برود)\s+.*$/g, ' ')
         .replace(/رسمي|الرسمية|فيديو|كليب|صوتي|كلمات|حصري|جديد|اغنيه|اغنية/g, ' ')
         .replace(/^[\s\-–—|:،,]+|[\s\-–—|:،,]+$/g, '')
         .replace(/\s+/g, ' ')
@@ -1257,7 +1335,7 @@ function inferArtistFromTitle(title) {
     const raw = String(title || '').replace(/\s+/g, ' ').trim();
     if (!raw) return '';
 
-    const parts = raw.split(/\s+(?:-|–|—|\|)\s+/).map(trimArtistCandidate).filter(Boolean);
+    const parts = raw.split(/\s+(?:-|–|—|\|)\s+|\s*[–—|]\s*/).map(trimArtistCandidate).filter(Boolean);
     const candidate = parts[0] || '';
     const tokenCount = searchTokens(candidate).length;
 
@@ -1272,17 +1350,19 @@ function artistQueryForTrack(track) {
     const rawAuthor = String(info.author || '').replace(/\s+/g, ' ').trim();
     const author = trimArtistCandidate(rawAuthor);
     const titleArtist = inferArtistFromTitle(info.title);
-    const authorLooksLabel = isLikelyLabelAuthor(rawAuthor) || isLikelyLabelAuthor(author);
+    const authorCandidate = author && !isLikelyLabelAuthor(author) ? author : '';
 
-    if (titleArtist && (!author || authorLooksLabel)) {
+    if (titleArtist) {
         return {
             primary: titleArtist,
-            fallback: authorLooksLabel ? (rawAuthor || author) : '',
+            fallback: authorCandidate && normalizeSearchText(authorCandidate) !== normalizeSearchText(titleArtist)
+                ? authorCandidate
+                : '',
         };
     }
 
     return {
-        primary: authorLooksLabel ? (rawAuthor || author) : (author || titleArtist),
+        primary: authorCandidate,
         fallback: '',
     };
 }
@@ -1313,14 +1393,41 @@ function setCachedArtistTracks(key, tracks) {
     });
 }
 
+function stripArtistPrefixFromTitle(title) {
+    const raw = String(title || '').replace(/\s+/g, ' ').trim();
+    if (!raw) return '';
+    const parts = raw.split(/\s+(?:-|–|—|\|)\s+|\s*[–—|]\s*/).map(part => part.trim()).filter(Boolean);
+    if (parts.length < 2) return raw;
+
+    const artist = trimArtistCandidate(parts[0]);
+    const tokenCount = searchTokens(artist).length;
+    if (!artist || tokenCount > 7 || isLikelyLabelAuthor(artist)) return raw;
+    return parts.slice(1).join(' ').trim() || raw;
+}
+
+function canonicalTrackTitle(title) {
+    const withoutArtist = stripArtistPrefixFromTitle(title);
+    const cleaned = withoutArtist
+        .replace(/\[[^\]]*\]|\([^)]*\)|\{[^}]*\}/g, ' ')
+        .replace(/\b(?:official|audio|video|lyrics?|lyric|clip|visualizer|remaster(?:ed)?|hd|4k|mv|m\/v|music|song|track|full|version)\b/ig, ' ')
+        .replace(/\b(?:feat(?:uring)?|ft\.?|with|prod\.?|remix|cover|live|sped\s*up|slowed|nightcore)\b.*$/ig, ' ')
+        .replace(/رسمي|الرسمية|فيديو|كليب|صوتي|كلمات|حصري|جديد|اغنيه|اغنية|نسخة|ريمكس|لايف|مسرع|بطيء/g, ' ');
+    return searchTokens(cleaned).join(' ') || normalizeSearchText(cleaned);
+}
+
 function isNearSameTrackTitle(track, currentTrack) {
     const currentTitle = currentTrack?.info?.title;
     const nextTitle = track?.info?.title;
     if (!currentTitle || !nextTitle) return false;
 
-    const currentTokens = new Set(searchTokens(currentTitle));
-    const nextTokens = new Set(searchTokens(nextTitle));
-    if (currentTokens.size < 2 || nextTokens.size < 2) return false;
+    const currentCanonical = canonicalTrackTitle(currentTitle);
+    const nextCanonical = canonicalTrackTitle(nextTitle);
+    if (!currentCanonical || !nextCanonical) return false;
+    if (currentCanonical === nextCanonical) return true;
+
+    const currentTokens = new Set(currentCanonical.split(' ').filter(Boolean));
+    const nextTokens = new Set(nextCanonical.split(' ').filter(Boolean));
+    if (!currentTokens.size || !nextTokens.size) return false;
 
     let shared = 0;
     for (const token of currentTokens) {
@@ -1329,16 +1436,116 @@ function isNearSameTrackTitle(track, currentTrack) {
 
     const smaller = Math.min(currentTokens.size, nextTokens.size);
     const larger = Math.max(currentTokens.size, nextTokens.size);
+    if (smaller === 1) return shared === 1 && larger <= 2;
     return shared / smaller >= 0.8 && shared / larger >= 0.55;
 }
 
-function filterArtistTracks(tracks, currentTrack, limit) {
-    const currentId = currentTrack?.info?.uri || currentTrack?.info?.identifier;
-    const withoutCurrent = dedupeTracks(tracks)
-        .filter(t => (t.info.uri || t.info.identifier) !== currentId);
-    const withoutSameSong = withoutCurrent.filter(t => !isNearSameTrackTitle(t, currentTrack));
+function trackMatchesArtist(track, artistName) {
+    const artist = trimArtistCandidate(artistName);
+    const artistTokens = searchTokens(artist);
+    if (!artistTokens.length) return true;
 
-    return (withoutSameSong.length ? withoutSameSong : withoutCurrent).slice(0, limit);
+    const info = track?.info || {};
+    const authorText = normalizeSearchText(trimArtistCandidate(info.author));
+    const titleText = normalizeSearchText(info.title);
+    const combinedWords = new Set(`${authorText} ${titleText}`.split(' ').filter(Boolean));
+    const artistPhrase = normalizeSearchText(artist);
+    const artistPhraseWords = artistPhrase.split(' ').filter(Boolean);
+
+    if (artistPhraseWords.length > 1 && (authorText.includes(artistPhrase) || titleText.includes(artistPhrase))) return true;
+    if (artistPhraseWords.length === 1 && combinedWords.has(artistPhrase)) return true;
+
+    let matched = 0;
+    for (const token of artistTokens) {
+        if (combinedWords.has(token)) matched++;
+    }
+
+    const required = artistTokens.length <= 2 ? artistTokens.length : Math.ceil(artistTokens.length * 0.67);
+    return matched >= required;
+}
+
+function autoPlayDuplicateKey(track) {
+    const canonical = canonicalTrackTitle(track?.info?.title);
+    if (canonical) return canonical;
+    return normalizeSearchText(`${track?.info?.author || ''} ${track?.info?.title || ''}`) || trackIdentity(track);
+}
+
+function rememberAutoPlayHistory(player, track) {
+    if (!player || !track) return;
+    const key = autoPlayDuplicateKey(track);
+    if (!key) return;
+    const data = ensurePlayerData(player);
+    const history = Array.isArray(data.autoPlayHistory) ? data.autoPlayHistory : [];
+    data.autoPlayHistory = [key, ...history.filter(item => item && item !== key)].slice(0, AUTOPLAY_HISTORY_MAX);
+}
+
+function autoPlayHistorySet(player) {
+    const history = ensurePlayerData(player).autoPlayHistory;
+    return new Set(Array.isArray(history) ? history.filter(Boolean) : []);
+}
+
+function clearAutoPlaySessionData(player) {
+    if (!player?.data) return;
+    delete player.data.autoPlayHistory;
+}
+
+function clearStoppedPlaybackCaches(player) {
+    if (!player?.data) return;
+    clearAutoPlaySessionData(player);
+    if (player.data.ui) {
+        player.data.ui.artistTracks = [];
+        player.data.ui.selectedArtistIndex = null;
+    }
+}
+
+function setAutoPlayState(player, enabled) {
+    if (!player) return false;
+    const data = ensurePlayerData(player);
+    data.autoPlay = enabled === true;
+    if (!data.autoPlay) clearAutoPlaySessionData(player);
+    return data.autoPlay;
+}
+
+function filterArtistTracks(tracks, currentTrack, limit, artistName = '', options = {}) {
+    const currentId = currentTrack?.info?.uri || currentTrack?.info?.identifier;
+    const unique = dedupeTracks(tracks)
+        .filter(t => (t.info.uri || t.info.identifier) !== currentId);
+    const artistPool = artistName ? unique.filter(t => trackMatchesArtist(t, artistName)) : unique;
+    const pool = artistPool.length ? artistPool : unique;
+    const history = options.historySet instanceof Set ? options.historySet : null;
+    const withoutSameSong = pool.filter(t => !isNearSameTrackTitle(t, currentTrack));
+    const withoutHistory = history
+        ? withoutSameSong.filter(t => !history.has(autoPlayDuplicateKey(t)))
+        : withoutSameSong;
+
+    return withoutHistory.slice(0, limit);
+}
+
+function buildArtistCatalogQueries(artistName) {
+    const artist = trimArtistCandidate(artistName);
+    return [
+        artist,
+        `${artist} songs`,
+        `${artist} top songs`,
+        `${artist} hits`,
+    ].filter(Boolean);
+}
+
+function randomTrack(tracks) {
+    if (!tracks.length) return null;
+    return tracks[Math.floor(Math.random() * tracks.length)] || null;
+}
+
+function pickAutoPlayTrack(player, tracks, currentTrack, artistName) {
+    const history = autoPlayHistorySet(player);
+    const candidates = filterArtistTracks(
+        tracks,
+        currentTrack,
+        Math.max(1, tracks.length),
+        artistName,
+        { historySet: history },
+    );
+    return randomTrack(candidates);
 }
 
 async function resolveCachedArtistQuery(poru, query, source, limit) {
@@ -1353,20 +1560,27 @@ async function resolveCachedArtistQuery(poru, query, source, limit) {
     return tracks;
 }
 
+async function resolveArtistCatalogTracks(poru, artistName, source, limit) {
+    const queries = buildArtistCatalogQueries(artistName);
+    const tracks = [];
+    const perQueryLimit = Math.max(8, Math.ceil(limit / Math.max(1, queries.length)) + 4);
+
+    for (const query of queries) {
+        const found = await resolveCachedArtistQuery(poru, query, source, perQueryLimit).catch(() => []);
+        tracks.push(...found);
+        if (tracks.length >= limit * 2) break;
+    }
+
+    return dedupeTracks(tracks);
+}
+
 async function resolveArtistTracks(poru, artistQuery, source, currentTrack, limit = 5) {
     const artistName = typeof artistQuery === 'string' ? artistQuery : artistQuery?.primary;
     const fallbackName = typeof artistQuery === 'object' ? artistQuery.fallback : '';
     if (!artistName) return [];
 
-    const key = artistCacheKey(source, artistName);
-    let tracks = getCachedArtistTracks(key);
-
-    if (!tracks) {
-        tracks = await resolveSmartTracks(poru, artistName, source || 'auto', Math.max(12, limit * 2));
-        setCachedArtistTracks(key, tracks);
-    }
-
-    const primaryTracks = filterArtistTracks(tracks, currentTrack, limit);
+    const tracks = await resolveArtistCatalogTracks(poru, artistName, source || 'auto', Math.max(16, limit * 4));
+    const primaryTracks = filterArtistTracks(tracks, currentTrack, limit, artistName);
     const needsFallback = fallbackName
         && normalizeSearchText(fallbackName) !== normalizeSearchText(artistName)
         && primaryTracks.length < Math.min(3, limit);
@@ -1374,9 +1588,10 @@ async function resolveArtistTracks(poru, artistQuery, source, currentTrack, limi
     if (!needsFallback) return primaryTracks;
 
     const fallbackTracks = filterArtistTracks(
-        await resolveCachedArtistQuery(poru, fallbackName, source, limit),
+        await resolveArtistCatalogTracks(poru, fallbackName, source || 'auto', Math.max(12, limit * 3)),
         currentTrack,
         limit,
+        fallbackName,
     );
 
     return dedupeTracks([...primaryTracks, ...fallbackTracks]).slice(0, limit);
@@ -1567,7 +1782,10 @@ module.exports = {
         // Tracks when the user manually stopped the bot.
         // Auto-reconnect and voice-guard are suppressed for this duration.
         let stopUntil = 0;
-        function markStopped(durationMs = 90_000) { stopUntil = Date.now() + durationMs; }
+        function markStopped(durationMs = STOP_RECONNECT_SUPPRESS_MS) {
+            stopUntil = Date.now() + durationMs;
+        }
+        function clearStopped() { stopUntil = 0; }
         function isStopped() { return Date.now() < stopUntil; }
 
         async function ensureConfiguredVoice(guild, tokenObj, reason = 'guard') {
@@ -2353,39 +2571,53 @@ module.exports = {
               await updatePlaybackVoiceStatus(TrueMusic, tokenObj2, player, null);
               if (!player?.data?.autoPlay || player.data.autoPlay === false) {
                 player.queue.clear();
-                player.data.autoPlay = false;
+                setAutoPlayState(player, false);
+                clearStoppedPlaybackCaches(player);
+                markStopped();
         return;
       }
       const currentTrack = player.previousTrack || player.currentTrack || player.data?.lastTrack;
       if (!currentTrack) {
         await finalizePlayerUi(player);
         player.queue.clear();
-        player.data.autoPlay = false;
+        setAutoPlayState(player, false);
+        clearStoppedPlaybackCaches(player);
+        markStopped();
         return;
       }
 
-      const search = `${currentTrack.info.title} next autoplay`;
-      const res = await TrueMusic.poru.resolve({
-        query: search,
-      });
-
-      if (!res || res.tracks.length === 0) {
+      const artistQuery = artistQueryForTrack(currentTrack);
+      const artistName = artistQuery?.primary;
+      if (!artistName) {
         await finalizePlayerUi(player);
         player.queue.clear();
-        player.data.autoPlay = false;
+        setAutoPlayState(player, false);
+        clearStoppedPlaybackCaches(player);
+        markStopped();
         return;
       }
 
-      const nextTrack = res.tracks.find(track => track.info.uri !== currentTrack.info.uri);
+      const source = displaySettings(tokenObj2).platform || 'auto';
+      let artistTracks = await resolveArtistTracks(TrueMusic.poru, artistQuery, source, currentTrack, 25);
+      let nextTrack = pickAutoPlayTrack(player, artistTracks, currentTrack, artistName);
+
+      if (!nextTrack && source !== 'auto') {
+        artistTracks = await resolveArtistTracks(TrueMusic.poru, artistQuery, 'auto', currentTrack, 25);
+        nextTrack = pickAutoPlayTrack(player, artistTracks, currentTrack, artistName);
+      }
 
       if (!nextTrack) {
         await finalizePlayerUi(player);
         player.queue.clear();
-        player.data.autoPlay = false;
+        setAutoPlayState(player, false);
+        clearStoppedPlaybackCaches(player);
+        markStopped();
         return;
       }
 
       nextTrack.info.requester = currentTrack.info.requester;
+      nextTrack.info.autoPlay = true;
+      nextTrack.info.autoPlayArtist = artistName;
       player.queue.add(nextTrack);
 
       await bumpQueueVersion(player, 'autoplay_add');
@@ -2444,6 +2676,7 @@ module.exports = {
             TrueMusic.poru.on('trackStart', async (player, track) => {
         await bumpQueueVersion(player, 'track_start');
         ensurePlayerData(player);
+        clearStopped();
 
         // ── Recovery cleanup ──────────────────────────────────────────────────
         // If trackEnd(replaced) was suppressed by the recovery guard, _recovering
@@ -2490,6 +2723,7 @@ module.exports = {
         const stuckResumePosition = Math.max(0, Number(player.data.stuckResumePosition || 0));
         const shouldResumeStuckTrack = stuckRecoveryIdentity && stuckRecoveryIdentity === trackIdentity(track);
                 player.data.lastTrack = track;
+        rememberAutoPlayHistory(player, track);
         player.data.trackStartedAt = Date.now();
         player.data.lastProgressAt = Date.now();
         player.data.lastPosition = 0;
@@ -2808,7 +3042,7 @@ module.exports = {
                             });
                             ensurePlayerData(player);
                                     rememberTextChannel(player, message.channel.id);
-                                    player.data.autoPlay = false;
+                                    setAutoPlayState(player, false);
 
                                 }
 
@@ -2888,23 +3122,21 @@ module.exports = {
                     }));
                 }
 
+                                const stoppedTrack = player.currentTrack;
+                                const finalOptions = finalUiOptionsFor(player, stoppedTrack);
+                                markStopped();
                                 player.setLoop('NONE');
                                 player.queue.clear();
-                                player.data.autoPlay = false;
-                                await finalizePlayerUi(player);
-                                await bumpQueueVersion(player, 'stop');
-                                await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
-                                // Stop audio but stay in VC — avoids disconnect/reconnect cycle
-                                if (player.currentTrack && player.node?.rest) {
-                                    await player.node.rest.updatePlayer({
-                                        guildId: player.guildId,
-                                        data: { track: { encoded: null } },
-                                    }).catch(() => {});
-                                }
-                                player.currentTrack = null;
-                                player.isPlaying = false;
-                                player.isPaused = false;
+                                setAutoPlayState(player, false);
+                                clearStoppedPlaybackCaches(player);
+                                clearProgressInterval(player, 'message stop');
+                                await stopPlayerAudio(player);
                                 reactCustom(message, MUSIC_EMOJIS.stop, '🔴');
+                                runBackground('stop cleanup', async () => {
+                                    await finalizePlayerUi(player, finalOptions);
+                                    await bumpQueueVersion(player, 'stop');
+                                    await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
+                                });
             }
 
 
@@ -3118,19 +3350,17 @@ module.exports = {
                 const currentTrack = player.currentTrack;
 
                         if (player.queue.length === 0) {
-                            await finalizePlayerUi(player);
-                            await bumpQueueVersion(player, 'skip_end');
-                            await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
-                            // Stay in VC — stop audio without disconnecting
-                            if (player.currentTrack && player.node?.rest) {
-                                await player.node.rest.updatePlayer({
-                                    guildId: player.guildId,
-                                    data: { track: { encoded: null } },
-                                }).catch(() => {});
-                            }
-                            player.currentTrack = null;
-                            player.isPlaying = false;
-                            player.isPaused = false;
+                            const finalOptions = finalUiOptionsFor(player, currentTrack);
+                            markStopped();
+                            setAutoPlayState(player, false);
+                            clearStoppedPlaybackCaches(player);
+                            clearProgressInterval(player, 'message skip end');
+                            await stopPlayerAudio(player);
+                            runBackground('skip end cleanup', async () => {
+                                await finalizePlayerUi(player, finalOptions);
+                                await bumpQueueVersion(player, 'skip_end');
+                                await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
+                            });
                             return message.reply(musicPayload(tokenObj, {
                         title: 'Skipped',
                         description: `**${currentTrack.info.title}\nBy : ${message.author.displayName}**`,
@@ -3139,9 +3369,8 @@ module.exports = {
                     }));
                         } else {
                             const skippedTrack = currentTrack;
-                            await finalizePlayerUi(player);
-                            await bumpQueueVersion(player, 'skip');
                             await player.skip();
+                            runBackground('skip cleanup', () => bumpQueueVersion(player, 'skip'));
 
                     return message.reply(musicPayload(tokenObj, {
                         title: 'Skipped',
@@ -3605,7 +3834,7 @@ module.exports = {
 
 
 
-                player.data.autoPlay = !player.data.autoPlay;
+                setAutoPlayState(player, !player.data.autoPlay);
 
 
 
@@ -3660,6 +3889,7 @@ module.exports = {
                             const ui = player.data.ui || {};
                             const requesterId = ui.requesterId || player.currentTrack?.info?.requester?.id || player.currentTrack?.info?.requester;
                             const editPanel = async (liked = false, targetInteraction = null) => {
+                                if (!player.currentTrack) return;
                                 ui.liked = liked;
                                 player.data.ui = ui;
                                 const payload = buildNowPlayingV2Payload(TrueMusic, tokenObj, player, { author: interaction.user }, {
@@ -3684,22 +3914,27 @@ module.exports = {
 
                     if (isMusicMenu) {
                         if (interaction.customId === 'np_artist') {
+                            await interaction.deferUpdate().catch(() => {});
                             if (ui.requesterId && interaction.user.id !== ui.requesterId) {
                                 return replyEphemeral('هذه القائمة لصاحب الطلب فقط.');
                             }
 
-                                    const selectedIndex = Number(interaction.values[0]);
+                                    const selectedValue = interaction.values[0];
+                                    if (selectedValue === ARTIST_MENU_HEADER_VALUE) {
+                                        return replyEphemeral('**اختر أغنية من القائمة.**');
+                                    }
+
+                                    const selectedIndex = Number(selectedValue);
                                     const selectedTrack = ui.artistTracks?.[selectedIndex];
                                     if (!selectedTrack) return replyEphemeral('**لم أجد الأغنية المختارة.**');
 
                                             const queuedTrack = { ...selectedTrack, info: { ...selectedTrack.info, requester: interaction.user } };
                                             player.queue.add(queuedTrack);
-                                            await bumpQueueVersion(player, 'artist_menu_add');
+                                            runBackground('artist queue panels', () => bumpQueueVersion(player, 'artist_menu_add'));
                                                     ui.selectedArtistIndex = null;
                                                     player.data.ui = ui;
 
-                                            const liked = await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false);
-                                    await editPanel(liked, interaction);
+                                    runBackground('artist panel edit', () => editPanel(!!ui.liked));
 
                                     await safePlay(player);
                                     return replyEphemeral(`**تمت إضافة ${queuedTrack.info.title || 'الأغنية'} للطابور.**`);
@@ -3712,11 +3947,11 @@ module.exports = {
                                         const applied = await applyFilter(player, filterName);
                                                 ui.selectedFilter = applied;
                                                 ui.selectedArtistIndex = null;
-                                                ui.liked = await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false);
                                                 player.data.ui = ui;
-                                        await editPanel(ui.liked);
                                 const label = FILTER_NAMES[applied] || applied;
-                                return replyEphemeral(applied === 'clear' ? '**Filter stopped.**' : `**Done applied : ${label}.**`);
+                                const response = applied === 'clear' ? '**Filter stopped.**' : `**Done applied : ${label}.**`;
+                                runBackground('filter panel edit', () => editPanel(!!ui.liked));
+                                return replyEphemeral(response);
                             } catch (err) {
                                 console.error('[Filters] failed:', err?.message || err);
                                 return replyEphemeral('Failed to apply.');
@@ -3741,8 +3976,7 @@ module.exports = {
                             await player.pause(true);
                             responseMessage = '**Done pause the music.**';
                         }
-                        const liked = await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false);
-                        await editPanel(liked);
+                        runBackground('pause panel edit', () => editPanel(!!ui.liked));
                     }
 
                     if (interaction.customId === 'volume_down') {
@@ -3762,24 +3996,21 @@ module.exports = {
                                 if (!currentTrack) {
                                     responseMessage = '*لا توجد أغنية للتخطي*.';
                                 } else if (player.queue.length === 0) {
-                                    await finalizePlayerUi(player);
-                                    await bumpQueueVersion(player, 'button_skip_end');
-                                    await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
-                                    // Stay in VC — stop audio without disconnecting
-                                    if (player.currentTrack && player.node?.rest) {
-                                        await player.node.rest.updatePlayer({
-                                            guildId: player.guildId,
-                                            data: { track: { encoded: null } },
-                                        }).catch(() => {});
-                                    }
-                                    player.currentTrack = null;
-                                    player.isPlaying = false;
-                                    player.isPaused = false;
+                                    const finalOptions = finalUiOptionsFor(player, currentTrack);
+                                    markStopped();
+                                    setAutoPlayState(player, false);
+                                    clearStoppedPlaybackCaches(player);
+                                    clearProgressInterval(player, 'button skip end');
+                                    await stopPlayerAudio(player);
+                                    runBackground('button skip end cleanup', async () => {
+                                        await finalizePlayerUi(player, finalOptions);
+                                        await bumpQueueVersion(player, 'button_skip_end');
+                                        await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
+                                    });
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                 } else {
-                                    await finalizePlayerUi(player);
-                                    await bumpQueueVersion(player, 'button_skip');
                                     await player.skip();
+                                    runBackground('button skip cleanup', () => bumpQueueVersion(player, 'button_skip'));
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                 }
                     }
@@ -3790,37 +4021,33 @@ module.exports = {
                         player.data.lastPrevPressTime = now;
                         if (now - lastPress < 3000 && player.queue.previous) {
                             const prevTrack = player.queue.previous;
-                            await finalizePlayerUi(player);
-                            await bumpQueueVersion(player, 'button_prev');
                             player.queue.unshift(player.currentTrack);
                             player.queue.unshift(prevTrack);
                             await player.skip();
+                            runBackground('button prev cleanup', () => bumpQueueVersion(player, 'button_prev'));
                             responseMessage = `⏮ رجعنا للأغنية السابقة.`;
                         } else {
                             await player.seek(0);
-                            const liked = await likes.isLiked(requesterId || interaction.user.id, player.currentTrack).catch(() => false);
-                            await editPanel(liked);
+                            runBackground('prev panel edit', () => editPanel(!!ui.liked));
                             responseMessage = `⏮ تم إعادة الأغنية من البداية.`;
                         }
                     }
 
                     if (interaction.customId === 'stop') {
+                        const stoppedTrack = player.currentTrack;
+                        const finalOptions = finalUiOptionsFor(player, stoppedTrack);
+                        markStopped();
                         player.setLoop('NONE');
                         player.queue.clear();
-                        player.data.autoPlay = false;
-                        await finalizePlayerUi(player);
-                        await bumpQueueVersion(player, 'button_stop');
-                        await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
-                        // Stop audio but stay in VC — avoids disconnect/reconnect cycle
-                        if (player.currentTrack && player.node?.rest) {
-                            await player.node.rest.updatePlayer({
-                                guildId: player.guildId,
-                                data: { track: { encoded: null } },
-                            }).catch(() => {});
-                        }
-                        player.currentTrack = null;
-                        player.isPlaying = false;
-                        player.isPaused = false;
+                        setAutoPlayState(player, false);
+                        clearStoppedPlaybackCaches(player);
+                        clearProgressInterval(player, 'button stop');
+                        await stopPlayerAudio(player);
+                        runBackground('button stop cleanup', async () => {
+                            await finalizePlayerUi(player, finalOptions);
+                            await bumpQueueVersion(player, 'button_stop');
+                            await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
+                        });
                         responseMessage = '**Done stopped the song.**';
                     }
 
