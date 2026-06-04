@@ -257,7 +257,7 @@ function buildMusicComponents({ liked = false, paused = false, artistTracks = []
                 emoji: MUSIC_EMOJIS.artistTop,
                 default: safeSelectedArtistIndex === null,
             },
-            ...artistTracks.slice(0, 5).map((t, i) => ({
+            ...artistTracks.slice(0, 6).map((t, i) => ({
                 label: (t.info.title || 'Unknown').slice(0, 99),
                 value: String(i),
                 description: `${shortDuration(t.info.length)} · ${(t.info.author || '').slice(0, 50)}`.slice(0, 99),
@@ -1098,6 +1098,38 @@ function isProbablyUrl(value) {
     }
 }
 
+function hasConnectedPoruNode(poru) {
+    return [...(poru?.nodes?.values?.() || [])].some(node => node?.isConnected);
+}
+
+function wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function resolveWithNodeRetry(client, options, retries = 1) {
+    const poru = client?.poru;
+    if (!poru) throw new Error('Poru is not initialized.');
+
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        if (!hasConnectedPoruNode(poru)) {
+            try { poru.init(client); } catch {}
+            if (attempt < retries) await wait(1200);
+        }
+
+        try {
+            return await poru.resolve(options);
+        } catch (err) {
+            const message = err?.message || String(err || '');
+            const noNodes = /no nodes are available/i.test(message);
+            if (!noNodes || attempt >= retries) throw err;
+            try { poru.init(client); } catch {}
+            await wait(1200);
+        }
+    }
+
+    return poru.resolve(options);
+}
+
 function isMemberDeafened(member) {
     const voice = member?.voice;
     return !!(voice?.deaf || voice?.selfDeaf || voice?.serverDeaf);
@@ -1254,17 +1286,21 @@ async function resolveSmartTracks(poru, query, source, limit = 20, options = {})
         return dedupeTracks(result?.tracks || []).slice(0, limit);
     }
 
-    const variants = buildSearchVariants(query);
+    const variants = Array.isArray(options.variants) && options.variants.length
+        ? [...new Set(options.variants.filter(Boolean))]
+        : buildSearchVariants(query);
     const sources = source === 'auto'
         ? ['ytmsearch', 'ytsearch', 'scsearch', 'spsearch', 'amsearch', 'dzsearch']
         : [source || 'ytsearch'];
     const tracks = [];
+    const prefetchLimit = Math.max(limit, limit * Math.max(1, Number(options.prefetchMultiplier || 2)));
+    const perResolveLimit = Math.max(1, Math.min(8, Number(options.perResolveLimit || 8)));
 
     for (const searchSource of sources) {
         for (const variant of variants) {
-            if (tracks.length >= limit * 2) break;
+            if (tracks.length >= prefetchLimit) break;
             const result = await poru.resolve({ query: variant, source: searchSource }).catch(() => null);
-            if (result?.tracks?.length) tracks.push(...result.tracks.slice(0, 8));
+            if (result?.tracks?.length) tracks.push(...result.tracks.slice(0, perResolveLimit));
         }
     }
 
@@ -1510,25 +1546,39 @@ function filterArtistTracks(tracks, currentTrack, limit, artistName = '', option
     const currentId = currentTrack?.info?.uri || currentTrack?.info?.identifier;
     const unique = dedupeTracks(tracks)
         .filter(t => (t.info.uri || t.info.identifier) !== currentId);
-    const artistPool = artistName ? unique.filter(t => trackMatchesArtist(t, artistName)) : unique;
-    const pool = artistPool.length ? artistPool : unique;
+    const seenSongs = new Set();
+    const uniqueSongs = [];
+    for (const track of unique) {
+        const key = autoPlayDuplicateKey(track);
+        if (key && seenSongs.has(key)) continue;
+        if (key) seenSongs.add(key);
+        uniqueSongs.push(track);
+    }
+    const artistPool = artistName ? uniqueSongs.filter(t => trackMatchesArtist(t, artistName)) : uniqueSongs;
+    const pool = artistPool.length ? artistPool : uniqueSongs;
     const history = options.historySet instanceof Set ? options.historySet : null;
     const withoutSameSong = pool.filter(t => !isNearSameTrackTitle(t, currentTrack));
     const withoutHistory = history
         ? withoutSameSong.filter(t => !history.has(autoPlayDuplicateKey(t)))
         : withoutSameSong;
 
-    return withoutHistory.slice(0, limit);
+    return shuffleTracks(withoutHistory).slice(0, limit);
 }
 
 function buildArtistCatalogQueries(artistName) {
     const artist = trimArtistCandidate(artistName);
     return [
-        artist,
         `${artist} songs`,
-        `${artist} top songs`,
-        `${artist} hits`,
+        artist,
     ].filter(Boolean);
+}
+
+function artistSearchSources(source) {
+    const primary = source === 'auto' ? 'ytmsearch' : (source || 'ytsearch');
+    const preferred = source === 'auto'
+        ? ['ytmsearch', 'spsearch', 'scsearch', 'ytsearch']
+        : [primary, 'ytmsearch', 'spsearch', 'scsearch', 'ytsearch'];
+    return [...new Set(preferred.filter(Boolean))];
 }
 
 function randomTrack(tracks) {
@@ -1536,16 +1586,43 @@ function randomTrack(tracks) {
     return tracks[Math.floor(Math.random() * tracks.length)] || null;
 }
 
-function pickAutoPlayTrack(player, tracks, currentTrack, artistName) {
-    const history = autoPlayHistorySet(player);
-    const candidates = filterArtistTracks(
-        tracks,
-        currentTrack,
-        Math.max(1, tracks.length),
-        artistName,
-        { historySet: history },
-    );
-    return randomTrack(candidates);
+function shuffleTracks(tracks = []) {
+    const copy = [...tracks];
+    for (let i = copy.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+}
+
+async function resolveQuickAutoPlayTrack(poru, artistQuery, source, currentTrack, player) {
+    const artistName = typeof artistQuery === 'string' ? artistQuery : artistQuery?.primary;
+    const fallbackName = typeof artistQuery === 'object' ? artistQuery.fallback : '';
+    if (!artistName) return null;
+
+    const historySet = autoPlayHistorySet(player);
+    const sourceOrder = artistSearchSources(source);
+
+    const names = [artistName];
+    if (fallbackName && normalizeSearchText(fallbackName) !== normalizeSearchText(artistName)) {
+        names.push(fallbackName);
+    }
+
+    for (const name of names) {
+        for (const searchSource of sourceOrder) {
+            const query = `${trimArtistCandidate(name)} songs`;
+            const tracks = await resolveSmartTracks(poru, query, searchSource, 6, {
+                variants: [query],
+                prefetchMultiplier: 1,
+                perResolveLimit: 6,
+            }).catch(() => []);
+            const candidates = filterArtistTracks(tracks, currentTrack, 6, name, { historySet });
+            const picked = randomTrack(candidates);
+            if (picked) return picked;
+        }
+    }
+
+    return null;
 }
 
 async function resolveCachedArtistQuery(poru, query, source, limit) {
@@ -1553,7 +1630,18 @@ async function resolveCachedArtistQuery(poru, query, source, limit) {
     let tracks = getCachedArtistTracks(key);
 
     if (!tracks) {
-        tracks = await resolveSmartTracks(poru, query, source || 'auto', Math.max(12, limit * 2));
+        tracks = [];
+        const sources = artistSearchSources(source);
+        const perSourceLimit = Math.max(2, Math.min(4, Math.ceil(limit / Math.min(3, sources.length)) + 1));
+        for (const artistSource of sources) {
+            const found = await resolveSmartTracks(poru, query, artistSource, perSourceLimit, {
+                variants: [query],
+                prefetchMultiplier: 1,
+                perResolveLimit: perSourceLimit,
+            }).catch(() => []);
+            tracks.push(...found);
+            if (tracks.length >= limit) break;
+        }
         setCachedArtistTracks(key, tracks);
     }
 
@@ -1563,12 +1651,12 @@ async function resolveCachedArtistQuery(poru, query, source, limit) {
 async function resolveArtistCatalogTracks(poru, artistName, source, limit) {
     const queries = buildArtistCatalogQueries(artistName);
     const tracks = [];
-    const perQueryLimit = Math.max(8, Math.ceil(limit / Math.max(1, queries.length)) + 4);
+    const perQueryLimit = Math.max(1, Math.min(8, limit));
 
     for (const query of queries) {
         const found = await resolveCachedArtistQuery(poru, query, source, perQueryLimit).catch(() => []);
         tracks.push(...found);
-        if (tracks.length >= limit * 2) break;
+        if (tracks.length >= limit) break;
     }
 
     return dedupeTracks(tracks);
@@ -1579,7 +1667,7 @@ async function resolveArtistTracks(poru, artistQuery, source, currentTrack, limi
     const fallbackName = typeof artistQuery === 'object' ? artistQuery.fallback : '';
     if (!artistName) return [];
 
-    const tracks = await resolveArtistCatalogTracks(poru, artistName, source || 'auto', Math.max(16, limit * 4));
+    const tracks = await resolveArtistCatalogTracks(poru, artistName, source || 'auto', Math.max(6, limit + 2));
     const primaryTracks = filterArtistTracks(tracks, currentTrack, limit, artistName);
     const needsFallback = fallbackName
         && normalizeSearchText(fallbackName) !== normalizeSearchText(artistName)
@@ -1588,7 +1676,7 @@ async function resolveArtistTracks(poru, artistQuery, source, currentTrack, limi
     if (!needsFallback) return primaryTracks;
 
     const fallbackTracks = filterArtistTracks(
-        await resolveArtistCatalogTracks(poru, fallbackName, source || 'auto', Math.max(12, limit * 3)),
+        await resolveArtistCatalogTracks(poru, fallbackName, source || 'auto', Math.max(6, limit + 2)),
         currentTrack,
         limit,
         fallbackName,
@@ -1911,6 +1999,15 @@ module.exports = {
         // Was a separate 20s timer per bot — now runs inside the 15s guard loop,
         // saving one timer object per bot (100 bots = 100 fewer timers).
         const playbackWatchdog = { clear: () => {} }; // stub so clearInterval(playbackWatchdog) stays safe
+        let lastPoruInitAt = 0;
+        function requestPoruInit(reason, cooldownMs = 30_000) {
+            const now = Date.now();
+            if (now - lastPoruInitAt < cooldownMs) return false;
+            lastPoruInitAt = now;
+            console.warn(`[Poru] ${reason} — re-init`);
+            try { TrueMusic.poru.init(TrueMusic); } catch {}
+            return true;
+        }
 
         TrueMusic.poru.on('nodeConnect', (node) => {
             const name = node.options.name || node.options.host;
@@ -2017,8 +2114,7 @@ module.exports = {
             const allOffline = TrueMusic.poru?.nodes?.size > 0 &&
                 [...(TrueMusic.poru.nodes?.values() || [])].every(n => !n.isConnected);
             if (allOffline) {
-                console.log('[Poru] Shard resumed — forcing Lavalink re-init');
-                try { TrueMusic.poru.init(TrueMusic); } catch {}
+                requestPoruInit('Shard resumed with all nodes offline', 15_000);
             } else {
                 // Nodes are connected — recover any stalled players
                 TrueMusic.poru?.nodes?.forEach?.((node) => {
@@ -2038,48 +2134,52 @@ module.exports = {
                 player.skip?.().catch(() => {});
             });
 
-            // ── Lavalink REST health monitor ──────────────────────────────────────
-            // Poru may report isConnected=true on a stale WebSocket. This check
-            // pings the Lavalink REST endpoint every 90s and forces a reconnect if
-            // the node is unresponsive. Catches cases where Lavalink restarts
-            // without closing the WebSocket cleanly.
-            setInterval(async () => {
-                if (!TrueMusic.readyAt) return;
-                const nodes = [...(TrueMusic.poru?.nodes?.values() || [])];
-                if (!nodes.length) return;
+            // ── Optional Lavalink REST health monitor ─────────────────────────────
+            // Disabled by default for large bot fleets. A REST probe per bot can
+            // overload Lavalink/Railway networking and a transient fetch failure
+            // should not disconnect an otherwise connected Poru node.
+            if (process.env.PORU_REST_HEALTH_MONITOR === '1') {
+                const nodeRestFailures = new Map();
+                setInterval(async () => {
+                    if (!TrueMusic.readyAt) return;
+                    const nodes = [...(TrueMusic.poru?.nodes?.values() || [])];
+                    if (!nodes.length) return;
 
-                // ── If ALL nodes are offline (e.g. Lavalink server restarted), force a full re-init ──
-                const allOffline = nodes.every(n => !n.isConnected);
-                if (allOffline) {
-                    console.warn('[PoruHealth] All nodes offline — forcing full re-init');
-                    try { TrueMusic.poru.init(TrueMusic); } catch {}
-                    return;
-                }
+                    const allOffline = nodes.every(n => !n.isConnected);
+                    if (allOffline) {
+                        requestPoruInit('REST monitor found all nodes offline', 30_000);
+                        return;
+                    }
 
-                for (const node of nodes) {
-                    const name = node.options?.name || node.options?.host;
-                    // ── Offline node: try to reconnect directly ──
-                    if (!node.isConnected) {
-                        console.warn(`[PoruHealth] Node ${name} disconnected — attempting reconnect`);
-                        try { node.connect?.(); } catch {}
-                        continue;
+                    for (const node of nodes) {
+                        const name = node.options?.name || node.options?.host;
+                        if (!node.isConnected) {
+                            console.warn(`[PoruHealth] Node ${name} disconnected — attempting reconnect`);
+                            try { node.connect?.(); } catch {}
+                            continue;
+                        }
+
+                        try {
+                            const proto = node.options?.secure ? 'https' : 'http';
+                            const url = `${proto}://${node.options.host}:${node.options.port}/version`;
+                            const res = await fetch(url, {
+                                headers: { Authorization: node.options.password },
+                                signal: AbortSignal.timeout(6000),
+                            });
+                            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                            nodeRestFailures.delete(name);
+                        } catch (e) {
+                            const failures = (nodeRestFailures.get(name) || 0) + 1;
+                            nodeRestFailures.set(name, failures);
+                            console.warn(`[PoruHealth] Node ${name} REST unresponsive: ${e.message} (${failures}/3) — keeping node connected`);
+                            if (failures >= 3 && !TrueMusic.poru.players.size) {
+                                nodeRestFailures.set(name, 0);
+                                requestPoruInit(`REST monitor repeated failures for ${name}`, 60_000);
+                            }
+                        }
                     }
-                    // ── Connected node: REST health ping ──
-                    try {
-                        const proto = node.options?.secure ? 'https' : 'http';
-                        const url = `${proto}://${node.options.host}:${node.options.port}/version`;
-                        const res = await fetch(url, {
-                            headers: { Authorization: node.options.password },
-                            signal: AbortSignal.timeout(6000),
-                        });
-                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                    } catch (e) {
-                        console.warn(`[PoruHealth] Node ${name} REST unresponsive: ${e.message} — forcing reconnect`);
-                        try { node.disconnect?.(); } catch {}
-                        setTimeout(() => { try { node.connect?.(); } catch {} }, 4000);
-                    }
-                }
-            }, 90_000);
+                }, 180_000);
+            }
             // ─────────────────────────────────────────────────────────────────────
 
             let int = setInterval(async () => {
@@ -2112,8 +2212,7 @@ module.exports = {
                     const allNodesOffline = TrueMusic.poru?.nodes?.size > 0 &&
                         [...(TrueMusic.poru.nodes?.values() || [])].every(n => !n.isConnected);
                     if (allNodesOffline) {
-                        console.warn('[Poru] All nodes offline — forcing re-init');
-                        try { TrueMusic.poru.init(TrueMusic); } catch {}
+                        requestPoruInit('All nodes offline', 30_000);
                     }
 
                     let guild = TrueMusic.guilds.cache.get(tokenObj.Server);
@@ -2598,13 +2697,7 @@ module.exports = {
       }
 
       const source = displaySettings(tokenObj2).platform || 'auto';
-      let artistTracks = await resolveArtistTracks(TrueMusic.poru, artistQuery, source, currentTrack, 25);
-      let nextTrack = pickAutoPlayTrack(player, artistTracks, currentTrack, artistName);
-
-      if (!nextTrack && source !== 'auto') {
-        artistTracks = await resolveArtistTracks(TrueMusic.poru, artistQuery, 'auto', currentTrack, 25);
-        nextTrack = pickAutoPlayTrack(player, artistTracks, currentTrack, artistName);
-      }
+      const nextTrack = await resolveQuickAutoPlayTrack(TrueMusic.poru, artistQuery, source, currentTrack, player);
 
       if (!nextTrack) {
         await finalizePlayerUi(player);
@@ -2871,7 +2964,7 @@ module.exports = {
 
                 try {
                     const source = displaySettings(tokenObj2).platform;
-                    const artistTracks = await resolveArtistTracks(TrueMusic.poru, artistQuery, source || 'auto', track, 5);
+                    const artistTracks = await resolveArtistTracks(TrueMusic.poru, artistQuery, source || 'auto', track, 6);
             player.data.ui.artistTracks = artistTracks;
             if (player.data.nowPlayingMessage?.id === msg.id && player.currentTrack === track) {
                 const payload = buildNowPlayingV2Payload(TrueMusic, tokenObj2, player, { author: requester }, {
@@ -3048,10 +3141,10 @@ module.exports = {
 
                         try {
                                     const searchSource = displaySettings(tokenObj).platform;
-                            let res = await TrueMusic.poru.resolve({
+                            let res = await resolveWithNodeRetry(TrueMusic, {
                                 query: song,
                                 ...(isProbablyUrl(song) ? {} : { source: searchSource }),
-                            });
+                            }, 1);
                             if ((!res || !res.tracks || res.tracks.length === 0) && !isProbablyUrl(song)) {
                                 const fallbackTracks = await resolveSmartTracks(TrueMusic.poru, song, 'auto', 10);
                                 if (fallbackTracks.length) res = { loadType: 'search', tracks: fallbackTracks };
