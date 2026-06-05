@@ -1083,7 +1083,10 @@ async function handleAdminProfile(interaction) {
   if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
 
   const profile = subBotProfile();
-  const stock = (store.get('bots') || []).length;
+  const allBots = store.get('bots') || [];
+  const activeSubs = new Set((store.get('tokens') || []).map(t => t.token));
+  const freeStock = allBots.filter(b => !activeSubs.has(b.token)).length;
+  const inSubs    = allBots.length - freeStock;
 
   const profileEmbed = new EmbedBuilder()
     .setColor(getEmbedColor(interaction.client))
@@ -1091,7 +1094,7 @@ async function handleAdminProfile(interaction) {
     .setDescription([
       '> إعدادات البوتات الفرعية — تُطبَّق تلقائياً عند إضافة أي توكن جديد.',
       '',
-      `**🏷️ Prefix :** *\`${profile.prefix}\`  — البادئة قبل الأرقام العشوائية في الاسم*`,
+      `**🏷️ Prefix :** *\`${profile.prefix}\` — البادئة قبل الأرقام العشوائية في الاسم*`,
       '',
       `**🖼️ Avatar :** *${profile.avatar ? `[رابط محفوظ](${profile.avatar})` : '`غير محدد`'}*`,
       '',
@@ -1099,7 +1102,8 @@ async function handleAdminProfile(interaction) {
       '',
       `**🎙️ Streaming :** *\`${profile.status || 'غير محدد'}\`*`,
       '',
-      `**📦 في الستوك :** *\`${stock}\` بوت — زر Apply يطبق الإعدادات عليهم جميعاً*`,
+      `**📦 الستوك الحر :** *\`${freeStock}\` بوت — Apply يطبق عليهم فقط*`,
+      `**🔗 في اشتراكات :** *\`${inSubs}\` بوت — لا تتأثر بـ Apply*`,
     ].join('\n'))
     .setFooter({ text: `${interaction.client.user.username} | Sub-Bot Profile`, iconURL: interaction.client.user.displayAvatarURL({ dynamic: true }) });
 
@@ -1202,22 +1206,29 @@ async function handleProfileAction(interaction, action) {
   }
 
   if (action === 'applyall') {
-    const bots = store.get('bots') || [];
-    if (bots.length === 0) return interaction.reply({ content: '**Apply :** *لا توجد بوتات في الستوك.*', ephemeral: true });
-    await interaction.reply({ content: `**Apply :** *جاري تطبيق الإعدادات على \`${bots.length}\` بوت... قد يستغرق بعض الوقت.*`, ephemeral: true });
+    const allBots = store.get('bots') || [];
+    const activeSubs = new Set((store.get('tokens') || []).map(t => t.token));
+    const stockBots = allBots.filter(b => !activeSubs.has(b.token));
+
+    if (stockBots.length === 0) return interaction.reply({ content: '**Apply :** *لا توجد بوتات حرة في الستوك (كلهم في اشتراكات).*', ephemeral: true });
+
+    const secs = stockBots.length * 5;
+    const timeStr = `${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, '0')}`;
+    await interaction.reply({ content: `**Apply :** *جاري تطبيق الإعدادات على \`${stockBots.length}\` بوت حر في الستوك — الوقت المتوقع ~${timeStr} دقيقة.*`, ephemeral: true });
+
     const profile = subBotProfile();
     let done = 0;
     let failed = 0;
-    for (const bot of bots) {
+    for (const bot of stockBots) {
       try {
         await applyProfileToToken(bot.token, profile);
         done++;
-        await new Promise(r => setTimeout(r, 5000));
       } catch {
         failed++;
       }
+      await new Promise(r => setTimeout(r, 5000));
     }
-    return interaction.followUp({ content: `**Apply :** *تم ✅ \`${done}\` بوت | فشل ❌ \`${failed}\` بوت.*`, ephemeral: true }).catch(() => {});
+    return interaction.followUp({ content: `**Apply Done :** *تم ✅ \`${done}\` | فشل ❌ \`${failed}\` — البوتات اللي في اشتراكات لم تُمس.*`, ephemeral: true }).catch(() => {});
   }
 }
 
