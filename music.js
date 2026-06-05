@@ -1116,10 +1116,150 @@ async function bumpQueueVersion(player, reason = 'queue_changed', preserveMessag
     return data.queueVersion;
 }
 
+function wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function hasPlayerVoiceSession(player) {
+    const voice = player?.connection?.voice;
+    return !!(voice?.sessionId && voice?.token && voice?.endpoint);
+}
+
+function markPlayerNeedsVoiceRefresh(player, reason = 'idle') {
+    if (!player) return false;
+    const data = ensurePlayerData(player);
+    data.needsVoiceRefresh = true;
+    data.voiceRefreshReason = reason;
+    data.voiceRefreshMarkedAt = Date.now();
+    if (process.env.DEBUG_RECOVERY) {
+        console.log(`[VoiceRefresh] marked player ${player.guildId} for voice refresh: ${reason}`);
+    }
+    return true;
+}
+
+async function requestPlayerVoiceStateRefresh(player, reason = 'voice_refresh', forceToggle = false) {
+    if (!player?.voiceChannel || typeof player.connect !== 'function') return false;
+
+    const payload = (deaf = player.deaf ?? true) => ({
+        guildId: player.guildId,
+        voiceChannel: player.voiceChannel,
+        textChannel: player.textChannel,
+        deaf,
+        mute: player.mute ?? false,
+    });
+
+    try {
+        if (forceToggle) {
+            player.connect(payload(!(player.deaf ?? true)));
+            await wait(350);
+        }
+        player.connect(payload(player.deaf ?? true));
+        ensurePlayerData(player).lastVoiceStateRefreshRequest = { reason, at: Date.now(), forceToggle };
+        return true;
+    } catch (err) {
+        warnPlayerOnce(player, 'voice-state-refresh-failed', `[VoiceRefresh] gateway refresh failed for ${player.guildId}: ${err?.message || err}`);
+        return false;
+    }
+}
+
+async function refreshPlayerVoiceSession(player, reason = 'play') {
+    if (!player) return false;
+    const data = ensurePlayerData(player);
+    if (!player.node?.isConnected || !player.node?.rest) {
+        markPlayerNeedsVoiceRefresh(player, `${reason}:node_offline`);
+        return false;
+    }
+
+    if (!hasPlayerVoiceSession(player)) {
+        await requestPlayerVoiceStateRefresh(player, `${reason}:missing_voice`, false);
+        const deadline = Date.now() + 2500;
+        while (!hasPlayerVoiceSession(player) && Date.now() < deadline) {
+            await wait(250);
+        }
+    }
+
+    if (!hasPlayerVoiceSession(player)) {
+        markPlayerNeedsVoiceRefresh(player, `${reason}:missing_voice`);
+        warnPlayerOnce(player, 'voice-session-missing', `[VoiceRefresh] missing Discord voice session for ${player.guildId}; play will retry on next voice update`);
+        return false;
+    }
+
+    const applyVoice = async () => {
+        await player.node.rest.updatePlayer({
+            guildId: player.guildId,
+            data: {
+                voice: player.connection.voice,
+                paused: false,
+            },
+        });
+    };
+
+    try {
+        await applyVoice();
+    } catch (err) {
+        await requestPlayerVoiceStateRefresh(player, `${reason}:retry`, true);
+        await wait(750);
+        await applyVoice();
+    }
+
+    data.needsVoiceRefresh = false;
+    data.lastVoiceRefreshAt = Date.now();
+    data.lastVoiceRefreshReason = reason;
+    return true;
+}
+
+function scheduleSafePlayRetry(player, reason = 'voice_retry') {
+    if (!player?.queue?.length) return false;
+    const data = ensurePlayerData(player);
+    if (data.pendingVoicePlayRetry) return true;
+    const attempts = Number(data.voicePlayRetryAttempts || 0);
+    if (attempts >= 2) return false;
+
+    data.voicePlayRetryAttempts = attempts + 1;
+    data.pendingVoicePlayRetry = true;
+    const timer = setTimeout(() => {
+        data.pendingVoicePlayRetry = false;
+        safePlay(player).catch(err => {
+            warnPlayerOnce(player, 'voice-play-retry-failed', `[VoiceRefresh] retry play failed for ${player.guildId}: ${err?.message || err}`);
+        });
+    }, 1500);
+    timer.unref?.();
+    data.lastVoicePlayRetryReason = reason;
+    return true;
+}
+
 async function safePlay(player) {
     if (!player?.queue?.length) return false;
     if (player.isPlaying || player.isPaused) return false;
-    await player.play();
+    const data = ensurePlayerData(player);
+    const idleTooLong = !player.currentTrack
+        && !player.isPlaying
+        && data.lastIdleAt
+        && Date.now() - data.lastIdleAt >= IDLE_PLAYER_REFRESH_MS;
+    const isFreshConnection = data.createdAt && Date.now() - data.createdAt < 5000;
+    const missingEstablishedVoice = !hasPlayerVoiceSession(player) && !isFreshConnection;
+    if (data.needsVoiceRefresh || idleTooLong || missingEstablishedVoice) {
+        const refreshed = await refreshPlayerVoiceSession(player, 'safe_play');
+        if (!refreshed) return scheduleSafePlayRetry(player, 'voice_not_ready');
+    }
+    const queuedTrack = player.queue[0] || null;
+    try {
+        await player.play();
+    } catch (err) {
+        if (player.currentTrack && player.currentTrack === queuedTrack && typeof player.queue?.unshift === 'function') {
+            player.queue.unshift(player.currentTrack);
+        }
+        player.currentTrack = null;
+        player.isPlaying = false;
+        player.isPaused = false;
+        markPlayerNeedsVoiceRefresh(player, `play_error:${err?.message || 'unknown'}`);
+        if (scheduleSafePlayRetry(player, 'play_error')) return false;
+        throw err;
+    }
+    if (player.isPlaying) {
+        data.voicePlayRetryAttempts = 0;
+        data.pendingVoicePlayRetry = false;
+    }
     return true;
 }
 
@@ -1416,6 +1556,7 @@ async function resolveSmartTracks(poru, query, source, limit = 20, options = {})
 
 const PLAY_PROGRESS_WIDTH = 400;
 const STOP_RECONNECT_SUPPRESS_MS = Math.max(90_000, Number(process.env.MUSIC_STOP_RECONNECT_SUPPRESS_MS || 90_000));
+const IDLE_PLAYER_REFRESH_MS = Math.max(5 * 60_000, Number(process.env.MUSIC_IDLE_PLAYER_REFRESH_MS || 30 * 60_000));
 const GENERIC_LABEL_WORDS_PATTERN = /\b(?:records?|recordings?|label|music|musics|official|channel|productions?|producer|publisher|publishing|studios?|entertainment|media|network|group|company|distribution|distributor|digital|sound|audio|video|tv|vevo|youtube)\b|ري?كورد(?:ز)?|ميوزك|موسيقي|موسيقى|قناه|قناة|رسمي|رسميه|الرسمية|شركة|شركه|انتاج|الانتاج|للانتاج|للإنتاج|توزيع|ناشر|نشر|استوديو|ستوديو|ميديا|شبكه|شبكة|جروب|مجموعة|قروب|ساوند|صوت|تلفزيون|يوتيوب/i;
 const KNOWN_LABEL_NAMES = [
     'rotana', 'rotana music', 'rotana audio', 'rotana video', 'rotana records',
@@ -2091,7 +2232,9 @@ module.exports = {
                             player.setVoiceChannel(targetChannel.id, { deaf: true, mute: false });
                         } catch (err) {
                             if (!(err instanceof ReferenceError)) throw err;
+                            await requestPlayerVoiceStateRefresh(player, `${reason}:same_channel_refresh`, false);
                         }
+                        markPlayerNeedsVoiceRefresh(player, `${reason}:voice_channel_sync`);
                     }
                     return player;
                 }
@@ -2104,6 +2247,7 @@ module.exports = {
                     group: tokenObj.token,
                 });
                 ensurePlayerData(created);
+                created.data.createdAt = Date.now();
                 if (tokenObj.chat) rememberTextChannel(created, tokenObj.chat);
                 created.data.voiceEnsureReason = reason;
                 return created;
@@ -2115,9 +2259,71 @@ module.exports = {
             return task;
         }
 
+        async function getPlayablePlayer(guild, voiceChannelId, textChannelId, tokenObj, reason = 'play') {
+            if (!guild || !voiceChannelId) return null;
+            if (!TrueMusic.poru?.leastUsedNodes?.length) {
+                requestPoruInit(`${reason}: no connected Lavalink nodes`, 15_000);
+                return null;
+            }
+
+            const lockKey = `${guild.id}:${voiceChannelId}`;
+            if (playConnectionLocks.has(lockKey)) return playConnectionLocks.get(lockKey);
+
+            const task = (async () => {
+                let player = TrueMusic.poru.players.get(guild.id);
+                if (player) {
+                    ensurePlayerData(player);
+                    rememberTextChannel(player, textChannelId);
+
+                    if (!player.node?.isConnected && !player.currentTrack && !player.isPlaying) {
+                        const freshNode = TrueMusic.poru.leastUsedNodes?.[0];
+                        if (freshNode) {
+                            player.node = freshNode;
+                            markPlayerNeedsVoiceRefresh(player, `${reason}:node_reassigned`);
+                        }
+                    }
+
+                    const currentVoiceId = guild.members.me?.voice?.channelId;
+                    if (!player.isConnected || player.voiceChannel !== voiceChannelId || currentVoiceId !== voiceChannelId) {
+                        try {
+                            player.setVoiceChannel(voiceChannelId, { deaf: true, mute: false });
+                        } catch (err) {
+                            if (!(err instanceof ReferenceError)) throw err;
+                            await requestPlayerVoiceStateRefresh(player, `${reason}:same_channel_refresh`, false);
+                        }
+                        markPlayerNeedsVoiceRefresh(player, `${reason}:voice_channel_sync`);
+                    }
+
+                    return player;
+                }
+
+                const created = await TrueMusic.poru.createConnection({
+                    guildId: guild.id,
+                    voiceChannel: voiceChannelId,
+                    textChannel: textChannelId,
+                    deaf: true,
+                    autoPlay: false,
+                    group: tokenObj.token,
+                });
+                ensurePlayerData(created);
+                created.data.createdAt = Date.now();
+                rememberTextChannel(created, textChannelId);
+                setAutoPlayState(created, false);
+                return created;
+            })().finally(() => {
+                setTimeout(() => playConnectionLocks.delete(lockKey), 1500);
+            });
+
+            playConnectionLocks.set(lockKey, task);
+            return task;
+        }
+
         async function restartCurrentTrack(player, reason = 'recover') {
             if (!player?.currentTrack?.track || !player?.node?.rest) return false;
             ensurePlayerData(player);
+            if (player.data.needsVoiceRefresh || !hasPlayerVoiceSession(player)) {
+                await refreshPlayerVoiceSession(player, `restart:${reason}`);
+            }
             // Mark recovery so trackEnd(replaced) is suppressed and doesn't break UI
             player.data._recovering = true;
             player.data._recoveryTrackId = trackIdentity(player.currentTrack);
@@ -2181,12 +2387,11 @@ module.exports = {
 
                     if (!player.currentTrack) {
                         // Idle player: its Lavalink session no longer exists after
-                        // a reconnect. Destroy it now so the next play command
-                        // creates a fresh player instead of sending commands to
-                        // a ghost session that hangs.
+                        // a reconnect. Keep the Discord voice state in place and
+                        // refresh Lavalink voice data on the next play command.
                         if (process.env.DEBUG_RECOVERY)
-                            console.log(`[IdleCleanup] destroying stale idle player after ${reason} for guild ${player.guildId}`);
-                        try { player.destroy(); } catch {}
+                            console.log(`[IdleCleanup] marking stale idle player after ${reason} for guild ${player.guildId}`);
+                        markPlayerNeedsVoiceRefresh(player, `node_recovery:${reason}`);
                         return;
                     }
 
@@ -2492,11 +2697,10 @@ module.exports = {
 
 
                 // ── Idle player cleanup ──────────────────────────────────────────
-                // A Poru player that has no current track for >30 min has almost
-                // certainly lost its Lavalink session (session timeout is 3 min by
-                // default). Destroying it now ensures the next play command creates
-                // a fresh, healthy player instead of hanging on a ghost session.
-                const IDLE_PLAYER_TTL_MS = 30 * 60 * 1000;
+                // A Poru player that has no current track for a long time can lose
+                // its Lavalink session. Do not destroy it because that sends
+                // channel_id:null and makes the bot leave voice. Mark it so the next
+                // play command refreshes Lavalink internally before starting audio.
                 if (wdNodesOnline) {
                     TrueMusic.poru.players.forEach(player => {
                         ensurePlayerData(player);
@@ -2508,10 +2712,10 @@ module.exports = {
                             player.data.lastIdleAt = wdNow;
                             return;
                         }
-                        if (wdNow - player.data.lastIdleAt > IDLE_PLAYER_TTL_MS) {
+                        if (wdNow - player.data.lastIdleAt > IDLE_PLAYER_REFRESH_MS && !player.data.needsVoiceRefresh) {
                             if (process.env.DEBUG_RECOVERY)
-                                console.log(`[IdleCleanup] destroying stale idle player for guild ${player.guildId} (idle ${Math.floor((wdNow - player.data.lastIdleAt) / 60000)}min)`);
-                            try { player.destroy(); } catch {}
+                                console.log(`[IdleCleanup] marking stale idle player for guild ${player.guildId} (idle ${Math.floor((wdNow - player.data.lastIdleAt) / 60000)}min)`);
+                            markPlayerNeedsVoiceRefresh(player, 'idle_ttl');
                         }
                     });
                 }
@@ -3382,39 +3586,23 @@ module.exports = {
                             return message.reply(deafenedPlaybackPayload(tokenObj));
                         }
 
-                                        let player = TrueMusic.poru.players.get(message.guild.id);
-                                if (player) {
-                                    ensurePlayerData(player);
-                                    rememberTextChannel(player, message.channel.id);
-                                    if (!player.isConnected || player.voiceChannel !== message.member.voice.channel.id) {
-                                        try {
-                                            player.setVoiceChannel(message.member.voice.channel.id, { deaf: true, mute: false });
-                                        } catch (err) {
-                                            if (!(err instanceof ReferenceError)) throw err;
-                                        }
-                                    }
-                                }
+                                clearStopped();
                                 message.channel.sendTyping().catch(() => {});
 
+                                let player = await getPlayablePlayer(
+                                    message.guild,
+                                    message.member.voice.channel.id,
+                                    message.channel.id,
+                                    tokenObj,
+                                    'message_play',
+                                );
                                 if (!player) {
-                                    const lockKey = message.guild.id;
-                                    if (!playConnectionLocks.has(lockKey)) {
-                                        const task = TrueMusic.poru.createConnection({
-                                            guildId: message.guild.id,
-                                            voiceChannel: message.member.voice.channel.id,
-                                            textChannel: message.channel.id,
-                                            deaf: true,
-                                            autoPlay: false,
-                                            group: tokenObj.token,
-                                        }).finally(() => {
-                                            setTimeout(() => playConnectionLocks.delete(lockKey), 1500);
-                                        });
-                                        playConnectionLocks.set(lockKey, task);
-                                    }
-                                    player = await playConnectionLocks.get(lockKey);
-                                    ensurePlayerData(player);
-                                    rememberTextChannel(player, message.channel.id);
-                                    setAutoPlayState(player, false);
+                                    return message.reply(musicPayload(tokenObj, {
+                                        title: 'Voice Not Ready',
+                                        description: '*The music node is reconnecting. Try again in a moment.*',
+                                        thumbnail: 'attachment://Error.png',
+                                        files: ['./assets/image/icons/Error.png'],
+                                    }));
                                 }
 
                         try {
@@ -4261,18 +4449,20 @@ module.exports = {
                             }));
                         }
 
-                                let player = TrueMusic.poru.players.get(message.guild.id);
-                                if (player) rememberTextChannel(player, message.channel.id);
+                                clearStopped();
+                                let player = await getPlayablePlayer(
+                                    message.guild,
+                                    message.member.voice.channel.id,
+                                    message.channel.id,
+                                    tokenObj,
+                                    'search_select',
+                                );
                                 if (!player) {
-                                    player = await TrueMusic.poru.createConnection({
-                                        guildId: message.guild.id,
-                                        voiceChannel: message.member.voice.channel.id,
-                                        textChannel: message.channel.id,
-                                        deaf: true,
-                                        group: tokenObj.token,
-                                    });
-                                    ensurePlayerData(player);
-                                    rememberTextChannel(player, message.channel.id);
+                                    return sourceMessage.edit(musicPayload(tokenObj, {
+                                        title: 'Voice Not Ready',
+                                        description: '*The music node is reconnecting. Try again in a moment.*',
+                                        ...smartSearchThumbnail,
+                                    }));
                                 }
 
                                 const queuedTrack = { ...selectedTrack, info: { ...selectedTrack.info, requester: message.author } };
