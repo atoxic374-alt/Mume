@@ -163,6 +163,7 @@ async function checkAndReplaceTokens(mainClient) {
             const batch = tokensArray.slice(i, i + batchSize);
 
             await Promise.all(batch.map(async (entry) => {
+                if (entry?.paused) return;
                 const runningClient = runningBots?.get(entry.token);
                 if (runningClient?.isReady?.()) return;
 

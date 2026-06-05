@@ -8,6 +8,7 @@ const MAX_CONCURRENT = 5;
 const startQueue = [];
 
 async function tryStart(botData) {
+  if (botData?.paused) return;
   if (runningBots.has(botData.token)) return; // already running
   if (starting >= MAX_CONCURRENT) {
     startQueue.push(botData); // queue for later
@@ -28,6 +29,7 @@ async function tryStart(botData) {
 async function checkForNewBots() {
   const tokens = store.get('tokens') || [];
   for (const botData of tokens) {
+    if (botData?.paused) continue;
     const inst = runningBots.get(botData.token);
     if (!inst || !inst.isReady()) {
       tryStart(botData); // non-blocking

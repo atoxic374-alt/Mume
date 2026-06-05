@@ -13,6 +13,9 @@ const {
     GatewayIntentBits,
     Collection,
     EmbedBuilder,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
     Options
 } = require('discord.js');
 
@@ -28,6 +31,7 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildVoiceStates,
         GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.DirectMessages,
         GatewayIntentBits.MessageContent,
     ],
     partials: ['CHANNEL', 'MESSAGE', 'USER', 'GUILD_MEMBER'],
@@ -56,6 +60,12 @@ module.exports = client;
 
 client.commands = new Collection();
 require("./handler/index.js")(client);
+try {
+    const automatic = require('./commands/Auto-Purchase/automatic');
+    automatic.installAutomaticHandlers?.(client);
+} catch (err) {
+    console.log('[Automatic] failed to install handlers:', err?.message || err);
+}
 require('./music.js');
 require('./manager.js');
 
@@ -136,24 +146,76 @@ client.once('clientReady', () => {
     const { checkAndReplaceTokens } = require('./tokenHealthChecker');
     setTimeout(() => checkAndReplaceTokens(client), 15000);
     setInterval(() => checkAndReplaceTokens(client), 30 * 60 * 1000);
-    setInterval(checkSubscriptions, 30000);
+    setInterval(() => checkSubscriptions().catch(error => console.error('[subscriptions]', error)), 30000);
     });
     
-    function checkSubscriptions() {
+    async function checkSubscriptions() {
       const logsArray = store.get('time') || [];
+      const readAutomaticSettings = () => {
+        try {
+          const file = './settings/automatic.json';
+          if (!fs.existsSync(file)) return {};
+          return JSON.parse(fs.readFileSync(file, 'utf8')) || {};
+        } catch {
+          return {};
+        }
+      };
+      const automaticSettings = readAutomaticSettings();
+      const automaticLink = automaticSettings.panelUrl
+        || (automaticSettings.panelGuildId && automaticSettings.panelChannelId && automaticSettings.panelMessageId
+          ? `https://discord.com/channels/${automaticSettings.panelGuildId}/${automaticSettings.panelChannelId}/${automaticSettings.panelMessageId}`
+          : null);
     
       const logChannel = client.channels.cache.find(channel => channel.id === logChannelId);
     
-      logsArray.forEach((log, index) => {
+      for (let index = logsArray.length - 1; index >= 0; index--) {
+        const log = logsArray[index];
+        if (log.pausedAt) continue;
         const remainingTime = log.expirationTime - Date.now();
+        let fetchedUser = null;
+        const getUser = async () => {
+          if (fetchedUser) return fetchedUser;
+          fetchedUser = client.users.cache.get(log.user) || await client.users.fetch(log.user).catch(() => null);
+          return fetchedUser;
+        };
+
+        if (remainingTime > 0 && remainingTime <= 3 * 24 * 60 * 60 * 1000 && !log.threeDayNoticeSentAt) {
+          const user = await getUser();
+          if (user) {
+            const noticeEmbed = new EmbedBuilder()
+              .setTitle('Subscription Expiry Notice')
+              .setDescription([
+                `**Subscription :** *\`${log.code}\`*`,
+                '',
+                `**Bot Count :** *\`${log.botsCount}\` بوت داخل الاشتراك*`,
+                '',
+                `**Expires :** *<t:${Math.floor(log.expirationTime / 1000)}:R>*`,
+                '',
+                automaticLink
+                  ? '**Renewal :** *افتح لوحة الأوتوماتك واضغط زر Renew.*'
+                  : '**Renewal :** *افتح روم الأوتوماتك واضغط زر Renew.*',
+              ].join('\n'))
+              .setColor(getEmbedColor(client));
+            const components = automaticLink
+              ? [new ActionRowBuilder().addComponents(
+                  new ButtonBuilder()
+                    .setLabel('Open Renewal Panel')
+                    .setStyle(ButtonStyle.Link)
+                    .setURL(automaticLink),
+                )]
+              : [];
+            user.send({ embeds: [noticeEmbed], components }).catch(() => {});
+            log.threeDayNoticeSentAt = Date.now();
+          }
+        }
         if (remainingTime <= 0) {
-          const user = client.users.cache.get(log.user);
+          const user = await getUser();
           
           if (user) {
             const userembed = new EmbedBuilder()
-            .setTitle("إشعار انتهى اشتراك! 🔔")
+            .setTitle("Subscription Expired")
             .setThumbnail("https://cdn.discordapp.com/attachments/1091536665912299530/1316233635464220803/512-512-max.png?ex=675a4d99&is=6758fc19&hm=352d005827ec0252e09be31a939f3c2f1abb3c8a0d660f20012ac80a2bc62b12&")
-            .setDescription(`> الإسم : <@${user.id}>\n> ألاشتراك : \`Music x${log.botsCount}\` \`(SuID ${log.code})\`\n> بدأ فيـ : \`${new Date(log.expirationTime).toLocaleString()}\``)
+            .setDescription(`**User :** *<@${user.id}>*\n\n**Subscription :** *\`Music x${log.botsCount}\` \`SuID ${log.code}\`*\n\n**Ended At :** *\`${new Date(log.expirationTime).toLocaleString()}\`*`)
             .setColor(getEmbedColor(client));
             
                user.send({ content: `> <@${user.id}>`, embeds: [userembed] })
@@ -161,12 +223,12 @@ client.once('clientReady', () => {
                   
     
             const embed = new EmbedBuilder()
-            .setTitle("إشعار انتهى اشتراك! 🔔")
+            .setTitle("Subscription Expired")
             .setThumbnail("https://cdn.discordapp.com/attachments/1091536665912299530/1316233635464220803/512-512-max.png?ex=675a4d99&is=6758fc19&hm=352d005827ec0252e09be31a939f3c2f1abb3c8a0d660f20012ac80a2bc62b12&")
-            .setDescription(`> الإسم : <@${user.id}>\n> ألاشتراك : \`Music x${log.botsCount}\` \`(SuID ${log.code})\`\n> بدأ فيـ : \`${new Date(log.expirationTime).toLocaleString()}\``)
+            .setDescription(`**User :** *<@${user.id}>*\n\n**Subscription :** *\`Music x${log.botsCount}\` \`SuID ${log.code}\`*\n\n**Ended At :** *\`${new Date(log.expirationTime).toLocaleString()}\`*`)
             .setColor(getEmbedColor(client));
             
-            if (logChannel) logChannel.send({ content: "```العملية تمت بنجاح، وتم حذف أشتراك العميل.```", embeds: [embed] });
+            if (logChannel) logChannel.send({ content: "**Subscription :** *تم حذف اشتراك العميل بعد انتهاء المدة.*", embeds: [embed] });
              
           }
     
@@ -188,7 +250,7 @@ client.once('clientReady', () => {
           const updatedTokensArray = tokensArray.filter(tokenEntry => !tokensToRemove.includes(tokenEntry));
           store.set('tokens', updatedTokensArray);
         }
-      });
+      }
       store.set('time', logsArray);
     }
 

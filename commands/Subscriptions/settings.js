@@ -21,6 +21,12 @@ const { check } = require('../../utils/rateLimit');
 const MUSIC_EMOJIS = require('../../utils/musicEmojis');
 const { getEmbedColor, refreshEmbedColor } = require('../../utils/embedColor');
 
+const SETTINGS_PROCESS_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PROCESS_CONCURRENCY || 16));
+const SETTINGS_PROFILE_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PROFILE_CONCURRENCY || 4));
+const SETTINGS_DISTRIBUTION_BATCH_SIZE = Math.max(1, Number(process.env.SETTINGS_DISTRIBUTION_BATCH_SIZE || 12));
+const SETTINGS_PROGRESS_INTERVAL_MS = Math.max(750, Number(process.env.SETTINGS_PROGRESS_INTERVAL_MS || 1500));
+const SETTINGS_MAX_PROGRESS_LINES = Math.max(20, Number(process.env.SETTINGS_MAX_PROGRESS_LINES || 120));
+
 module.exports = {
     name: 'set',
     aliases: ['settings', 'إعدادات', 'اعدادات'],
@@ -296,6 +302,19 @@ module.exports = {
                             return new Promise(resolve => setTimeout(resolve, ms));
                         }
 
+                        async function runLimited(items, limit, worker) {
+                            const list = Array.isArray(items) ? items : [];
+                            const concurrency = Math.max(1, Math.min(Number(limit) || 1, list.length || 1));
+                            let cursor = 0;
+                            const workers = Array.from({ length: concurrency }, async () => {
+                                while (cursor < list.length) {
+                                    const index = cursor++;
+                                    await worker(list[index], index);
+                                }
+                            });
+                            await Promise.all(workers);
+                        }
+
                         async function waitForBotVoiceChannel(guild, bot, channelId, timeoutMs = 15000) {
                             const deadline = Date.now() + timeoutMs;
                             while (Date.now() < deadline) {
@@ -317,65 +336,146 @@ module.exports = {
                             all: 'كل المتاحين',
                         };
 
-                        function buildSimpleProgressBar(done, total, length = 18) {
-                            const safeTotal = Math.max(1, total);
-                            const filled = Math.round((done / safeTotal) * length);
-                            return `\`[${'█'.repeat(filled)}${'░'.repeat(Math.max(0, length - filled))}]\` **${done}/${total}**`;
+                        function formatShortDuration(msValue) {
+                            const value = Math.max(0, Number(msValue || 0));
+                            const h = Math.floor(value / 3600000);
+                            const m = Math.floor((value % 3600000) / 60000);
+                            const s = Math.floor((value % 60000) / 1000);
+                            if (h) return `${h}h ${m}m`;
+                            if (m) return `${m}m ${s}s`;
+                            return `${s}s`;
                         }
 
-                        function buildProcessEmbed(title, done, total, okCount, failCount, lines = []) {
+                        function progressStats(done, total, startedAt) {
+                            const elapsedMs = Math.max(1, Date.now() - Number(startedAt || Date.now()));
+                            const percent = total ? Math.min(100, Math.round((done / total) * 100)) : 100;
+                            const perSecond = done > 0 ? done / (elapsedMs / 1000) : 0;
+                            const left = Math.max(0, total - done);
+                            const etaMs = perSecond > 0 ? (left / perSecond) * 1000 : 0;
+                            return {
+                                percent,
+                                left,
+                                elapsed: formatShortDuration(elapsedMs),
+                                eta: done >= total ? '0s' : (perSecond > 0 ? formatShortDuration(etaMs) : 'calculating'),
+                                speed: perSecond > 0 ? `${perSecond.toFixed(perSecond >= 10 ? 1 : 2)}/s` : '0/s',
+                            };
+                        }
+
+                        function buildSimpleProgressBar(done, total, length = 20) {
+                            const safeTotal = Math.max(1, total);
+                            const percent = Math.min(100, Math.round((done / safeTotal) * 100));
+                            const filled = Math.round((done / safeTotal) * length);
+                            return `\`[${'█'.repeat(filled)}${'░'.repeat(Math.max(0, length - filled))}]\` **${percent}%**`;
+                        }
+
+                        function buildProcessEmbed(title, done, total, okCount, failCount, lines = [], meta = {}) {
+                            const stats = progressStats(done, total, meta.startedAt);
+                            const fields = [
+                                {
+                                    name: 'Progress',
+                                    value: [
+                                        buildSimpleProgressBar(done, total),
+                                        '',
+                                        `**1. Total :** *\`${total}\`*`,
+                                        `**2. Done :** *\`${done}\`*`,
+                                        `**3. Success :** *\`${okCount}\`*`,
+                                        `**4. Failed :** *\`${failCount}\`*`,
+                                        `**5. Left :** *\`${stats.left}\`*`,
+                                    ].join('\n'),
+                                    inline: true,
+                                },
+                                {
+                                    name: 'Timing',
+                                    value: [
+                                        `**1. Speed :** *\`${stats.speed}\`*`,
+                                        `**2. Elapsed :** *\`${stats.elapsed}\`*`,
+                                        `**3. ETA :** *\`${stats.eta}\`*`,
+                                        `**4. Concurrency :** *\`${meta.concurrency || SETTINGS_PROCESS_CONCURRENCY}\`*`,
+                                    ].join('\n'),
+                                    inline: true,
+                                },
+                            ];
+                            if (lines.length) {
+                                fields.push({
+                                    name: 'Live Log',
+                                    value: lines.slice(-8).join('\n').slice(0, 1024),
+                                    inline: false,
+                                });
+                            }
                             return new EmbedBuilder()
                                 .setTitle(title)
                                 .setDescription([
-                                    buildSimpleProgressBar(done, total),
-                                    `✅ **Done:** \`${okCount}\`  ❌ **Failed:** \`${failCount}\`  ⏳ **Left:** \`${Math.max(0, total - done)}\``,
+                                    `**Status :** *${done >= total ? 'Completed' : 'Running'}*`,
+                                    '',
+                                    `**Current :** *\`${done}\` من \`${total}\` عملية*`,
                                 ].join('\n'))
-                                .addFields(lines.length ? [{ name: 'Process', value: lines.slice(-10).join('\n'), inline: false }] : [])
+                                .addFields(fields)
                                 .setColor(getEmbedColor(client));
                         }
 
-                        async function runBotProcess(title, targetTokens, action) {
+                        async function runBotProcess(title, targetTokens, action, options = {}) {
                             const targets = targetTokens.filter(Boolean);
                             let done = 0;
                             let ok = 0;
                             let failed = 0;
                             const lines = [];
+                            const concurrency = Math.max(1, Number(options.concurrency || SETTINGS_PROCESS_CONCURRENCY));
+                            const startedAt = Date.now();
+                            let lastEditAt = 0;
+                            let editing = false;
+                            const progressMeta = { startedAt, concurrency };
+
+                            const pushLine = (line) => {
+                                lines.push(line);
+                                if (lines.length > SETTINGS_MAX_PROGRESS_LINES) {
+                                    lines.splice(0, lines.length - SETTINGS_MAX_PROGRESS_LINES);
+                                }
+                            };
+
+                            const renderProgress = async (force = false) => {
+                                const now = Date.now();
+                                if (!force && now - lastEditAt < SETTINGS_PROGRESS_INTERVAL_MS) return;
+                                if (editing) return;
+                                editing = true;
+                                lastEditAt = now;
+                                try {
+                                    await mainMsg.edit({
+                                        content: `<@${userId}>`,
+                                        embeds: [buildProcessEmbed(title, done, targets.length, ok, failed, lines, progressMeta)],
+                                        components: [],
+                                        allowedMentions: { users: [userId] },
+                                    }).catch(() => {});
+                                } finally {
+                                    editing = false;
+                                }
+                            };
 
                             await mainMsg.edit({
                                 content: `<@${userId}>`,
-                                embeds: [buildProcessEmbed(title, 0, targets.length, 0, 0, [])],
+                                embeds: [buildProcessEmbed(title, 0, targets.length, 0, 0, [], progressMeta)],
                                 components: [],
                                 allowedMentions: { users: [userId] },
                             }).catch(() => {});
 
-                            for (const t of targets) {
+                            await runLimited(targets, concurrency, async (t, index) => {
                                 const bot = runningBots.get(t.token);
                                 const mention = bot?.user?.id ? `<@${bot.user.id}>` : `\`${t.invalidBotName || 'Offline bot'}\``;
-                                lines.push(`⏳ ${mention} loading...`);
-                                await mainMsg.edit({
-                                    content: `<@${userId}>`,
-                                    embeds: [buildProcessEmbed(title, done, targets.length, ok, failed, lines)],
-                                    components: [],
-                                    allowedMentions: { users: [userId] },
-                                }).catch(() => {});
 
                                 try {
-                                    await action(t, bot);
+                                    await action(t, bot, index);
                                     ok++;
-                                    lines[lines.length - 1] = `✅ ${mention} done`;
+                                    pushLine(`✅ ${mention} done`);
                                 } catch (err) {
                                     failed++;
-                                    lines[lines.length - 1] = `❌ ${mention} ${String(err?.message || 'failed').slice(0, 80)}`;
+                                    pushLine(`❌ ${mention} ${String(err?.message || 'failed').slice(0, 80)}`);
                                 }
 
                                 done++;
-                                await mainMsg.edit({
-                                    content: `<@${userId}>`,
-                                    embeds: [buildProcessEmbed(title, done, targets.length, ok, failed, lines)],
-                                    components: [],
-                                    allowedMentions: { users: [userId] },
-                                }).catch(() => {});
-                            }
+                                await renderProgress(false);
+                            });
+
+                            while (editing) await wait(100);
+                            await renderProgress(true);
 
                             return { ok, failed, total: targets.length, lines };
                         }
@@ -474,8 +574,6 @@ module.exports = {
                                 });
                             }
 
-                            // ── helpers ────────────────────────────────────────────────
-                            const BAR_LEN = 20;
                             const scopeLabels = { idle: 'الخاملين', grouped: 'المتجمعين', all: 'الكل' };
                             const modeLabel = state.mode === 'names'
                                 ? (state.namesWithNumbers ? 'أسماء الرومات + أرقام' : 'أسماء الرومات')
@@ -483,26 +581,51 @@ module.exports = {
                                     ? (state.namePrefix ? `${state.namePrefix}1, ${state.namePrefix}2...` : '1, 2, 3...')
                                     : 'بدون تغيير أسماء';
 
-                            function buildProgressBar(done, total) {
-                                const pct = total === 0 ? 1 : done / total;
-                                const filled = Math.round(pct * BAR_LEN);
-                                return `\`[${'█'.repeat(filled)}${'░'.repeat(BAR_LEN - filled)}]\` **${done}/${total}**`;
-                            }
+                            const distributionStartedAt = Date.now();
 
                             function buildProgressEmbed(done, total, okCount, failCount, liveLog) {
-                                const pct = total === 0 ? 100 : Math.round((done / total) * 100);
+                                const stats = progressStats(done, total, distributionStartedAt);
                                 return buildDistributionEmbed(
-                                    `⚙️ Smart Distribution — ${pct}%`,
+                                    `Smart Distribution — ${stats.percent}%`,
                                     [
-                                        `**المنظم:** <@${interaction.user.id}>  •  **الوضع:** ${modeLabel}`,
-                                        `**النطاق:** ${scopeLabels[state.scope] || state.scope}  •  <#${state.firstChannelId}> → <#${state.lastChannelId}>`,
+                                        `**Status :** *${done >= total ? 'Completed' : 'Running'}*`,
                                         '',
-                                        buildProgressBar(done, total),
-                                        `✅ **نجح:** \`${okCount}\`　❌ **فشل:** \`${failCount}\`　⏳ **متبقي:** \`${total - done}\``,
+                                        `**Owner :** *<@${interaction.user.id}>*`,
+                                        '',
+                                        `**Mode :** *${modeLabel}*`,
+                                        '',
+                                        `**Scope :** *${scopeLabels[state.scope] || state.scope}*`,
+                                        '',
+                                        `**Rooms :** *<#${state.firstChannelId}> إلى <#${state.lastChannelId}>*`,
                                     ].join('\n'),
-                                    liveLog.length > 0
-                                        ? [{ name: '📋 آخر العمليات', value: liveLog.slice(-6).join('\n'), inline: false }]
-                                        : [],
+                                    [
+                                        {
+                                            name: 'Progress',
+                                            value: [
+                                                buildSimpleProgressBar(done, total),
+                                                '',
+                                                `**1. Total :** *\`${total}\`*`,
+                                                `**2. Done :** *\`${done}\`*`,
+                                                `**3. Success :** *\`${okCount}\`*`,
+                                                `**4. Failed :** *\`${failCount}\`*`,
+                                                `**5. Left :** *\`${stats.left}\`*`,
+                                            ].join('\n'),
+                                            inline: true,
+                                        },
+                                        {
+                                            name: 'Timing',
+                                            value: [
+                                                `**1. Speed :** *\`${stats.speed}\`*`,
+                                                `**2. Elapsed :** *\`${stats.elapsed}\`*`,
+                                                `**3. ETA :** *\`${stats.eta}\`*`,
+                                                `**4. Batch :** *\`${SETTINGS_DISTRIBUTION_BATCH_SIZE}\`*`,
+                                            ].join('\n'),
+                                            inline: true,
+                                        },
+                                        ...(liveLog.length > 0
+                                            ? [{ name: 'Live Log', value: liveLog.slice(-8).join('\n').slice(0, 1024), inline: false }]
+                                            : []),
+                                    ],
                                 );
                             }
 
@@ -525,11 +648,25 @@ module.exports = {
                             let nameRequired = 0;
                             const details = [];
                             const liveLog = [];
+                            let detailCount = 0;
+                            let lastDistributionEditAt = 0;
+
+                            const rememberDistributionLine = (line) => {
+                                detailCount++;
+                                details.push(line);
+                                if (details.length > SETTINGS_MAX_PROGRESS_LINES) {
+                                    details.splice(0, details.length - SETTINGS_MAX_PROGRESS_LINES);
+                                }
+                                liveLog.push(line);
+                                if (liveLog.length > 12) {
+                                    liveLog.splice(0, liveLog.length - 12);
+                                }
+                            };
 
                             try {
                                 const targetChannels = await getDistributionChannels(state.firstChannelId, state.lastChannelId);
 
-                                const BATCH_SIZE = 5;
+                                const BATCH_SIZE = SETTINGS_DISTRIBUTION_BATCH_SIZE;
                                 for (let batchStart = 0; batchStart < targets.length; batchStart += BATCH_SIZE) {
                                     const batch = targets.slice(batchStart, batchStart + BATCH_SIZE);
                                     const batchResults = await Promise.allSettled(batch.map(async (t, batchIdx) => {
@@ -599,22 +736,23 @@ module.exports = {
                                                 ? (nameResult.ok ? ` • 📝 \`${nameResult.actual}\`` : ` • 📝 ❌`)
                                                 : '';
                                             const line = `${joined ? '✅' : '❌'} **${idx + 1}.** <@${bot.user.id}> → <#${targetChannel.id}>${nameStr}`;
-                                            details.push(line);
-                                            liveLog.push(line);
+                                            rememberDistributionLine(line);
                                         } else {
                                             failed++;
                                             const errLine = `❌ **${done}.** ${res.reason?.message || 'unknown error'}`;
-                                            details.push(errLine);
-                                            liveLog.push(errLine);
+                                            rememberDistributionLine(errLine);
                                         }
                                     }
 
                                     // ── live update after each batch ────────────────
-                                    await mainMsg.edit({
-                                        content: '',
-                                        embeds: [buildProgressEmbed(done, targets.length, success, failed, liveLog)],
-                                        components: [],
-                                    }).catch(() => {});
+                                    if (Date.now() - lastDistributionEditAt >= SETTINGS_PROGRESS_INTERVAL_MS || done >= targets.length) {
+                                        lastDistributionEditAt = Date.now();
+                                        await mainMsg.edit({
+                                            content: '',
+                                            embeds: [buildProgressEmbed(done, targets.length, success, failed, liveLog)],
+                                            components: [],
+                                        }).catch(() => {});
+                                    }
                                 }
 
                                 store.set('tokens', tokens);
@@ -627,21 +765,26 @@ module.exports = {
                                 const resultEmbed = buildDistributionEmbed(
                                     failed === 0 ? '✅ Distribution Complete' : success === 0 ? '❌ Distribution Failed' : '⚠️ Distribution Done',
                                     [
-                                        `**المنظم:** <@${interaction.user.id}>`,
-                                        `**النطاق:** ${scopeLabels[state.scope] || state.scope}  •  **الوضع:** ${modeLabel}`,
-                                        `**الرومات:** <#${state.firstChannelId}> → <#${state.lastChannelId}>`,
+                                        `**Owner :** *<@${interaction.user.id}>*`,
                                         '',
-                                        buildProgressBar(targets.length, targets.length),
+                                        `**Scope :** *${scopeLabels[state.scope] || state.scope}*`,
+                                        '',
+                                        `**Mode :** *${modeLabel}*`,
+                                        '',
+                                        `**Rooms :** *<#${state.firstChannelId}> إلى <#${state.lastChannelId}>*`,
+                                        '',
+                                        buildSimpleProgressBar(targets.length, targets.length),
                                     ].join('\n'),
                                     [
-                                        { name: '🤖 البوتات', value: `✅ \`${success}\` نجح\n❌ \`${failed}\` فشل\n📊 \`${targets.length}\` إجمالي`, inline: true },
-                                        { name: '📝 الأسماء', value: nameField, inline: true },
+                                        { name: 'Bots', value: `**1. Success :** *\`${success}\`*\n**2. Failed :** *\`${failed}\`*\n**3. Total :** *\`${targets.length}\`*`, inline: true },
+                                        { name: 'Names', value: nameField, inline: true },
                                         { name: '\u200b', value: '\u200b', inline: true },
-                                        { name: '📋 التفاصيل', value: details.slice(0, 10).join('\n') || '—', inline: false },
+                                        { name: 'Timing', value: `**1. Elapsed :** *\`${formatShortDuration(Date.now() - distributionStartedAt)}\`*\n**2. Batch :** *\`${SETTINGS_DISTRIBUTION_BATCH_SIZE}\`*`, inline: true },
+                                        { name: 'Details', value: details.slice(0, 8).join('\n') || '—', inline: false },
                                     ],
                                 );
-                                if (details.length > 10) {
-                                    resultEmbed.addFields({ name: '➕ المزيد', value: `وـ **${details.length - 10}** بوت إضافي.`, inline: false });
+                                if (detailCount > 8) {
+                                    resultEmbed.addFields({ name: 'More', value: `**Extra :** *\`${detailCount - 8}\` بوت إضافي لم يتم عرضه داخل الإيمبد.*`, inline: false });
                                 }
 
                                 await mainMsg.edit({
@@ -1529,13 +1672,13 @@ module.exports = {
                         });
                         store.set('tokens', tokens);
                         if (!newVal) {
-                            await Promise.allSettled(selected.map(async t => {
+                            await runLimited(selected, SETTINGS_PROCESS_CONCURRENCY, async t => {
                                 const bot = runningBots.get(t.token);
                                 const channelId = bot?.guilds.cache.get(t.Server)?.members.me?.voice?.channelId;
                                 if (bot?.rest && channelId) {
-                                    await bot.rest.put(`/channels/${channelId}/voice-status`, { body: { status: null } });
+                                    await bot.rest.put(`/channels/${channelId}/voice-status`, { body: { status: null } }).catch(() => {});
                                 }
-                            }));
+                            });
                         }
                         return updatePanel(i);
                     }
@@ -1659,7 +1802,7 @@ module.exports = {
                     if (!bot?.user) throw new Error('bot offline');
                     await bot.user.setAvatar(url);
                     refreshEmbedColor(bot).catch(() => {});
-                });
+                }, { concurrency: SETTINGS_PROFILE_CONCURRENCY });
                 setTimeout(() => updatePanel(), 3000);
             }
 
@@ -1702,7 +1845,7 @@ module.exports = {
                                 await axios.patch('https://discord.com/api/v9/users/@me', { banner: data }, {
                                     headers: { Authorization: `Bot ${t.token}`, 'Content-Type': 'application/json' }
                                 });
-                            });
+                            }, { concurrency: SETTINGS_PROFILE_CONCURRENCY });
                         } catch (e) {
                             await mainMsg.edit({ content: `❌ فشل تحديث البانر: ${e.message}` });
                         }
@@ -1724,8 +1867,8 @@ module.exports = {
                             return info.inServer && !info.inRoom;
                         });
 
-                        await runBotProcess('Move Idle Bots', idleBots, async (t) => {
-                            const targetChannelId = channelIds[idleBots.indexOf(t) % channelIds.length];
+                        await runBotProcess('Move Idle Bots', idleBots, async (t, bot, index) => {
+                            const targetChannelId = channelIds[index % channelIds.length];
                             await moveTokenToVoice(t, targetChannelId);
                         });
 
@@ -1821,9 +1964,12 @@ module.exports = {
 
                     await i.update({ content: `⏳ جاري إعادة تشغيل **${targets.length}** بوت...`, embeds: [], components: [] });
 
-                    targets.forEach(t => {
+                    await runLimited(targets, SETTINGS_PROCESS_CONCURRENCY, async t => {
                         const bot = runningBots.get(t.token);
-                        if (bot) { bot.destroy().catch(() => {}); runningBots.delete(t.token); }
+                        if (bot) {
+                            await bot.destroy().catch(() => {});
+                            runningBots.delete(t.token);
+                        }
                     });
 
                     await mainMsg.edit({ content: `✅ تم إعادة تشغيل **${targets.length}** بوت. سيُعاد تشغيلها خلال 10 ثوانٍ.` });
@@ -1865,6 +2011,7 @@ module.exports = {
             let lpFilter = initFilter;   // 'all' | 'in_room' | 'idle' | 'outside' | 'offline'
 
             const PAGE_SIZE = 10;
+            const indexedBots = allBots.map((t, globalIdx) => ({ t, globalIdx }));
 
             // تسميات الفلاتر
             const FILTER_LABELS = {
@@ -1876,8 +2023,8 @@ module.exports = {
             };
 
             // فلترة البوتات حسب الاختيار
-            function applyFilter(bots, filter) {
-                return bots.filter((t, globalIdx) => {
+            function applyFilter(entries, filter) {
+                return entries.filter(({ t }) => {
                     const info = getBotVoiceInfo(t);
                     if (filter === 'all')     return true;
                     if (filter === 'in_room') return info.inRoom;
@@ -1961,8 +2108,7 @@ module.exports = {
 
             async function renderLinks(i = null) {
                 // أعد فلترة وحساب الصفحة في كل رسم
-                const filtered = applyFilter(allBots, lpFilter)
-                    .map((t) => ({ t, globalIdx: allBots.indexOf(t) }));
+                const filtered = applyFilter(indexedBots, lpFilter);
 
                 const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
                 // تصحيح الصفحة إذا خرجت عن الحدود

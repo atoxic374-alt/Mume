@@ -26,6 +26,7 @@ const {
 
 const fs = require('fs');
 const { Poru } = require('poru');
+const { Agent: UndiciAgent, request: undiciRequest } = require('undici');
 
 const { owners, TwitchUrl, statuses } = require(`${process.cwd()}/config`);
 const store = require('./utils/store');
@@ -41,6 +42,7 @@ const { buildProgressBarAttachment, normalizeColorNumber } = require('./utils/pr
 const runningBots = new Collection();
 const warnedMissingMusicEmojiIds = new Set();
 const botLastActivity = new Map();
+const lavalinkRestAgents = new Map();
 const tempData = new Collection();
 tempData.set("bots", []);
 const collection = new Collection();
@@ -1283,6 +1285,204 @@ function firePlayerAction(label, task) {
     }
 }
 
+const MUSIC_CONTROL_SYNC_TIMEOUT_MS = Math.max(200, Number(process.env.MUSIC_CONTROL_SYNC_TIMEOUT_MS || 650));
+const LAVALINK_FAST_REST_TIMEOUT_MS = Math.max(500, Number(process.env.LAVALINK_FAST_REST_TIMEOUT_MS || 1800));
+const LAVALINK_FAST_REST_ENABLED = process.env.LAVALINK_FAST_REST !== 'off';
+
+function playerVolumeValue(player) {
+    const value = Number(player?.volume);
+    return Number.isFinite(value) ? value : 100;
+}
+
+function clampPlayerVolume(volume) {
+    const value = Number(volume);
+    if (!Number.isFinite(value)) return 100;
+    return Math.max(0, Math.min(130, Math.round(value)));
+}
+
+function assertLavalinkRestOk(response, label = 'Lavalink request') {
+    if (!response) throw new Error(`${label} did not return a response`);
+    if (response.error || Number(response.status) >= 400) {
+        throw new Error(response.message || response.error || `${label} failed`);
+    }
+}
+
+function lavalinkRestOrigin(node) {
+    const origin = node?.rest?.url || node?.restURL;
+    if (origin) return String(origin).replace(/\/+$/, '');
+    const host = node?.options?.host;
+    const port = node?.options?.port;
+    if (!host || !port) return '';
+    return `http${node.secure ? 's' : ''}://${host}:${port}`;
+}
+
+function lavalinkRestAgent(origin) {
+    if (!origin) return undefined;
+    let agent = lavalinkRestAgents.get(origin);
+    if (!agent) {
+        agent = new UndiciAgent({
+            connections: Math.max(2, Number(process.env.LAVALINK_REST_CONNECTIONS || 8)),
+            pipelining: Math.max(1, Number(process.env.LAVALINK_REST_PIPELINING || 1)),
+            keepAliveTimeout: Math.max(10_000, Number(process.env.LAVALINK_REST_KEEPALIVE_MS || 60_000)),
+            keepAliveMaxTimeout: Math.max(10_000, Number(process.env.LAVALINK_REST_KEEPALIVE_MAX_MS || 120_000)),
+        });
+        lavalinkRestAgents.set(origin, agent);
+    }
+    return agent;
+}
+
+async function readUndiciBody(body) {
+    if (!body) return '';
+    if (typeof body.text === 'function') return body.text().catch(() => '');
+    if (typeof body.dump === 'function') {
+        await body.dump().catch(() => {});
+        return '';
+    }
+    return '';
+}
+
+async function drainUndiciBody(body) {
+    if (!body) return;
+    if (typeof body.dump === 'function') {
+        await body.dump().catch(() => {});
+        return;
+    }
+    if (typeof body.text === 'function') await body.text().catch(() => {});
+}
+
+function parseRestErrorText(text) {
+    if (!text) return '';
+    try {
+        const parsed = JSON.parse(text);
+        return parsed.message || parsed.error || text;
+    } catch {
+        return text;
+    }
+}
+
+async function fastUpdateLavalinkPlayer(player, data, label = 'Lavalink update') {
+    if (!LAVALINK_FAST_REST_ENABLED) throw new Error('fast rest disabled');
+    const node = player?.node;
+    const sessionId = node?.sessionId || node?.rest?.sessionId;
+    const origin = lavalinkRestOrigin(node);
+    const password = node?.password || node?.rest?.password;
+    if (!player?.guildId || !node?.isConnected || !sessionId || !origin || !password) {
+        throw new Error('fast rest unavailable');
+    }
+
+    const endpoint = `${origin}/v4/sessions/${sessionId}/players/${player.guildId}?noReplace=false`;
+    const response = await undiciRequest(endpoint, {
+        method: 'PATCH',
+        dispatcher: lavalinkRestAgent(origin),
+        headers: {
+            'content-type': 'application/json',
+            authorization: password,
+        },
+        body: JSON.stringify(data),
+        headersTimeout: LAVALINK_FAST_REST_TIMEOUT_MS,
+        bodyTimeout: LAVALINK_FAST_REST_TIMEOUT_MS,
+    });
+
+    if (response.statusCode >= 400) {
+        const text = await readUndiciBody(response.body);
+        throw new Error(parseRestErrorText(text) || `${label} failed with ${response.statusCode}`);
+    }
+
+    await drainUndiciBody(response.body);
+    return { status: response.statusCode, ok: true };
+}
+
+async function updateLavalinkPlayer(player, data, label = 'Lavalink update') {
+    if (!player?.node?.rest) throw new Error('player is not connected');
+    try {
+        return await fastUpdateLavalinkPlayer(player, data, label);
+    } catch (err) {
+        if (process.env.DEBUG_FAST_REST) {
+            console.warn(`[FastRest] fallback for ${label}: ${err?.message || err}`);
+        }
+    }
+
+    const response = await player.node.rest.updatePlayer({
+        guildId: player.guildId,
+        data,
+    });
+    assertLavalinkRestOk(response, label);
+    return response;
+}
+
+function waitUntil(predicate, timeoutMs = 500, intervalMs = 25) {
+    return new Promise(resolve => {
+        const startedAt = Date.now();
+        const tick = () => {
+            if (predicate()) return resolve(true);
+            if (Date.now() - startedAt >= timeoutMs) return resolve(false);
+            setTimeout(tick, intervalMs);
+        };
+        tick();
+    });
+}
+
+async function setPlayerVolumeSynced(player, volume) {
+    const nextVolume = clampPlayerVolume(volume);
+    await updateLavalinkPlayer(player, { volume: nextVolume }, 'volume update');
+    player.volume = nextVolume;
+    await waitUntil(() => playerVolumeValue(player) === nextVolume, 250, 25);
+    return nextVolume;
+}
+
+function waitForPlaybackTransition(poru, player, previousTrack, timeoutMs = MUSIC_CONTROL_SYNC_TIMEOUT_MS) {
+    if (!poru || !player) return Promise.resolve(false);
+    const previousId = trackIdentity(previousTrack || player.currentTrack);
+
+    return new Promise(resolve => {
+        let settled = false;
+        let timer = null;
+        const samePlayer = target => target?.guildId === player.guildId;
+        const cleanup = (result) => {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            poru.off?.('trackStart', onTrackStart);
+            poru.off?.('queueEnd', onQueueEnd);
+            resolve(result);
+        };
+        const onTrackStart = (target, track) => {
+            if (!samePlayer(target)) return;
+            const nextId = trackIdentity(track);
+            if (!previousId || !nextId || nextId !== previousId) cleanup(true);
+        };
+        const onQueueEnd = (target) => {
+            if (samePlayer(target)) cleanup(true);
+        };
+
+        poru.on('trackStart', onTrackStart);
+        poru.on('queueEnd', onQueueEnd);
+        timer = setTimeout(() => cleanup(false), timeoutMs);
+
+        const currentId = trackIdentity(player.currentTrack);
+        if (!player.currentTrack || (previousId && currentId && currentId !== previousId)) cleanup(true);
+    });
+}
+
+async function skipPlayerSynced(poru, player, currentTrack) {
+    const transition = waitForPlaybackTransition(poru, player, currentTrack);
+    await updateLavalinkPlayer(player, { track: { encoded: null } }, 'skip update');
+    player.position = 0;
+    player.isPlaying = false;
+    await transition;
+    return true;
+}
+
+async function runSyncedControl(label, task) {
+    try {
+        await task();
+        return true;
+    } catch (err) {
+        console.warn(`[${label}] ${err?.message || err}`);
+        return false;
+    }
+}
+
 function finalUiOptionsFor(player, track, options = {}) {
     return {
         track,
@@ -1297,15 +1497,13 @@ async function stopPlayerAudio(player, options = {}) {
     const hadTrack = !!player.currentTrack;
     let stopRequest = Promise.resolve();
     if (player.currentTrack && player.node?.rest) {
-        stopRequest = player.node.rest.updatePlayer({
-            guildId: player.guildId,
-            data: { track: { encoded: null } },
-        }).catch(() => {});
+        stopRequest = updateLavalinkPlayer(player, { track: { encoded: null } }, 'stop update');
+        if (options.wait === false) stopRequest = stopRequest.catch(() => {});
     }
+    if (options.wait !== false) await stopRequest;
     player.currentTrack = null;
     player.isPlaying = false;
     player.isPaused = false;
-    if (options.wait !== false) await stopRequest;
     return hadTrack;
 }
 
@@ -1405,7 +1603,10 @@ function normalizeArabicSearch(value) {
 const SEARCH_STOP_WORDS = new Set([
     'official', 'audio', 'video', 'lyrics', 'lyric', 'remix', 'cover', 'live', 'hd', '4k',
     'music', 'song', 'track', 'visualizer', 'remastered', 'feat', 'ft', 'prod',
-    'اغنيه', 'اغنية', 'رسمي', 'الرسمية', 'كلمات', 'فيديو', 'صوتي', 'موسيقي',
+    'clip', 'mv', 'version', 'full', 'sped', 'slowed', 'nightcore', 'bassboost',
+    'اغنيه', 'اغنية', 'اغاني', 'أغنية', 'رسمي', 'الرسمية', 'كلمات', 'فيديو', 'كليب',
+    'صوتي', 'موسيقي', 'موسيقى', 'حصري', 'جديد', 'نسخه', 'نسخة', 'ريمكس', 'لايف',
+    'مسرع', 'بطيء', 'بطيئ', 'بدون', 'ايقاع', 'إيقاع',
 ]);
 
 function normalizeSearchText(value) {
@@ -1703,10 +1904,134 @@ function canonicalTrackTitle(title) {
     return searchTokens(cleaned).join(' ') || normalizeSearchText(cleaned);
 }
 
+const ARABIC_TO_LATIN_CHARS = {
+    ا: 'a', أ: 'a', إ: 'a', آ: 'a', ٱ: 'a',
+    ب: 'b', ت: 't', ث: 'th', ج: 'j', ح: 'h', خ: 'kh',
+    د: 'd', ذ: 'th', ر: 'r', ز: 'z', س: 's', ش: 'sh',
+    ص: 's', ض: 'd', ط: 't', ظ: 'z', ع: 'a', غ: 'gh',
+    ف: 'f', ق: 'q', ك: 'k', گ: 'g', ل: 'l', م: 'm',
+    ن: 'n', ه: 'h', ة: 'a', و: 'o', ي: 'i', ى: 'a',
+    ئ: 'i', ؤ: 'o', لا: 'la',
+};
+
+const ARABIZI_DIGITS = new Map([
+    ['2', 'a'],
+    ['3', 'a'],
+    ['4', 'sh'],
+    ['5', 'kh'],
+    ['6', 't'],
+    ['7', 'h'],
+    ['8', 'gh'],
+    ['9', 's'],
+]);
+
+const TITLE_SIGNAL_STOP_WORDS = new Set([
+    ...SEARCH_STOP_WORDS,
+    'the', 'a', 'an', 'and', 'or', 'to', 'of', 'in', 'on', 'for', 'from', 'by', 'me',
+    'my', 'you', 'your', 'i', 'we', 'us', 'يا', 'اي', 'أي', 'من', 'في', 'على', 'علي',
+    'عن', 'مع', 'انا', 'انت', 'انتي', 'هذا', 'هذه', 'هو', 'هي', 'كل', 'كان',
+]);
+
+function roughLatinizeArabic(value) {
+    return normalizeArabicSearch(value)
+        .replace(/لا/g, 'la')
+        .split('')
+        .map(ch => ARABIC_TO_LATIN_CHARS[ch] || ch)
+        .join('');
+}
+
+function normalizeCrossScriptText(value) {
+    return roughLatinizeArabic(value)
+        .toLowerCase()
+        .replace(/[23456789]/g, digit => ARABIZI_DIGITS.get(digit) || digit)
+        .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function latinSkeleton(value) {
+    return normalizeCrossScriptText(value)
+        .replace(/[aeiou]+/g, '')
+        .replace(/(.)\1+/g, '$1')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function titleSignalTokens(value) {
+    const direct = canonicalTrackTitle(value)
+        .split(' ')
+        .map(token => token.trim())
+        .filter(token => token.length > 1 && !TITLE_SIGNAL_STOP_WORDS.has(token));
+    const latin = normalizeCrossScriptText(canonicalTrackTitle(value))
+        .split(' ')
+        .map(token => token.trim())
+        .filter(token => token.length > 1 && !TITLE_SIGNAL_STOP_WORDS.has(token));
+    return [...new Set([...direct, ...latin])];
+}
+
+function distinctiveTitleTokens(value) {
+    return titleSignalTokens(value).filter(token => {
+        if (token.length >= 5) return true;
+        if (/[\u0600-\u06FF]/.test(token) && token.length >= 4) return true;
+        return latinSkeleton(token).length >= 4;
+    });
+}
+
+function trackTitleFingerprints(trackOrTitle) {
+    const rawTitle = typeof trackOrTitle === 'string'
+        ? trackOrTitle
+        : trackOrTitle?.info?.title;
+    const canonical = canonicalTrackTitle(rawTitle);
+    if (!canonical) return new Set();
+
+    const tokens = titleSignalTokens(canonical);
+    const sortedTokens = [...tokens].sort().join(' ');
+    const compact = tokens.join('');
+    const latin = normalizeCrossScriptText(canonical);
+    const latinSorted = latin.split(' ').filter(Boolean).sort().join(' ');
+    const skeleton = latinSkeleton(canonical);
+    const tokenSkeletons = tokens
+        .map(token => latinSkeleton(token))
+        .filter(token => token.length >= 3)
+        .sort()
+        .join(' ');
+
+    return new Set([
+        canonical,
+        sortedTokens,
+        compact,
+        latin,
+        latinSorted,
+        skeleton,
+        tokenSkeletons,
+    ].filter(value => value && value.length >= 3));
+}
+
+function sharesAnyFingerprint(a, b) {
+    if (!a?.size || !b?.size) return false;
+    for (const key of a) {
+        if (b.has(key)) return true;
+    }
+    return false;
+}
+
+function songDuplicateKey(track) {
+    const keys = [...trackTitleFingerprints(track)]
+        .filter(key => key.length >= 3)
+        .sort((a, b) => b.length - a.length);
+    return keys[0]
+        || normalizeSearchText(`${track?.info?.author || ''} ${track?.info?.title || ''}`)
+        || trackIdentity(track);
+}
+
 function isNearSameTrackTitle(track, currentTrack) {
     const currentTitle = currentTrack?.info?.title;
     const nextTitle = track?.info?.title;
     if (!currentTitle || !nextTitle) return false;
+
+    const currentFingerprints = trackTitleFingerprints(currentTitle);
+    const nextFingerprints = trackTitleFingerprints(nextTitle);
+    if (sharesAnyFingerprint(currentFingerprints, nextFingerprints)) return true;
 
     const currentCanonical = canonicalTrackTitle(currentTitle);
     const nextCanonical = canonicalTrackTitle(nextTitle);
@@ -1726,6 +2051,36 @@ function isNearSameTrackTitle(track, currentTrack) {
     const larger = Math.max(currentTokens.size, nextTokens.size);
     if (smaller === 1) return shared === 1 && larger <= 2;
     return shared / smaller >= 0.8 && shared / larger >= 0.55;
+}
+
+function leaksCurrentTitleSignal(track, currentTrack) {
+    const currentTitle = currentTrack?.info?.title;
+    const nextTitle = track?.info?.title;
+    if (!currentTitle || !nextTitle) return false;
+
+    const artistSignals = new Set(titleSignalTokens(trimArtistCandidate(currentTrack?.info?.author)).flatMap(token => ([
+        normalizeSearchText(token),
+        normalizeCrossScriptText(token),
+        latinSkeleton(token),
+    ])));
+    const currentDistinctive = distinctiveTitleTokens(currentTitle).filter(token => {
+        const forms = [normalizeSearchText(token), normalizeCrossScriptText(token), latinSkeleton(token)];
+        return !forms.some(form => form && artistSignals.has(form));
+    });
+    if (!currentDistinctive.length) return false;
+
+    const nextText = normalizeSearchText(nextTitle);
+    const nextLatinText = normalizeCrossScriptText(nextTitle);
+    const nextSkeletonWords = new Set(latinSkeleton(nextTitle).split(' ').filter(Boolean));
+
+    return currentDistinctive.some(token => {
+        const normalized = normalizeSearchText(token);
+        const latin = normalizeCrossScriptText(token);
+        const skeleton = latinSkeleton(token);
+        return (normalized.length >= 4 && nextText.split(' ').includes(normalized))
+            || (latin.length >= 4 && nextLatinText.split(' ').includes(latin))
+            || (skeleton.length >= 4 && nextSkeletonWords.has(skeleton));
+    });
 }
 
 function trackMatchesArtist(track, artistName) {
@@ -1753,8 +2108,8 @@ function trackMatchesArtist(track, artistName) {
 }
 
 function autoPlayDuplicateKey(track) {
-    const canonical = canonicalTrackTitle(track?.info?.title);
-    if (canonical) return canonical;
+    const duplicateKey = songDuplicateKey(track);
+    if (duplicateKey) return duplicateKey;
     return normalizeSearchText(`${track?.info?.author || ''} ${track?.info?.title || ''}`) || trackIdentity(track);
 }
 
@@ -1849,16 +2204,19 @@ function filterArtistTracks(tracks, currentTrack, limit, artistName = '', option
         .filter(t => (t.info.uri || t.info.identifier) !== currentId);
     const seenSongs = new Set();
     const uniqueSongs = [];
-    for (const track of unique) {
-        const key = autoPlayDuplicateKey(track);
+    for (const track of shuffleTracks(unique)) {
+        const key = songDuplicateKey(track);
         if (key && seenSongs.has(key)) continue;
+        const fingerprints = trackTitleFingerprints(track);
+        if ([...fingerprints].some(item => seenSongs.has(item))) continue;
         if (key) seenSongs.add(key);
+        for (const item of fingerprints) seenSongs.add(item);
         uniqueSongs.push(track);
     }
     const artistPool = artistName ? uniqueSongs.filter(t => trackMatchesArtist(t, artistName)) : uniqueSongs;
     const pool = artistPool.length ? artistPool : uniqueSongs;
     const history = options.historySet instanceof Set ? options.historySet : null;
-    const withoutSameSong = pool.filter(t => !isNearSameTrackTitle(t, currentTrack));
+    const withoutSameSong = pool.filter(t => !isNearSameTrackTitle(t, currentTrack) && !leaksCurrentTitleSignal(t, currentTrack));
     const withoutHistory = history
         ? withoutSameSong.filter(t => !history.has(autoPlayDuplicateKey(t)))
         : withoutSameSong;
@@ -2791,6 +3149,7 @@ module.exports = {
                             '``skip`` : Skip the current song',
                             '``volume`` : Set the music volume',
                             '``nowplaying`` : Show the song playing now',
+                            '``info`` : Show bot and subscription details',
                             '``queue`` : Show the server playlist',
                             '``loop`` : Loop the current song',
                             '``pause`` : Pause the music',
@@ -2825,6 +3184,7 @@ module.exports = {
                             '``skip`` : تخطّ الأغنية الحالية',
                             '``volume`` : اضبط مستوى الصوت',
                             '``nowplaying`` : اعرض الأغنية التي تعمل الآن',
+                            '``info`` : اعرض معلومات البوت والاشتراك',
                             '``queue`` : اعرض قائمة الانتظار',
                             '``loop`` : كرّر الأغنية الحالية',
                             '``pause`` : وقّف الموسيقى مؤقتاً',
@@ -3768,13 +4128,21 @@ module.exports = {
 
                                 const stoppedTrack = player.currentTrack;
                                 const finalOptions = finalUiOptionsFor(player, stoppedTrack);
+                                const stoppedOk = await runSyncedControl('message stop audio', () => stopPlayerAudio(player, { wait: true }));
+                                if (!stoppedOk) {
+                                    return message.reply(musicPayload(tokenObj, {
+                                        title: 'Stop Failed',
+                                        description: '**Lavalink did not stop the track. Try again in a moment.**',
+                                        thumbnail: 'attachment://Error.png',
+                                        files: ['./assets/image/icons/Error.png'],
+                                    }));
+                                }
                                 markStopped();
                                 player.setLoop('NONE');
                                 player.queue.clear();
                                 setAutoPlayState(player, false);
                                 clearStoppedPlaybackCaches(player);
                                 clearProgressInterval(player, 'message stop');
-                                await stopPlayerAudio(player, { wait: false }).catch(err => console.warn('[message stop audio]', err?.message || err));
                                 reactCustom(message, MUSIC_EMOJIS.stop, '🔴');
                                 runBackground('stop cleanup', async () => {
                                     await finalizePlayerUi(player, finalOptions);
@@ -3999,7 +4367,15 @@ module.exports = {
 
                         if (player.queue.length === 0 && player.data?.autoPlay) {
                             const skippedTrack = currentTrack;
-                            await player.skip().catch(err => console.warn('[message skip autoplay]', err?.message || err));
+                            const skippedOk = await runSyncedControl('message skip autoplay', () => skipPlayerSynced(TrueMusic.poru, player, currentTrack));
+                            if (!skippedOk) {
+                                return message.reply(musicPayload(tokenObj, {
+                                    title: 'Skip Failed',
+                                    description: '**Lavalink did not skip the track. Try again in a moment.**',
+                                    thumbnail: 'attachment://Error.png',
+                                    files: ['./assets/image/icons/Error.png'],
+                                }));
+                            }
                             return message.reply(musicPayload(tokenObj, {
                                 title: 'Skipped',
                                 description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
@@ -4010,11 +4386,19 @@ module.exports = {
 
                         if (player.queue.length === 0) {
                             const finalOptions = finalUiOptionsFor(player, currentTrack);
+                            const stoppedOk = await runSyncedControl('message skip end audio', () => stopPlayerAudio(player, { wait: true }));
+                            if (!stoppedOk) {
+                                return message.reply(musicPayload(tokenObj, {
+                                    title: 'Skip Failed',
+                                    description: '**Lavalink did not stop the track. Try again in a moment.**',
+                                    thumbnail: 'attachment://Error.png',
+                                    files: ['./assets/image/icons/Error.png'],
+                                }));
+                            }
                             markStopped();
                             setAutoPlayState(player, false);
                             clearStoppedPlaybackCaches(player);
                             clearProgressInterval(player, 'message skip end');
-                            await stopPlayerAudio(player, { wait: false }).catch(err => console.warn('[message skip end audio]', err?.message || err));
                             runBackground('skip end cleanup', async () => {
                                 await finalizePlayerUi(player, finalOptions);
                                 await bumpQueueVersion(player, 'skip_end');
@@ -4028,7 +4412,15 @@ module.exports = {
                     }));
                         } else {
                             const skippedTrack = currentTrack;
-                            await player.skip().catch(err => console.warn('[message skip]', err?.message || err));
+                            const skippedOk = await runSyncedControl('message skip', () => skipPlayerSynced(TrueMusic.poru, player, currentTrack));
+                            if (!skippedOk) {
+                                return message.reply(musicPayload(tokenObj, {
+                                    title: 'Skip Failed',
+                                    description: '**Lavalink did not skip the track. Try again in a moment.**',
+                                    thumbnail: 'attachment://Error.png',
+                                    files: ['./assets/image/icons/Error.png'],
+                                }));
+                            }
                             runBackground('skip cleanup', () => bumpQueueVersion(player, 'skip'));
 
                     return message.reply(musicPayload(tokenObj, {
@@ -4081,7 +4473,17 @@ module.exports = {
                     }));
                 }
 
-                await player.setVolume(volume).catch(err => console.warn('[message volume]', err?.message || err));
+                try {
+                    await setPlayerVolumeSynced(player, volume);
+                } catch (err) {
+                    console.warn('[message volume]', err?.message || err);
+                    return message.reply(musicPayload(tokenObj, {
+                        title: 'Volume',
+                        description: '**Failed to change the volume. Try again in a moment.**',
+                        thumbnail: 'attachment://Error.png',
+                        files: ['./assets/image/icons/Error.png'],
+                    }));
+                }
 
                 return message.reply(musicPayload(tokenObj, {
                     title: 'Volume',
@@ -4665,7 +5067,8 @@ module.exports = {
                         if (targetInteraction && !targetInteraction.deferred && !targetInteraction.replied) {
                             await targetInteraction.deferUpdate().catch(() => {});
                         }
-                        await interaction.message?.edit(payload).catch(() => {});
+                        const targetMessage = player.data?.nowPlayingMessage || interaction.message;
+                        await safeEditMessage(targetMessage, payload).catch(() => {});
                     };
 
                     if (isMusicMenu) {
@@ -4736,15 +5139,27 @@ module.exports = {
                     }
 
                     if (interaction.customId === 'volume_down') {
-                        const newVolume = Math.max(player.volume - 10, 0);
-                        await player.setVolume(newVolume).catch(err => console.warn('[button volume down]', err?.message || err));
-                        responseMessage = `**Volume is now __${newVolume}%__.**`;
+                        const newVolume = clampPlayerVolume(playerVolumeValue(player) - 10);
+                        try {
+                            await setPlayerVolumeSynced(player, newVolume);
+                            await editPanel(!!ui.liked);
+                            responseMessage = `**Volume is now __${newVolume}%__.**`;
+                        } catch (err) {
+                            console.warn('[button volume down]', err?.message || err);
+                            responseMessage = '**Failed to change the volume.**';
+                        }
                     }
 
                     if (interaction.customId === 'volume_up') {
-                        const newVolume = Math.min(player.volume + 10, 130);
-                        await player.setVolume(newVolume).catch(err => console.warn('[button volume up]', err?.message || err));
-                        responseMessage = `**Volume is now __${newVolume}%__.**`;
+                        const newVolume = clampPlayerVolume(playerVolumeValue(player) + 10);
+                        try {
+                            await setPlayerVolumeSynced(player, newVolume);
+                            await editPanel(!!ui.liked);
+                            responseMessage = `**Volume is now __${newVolume}%__.**`;
+                        } catch (err) {
+                            console.warn('[button volume up]', err?.message || err);
+                            responseMessage = '**Failed to change the volume.**';
+                        }
                     }
 
                             if (interaction.customId === 'skip') {
@@ -4752,25 +5167,33 @@ module.exports = {
                                 if (!currentTrack) {
                                     responseMessage = '*لا توجد أغنية للتخطي*.';
                                 } else if (player.queue.length === 0 && player.data?.autoPlay) {
-                                    await player.skip().catch(err => console.warn('[button skip autoplay]', err?.message || err));
-                                    responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
+                                    const skippedOk = await runSyncedControl('button skip autoplay', () => skipPlayerSynced(TrueMusic.poru, player, currentTrack));
+                                    responseMessage = skippedOk
+                                        ? `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`
+                                        : '**Failed to skip the track.**';
                                 } else if (player.queue.length === 0) {
                                     const finalOptions = finalUiOptionsFor(player, currentTrack);
-                                    markStopped();
-                                    setAutoPlayState(player, false);
-                                    clearStoppedPlaybackCaches(player);
-                                    clearProgressInterval(player, 'button skip end');
-                                    await stopPlayerAudio(player, { wait: false }).catch(err => console.warn('[button skip end audio]', err?.message || err));
-                                    runBackground('button skip end cleanup', async () => {
-                                        await finalizePlayerUi(player, finalOptions);
-                                        await bumpQueueVersion(player, 'button_skip_end');
-                                        await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
-                                    });
-                                    responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
+                                    const stoppedOk = await runSyncedControl('button skip end audio', () => stopPlayerAudio(player, { wait: true }));
+                                    if (stoppedOk) {
+                                        markStopped();
+                                        setAutoPlayState(player, false);
+                                        clearStoppedPlaybackCaches(player);
+                                        clearProgressInterval(player, 'button skip end');
+                                        runBackground('button skip end cleanup', async () => {
+                                            await finalizePlayerUi(player, finalOptions);
+                                            await bumpQueueVersion(player, 'button_skip_end');
+                                            await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
+                                        });
+                                    }
+                                    responseMessage = stoppedOk
+                                        ? `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`
+                                        : '**Failed to skip the track.**';
                                 } else {
-                                    await player.skip().catch(err => console.warn('[button skip]', err?.message || err));
-                                    runBackground('button skip cleanup', () => bumpQueueVersion(player, 'button_skip'));
-                                    responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
+                                    const skippedOk = await runSyncedControl('button skip', () => skipPlayerSynced(TrueMusic.poru, player, currentTrack));
+                                    if (skippedOk) runBackground('button skip cleanup', () => bumpQueueVersion(player, 'button_skip'));
+                                    responseMessage = skippedOk
+                                        ? `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`
+                                        : '**Failed to skip the track.**';
                                 }
                     }
 
@@ -4779,12 +5202,19 @@ module.exports = {
                         const lastPress = player.data.lastPrevPressTime || 0;
                         player.data.lastPrevPressTime = now;
                         if (now - lastPress < 3000 && player.queue.previous) {
+                            const currentBeforePrev = player.currentTrack;
                             const prevTrack = player.queue.previous;
-                            player.queue.unshift(player.currentTrack);
+                            player.queue.unshift(currentBeforePrev);
                             player.queue.unshift(prevTrack);
-                            await player.skip().catch(err => console.warn('[button prev skip]', err?.message || err));
-                            runBackground('button prev cleanup', () => bumpQueueVersion(player, 'button_prev'));
-                            responseMessage = `⏮ رجعنا للأغنية السابقة.`;
+                            const skippedOk = await runSyncedControl('button prev skip', () => skipPlayerSynced(TrueMusic.poru, player, currentBeforePrev));
+                            if (!skippedOk && typeof player.queue.shift === 'function') {
+                                if (player.queue[0] === prevTrack) player.queue.shift();
+                                if (player.queue[0] === currentBeforePrev) player.queue.shift();
+                            }
+                            if (skippedOk) runBackground('button prev cleanup', () => bumpQueueVersion(player, 'button_prev'));
+                            responseMessage = skippedOk
+                                ? `⏮ رجعنا للأغنية السابقة.`
+                                : '**Failed to play the previous track.**';
                         } else {
                             await player.seek(0).catch(err => console.warn('[button prev seek]', err?.message || err));
                             runBackground('prev panel edit', () => editPanel(!!ui.liked));
@@ -4795,19 +5225,23 @@ module.exports = {
                     if (interaction.customId === 'stop') {
                         const stoppedTrack = player.currentTrack;
                         const finalOptions = finalUiOptionsFor(player, stoppedTrack);
-                        markStopped();
-                        player.setLoop('NONE');
-                        player.queue.clear();
-                        setAutoPlayState(player, false);
-                        clearStoppedPlaybackCaches(player);
-                        clearProgressInterval(player, 'button stop');
-                        await stopPlayerAudio(player, { wait: false }).catch(err => console.warn('[button stop audio]', err?.message || err));
-                        runBackground('button stop cleanup', async () => {
-                            await finalizePlayerUi(player, finalOptions);
-                            await bumpQueueVersion(player, 'button_stop');
-                            await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
-                        });
-                        responseMessage = '**Done stopped the song.**';
+                        const stoppedOk = await runSyncedControl('button stop audio', () => stopPlayerAudio(player, { wait: true }));
+                        if (stoppedOk) {
+                            markStopped();
+                            player.setLoop('NONE');
+                            player.queue.clear();
+                            setAutoPlayState(player, false);
+                            clearStoppedPlaybackCaches(player);
+                            clearProgressInterval(player, 'button stop');
+                            runBackground('button stop cleanup', async () => {
+                                await finalizePlayerUi(player, finalOptions);
+                                await bumpQueueVersion(player, 'button_stop');
+                                await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
+                            });
+                        }
+                        responseMessage = stoppedOk
+                            ? '**Done stopped the song.**'
+                            : '**Failed to stop the song.**';
                     }
 
                     if (interaction.customId === 'queue_btn') {
@@ -4902,7 +5336,6 @@ module.exports = {
                     }
 
                     await replyEphemeral(responseMessage || '*Done*.');
-                    setTimeout(() => interaction.deleteReply().catch(() => {}), 8000);
                 });
 
 

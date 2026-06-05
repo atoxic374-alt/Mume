@@ -1,12 +1,34 @@
 const fs = require('fs');
 const store = require('../../utils/store');
-const { Client, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, EmbedBuilder, ComponentType } = require('discord.js');
+const { Client, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, EmbedBuilder, ComponentType, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const { owners, prefix } = require(`${process.cwd()}/settings/config`);
 const { getEmbedColor } = require('../../utils/embedColor');
 const axios = require("axios");
 const db = require('../../utils/db');
 const Discord = require('discord.js');
 const path = require('path');
+
+function formatDuration(msValue) {
+    const value = Math.max(0, Number(msValue || 0));
+    const d = Math.floor(value / 86400000);
+    const h = Math.floor((value % 86400000) / 3600000);
+    const m = Math.floor((value % 3600000) / 60000);
+    const s = Math.floor((value % 60000) / 1000);
+    return [d && `${d}d`, h && `${h}h`, m && `${m}m`, !d && !h && s && `${s}s`].filter(Boolean).join(' ') || '0m';
+}
+
+function parseUserId(raw) {
+    const value = String(raw || '').trim();
+    const mention = value.match(/^<@!?(\d{15,20})>$/);
+    if (mention) return mention[1];
+    return /^\d{15,20}$/.test(value) ? value : null;
+}
+
+function chunkArray(items, size) {
+    const chunks = [];
+    for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+    return chunks;
+}
 
 module.exports = {
     name: 'music',
@@ -96,26 +118,20 @@ module.exports = {
 
                 const selectMenu = new StringSelectMenuBuilder()
                     .setCustomId('vipOptions')
-                    .setPlaceholder('يرجى الاختيار ..')
+                    .setPlaceholder('اختر العملية المطلوبة')
                     .addOptions([
                         {
-                            label: 'اشتراك',
+                            label: 'عرض الاشتراك',
                             emoji: '1265309996292378756',
-                            description: 'لعرض مُدة اشتراكك المتبقية',
+                            description: 'عرض المدة، العدد، السيرفر، ومعلومات الاشتراك',
                             value: 'musictime',
                         }, {
                             label: 'إعادة تشغيل',
                             emoji: '1356528848237367326',
                             description: 'إعادة تشغيل البوتات المملوكة لك جميعًا',
                             value: 'restart',
-                        },
-                        {
-                            label: 'إدارة مظهر البوتات',
-                            emoji: '1256869689015926845',
-                            description: 'تغير مظهر واسماء جميع البوتات التي تمتكلها',
-                            value: 'appearance',
                         }, {
-                            label: 'إدارة السيرفرات',
+                            label: 'نقل السيرفر',
                             emoji: '1256869694967644231',
                             description: 'نقل سيرفر البوتات إلي سيرفر جديد',
                             value: 'updateServerId',
@@ -125,22 +141,11 @@ module.exports = {
                             emoji: '1344186014448615435',
                             description: 'نقل ملكية البوتات إلى مستخدم آخر',
                             value: 'transferOwnership',
-                        },
-                        {
-                            label: 'تثبيت البوتات',
-                            emoji: '1344186548350095381',
-                            description: 'تثبيت جميع البوتات التي تمتلكها اليوم مُحدد',
-                            value: 'installBot',
                         }, {
                             label: 'روابط البوتات',
                             emoji: '1256869691004162068',
-                            description: 'احصل علي روابك جميع برامج البوتات التي تمتكلها',
+                            description: 'إرسال روابط بوتاتك في الخاص بإيمبد منظم',
                             value: 'mylinks',
-                        }, {
-                            label: 'منصة التشغيل',
-                            emoji: '1344144928967757897',
-                            description: 'من أجل أختيار منصة التشغيل الاساسية لبدء التشغيل',
-                            value: 'platform',
                         }
                     ]);
 
@@ -149,8 +154,27 @@ module.exports = {
                     .setLabel('إلغاء')
                     .setStyle('Danger');
 
+                const selectedServer = userTokens[0]?.Server || selectedSubscriptions[0]?.server || 'غير محدد';
+                const controlEmbed = new EmbedBuilder()
+                    .setColor(getEmbedColor(client))
+                    .setTitle('Music Control')
+                    .setThumbnail(targetUser.displayAvatarURL({ dynamic: true, size: 256 }))
+                    .setDescription([
+                        `**User :** *<@${targetUser.id}>*`,
+                        '',
+                        `**Subscriptions :** *\`${selectedCodes.length}\` اشتراك محدد*`,
+                        '',
+                        `**Bot Count :** *\`${totalBots}\` بوت*`,
+                        '',
+                        `**Server :** *\`${selectedServer}\`*`,
+                        '',
+                        '**Options :** *اختر العملية المطلوبة من القائمة بالأسفل.*',
+                    ].join('\n'))
+                    .setFooter({ text: `${client.user.username} | MU`, iconURL: client.user.displayAvatarURL({ dynamic: true }) });
+
                 const replyMessage = await interaction.update({
-                    content: `**عـدد بـُوتـاتـك :** \`${totalBots}\``,
+                    content: '',
+                    embeds: [controlEmbed],
                     components: [
                         new ActionRowBuilder().addComponents(selectMenu),
                         new ActionRowBuilder().addComponents(cancelButton)
@@ -159,6 +183,325 @@ module.exports = {
 
                 const filter = (i) => i.user.id === message.author.id;
                 const collector = replyMessage.createMessageComponentCollector({ filter, time: 60000 });
+
+                function disabledRowsFrom(rows = []) {
+                    return rows.map(row => new ActionRowBuilder().addComponents(
+                        row.components.map(component => {
+                            if (component.type === ComponentType.Button) return ButtonBuilder.from(component).setDisabled(true);
+                            if (component.type === ComponentType.StringSelect) return StringSelectMenuBuilder.from(component).setDisabled(true);
+                            return component;
+                        })
+                    ));
+                }
+
+                function clientIdFromToken(token) {
+                    try {
+                        return Buffer.from(String(token || '').split('.')[0], 'base64').toString('utf8');
+                    } catch {
+                        return null;
+                    }
+                }
+
+                function inviteUrlFromToken(token) {
+                    const clientId = clientIdFromToken(token);
+                    return clientId ? `https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=0&scope=bot` : null;
+                }
+
+                function botRuntimeInfo(tokenData) {
+                    let bot = null;
+                    try { bot = require('../../music').runningBots?.get(tokenData.token); } catch {}
+                    const inServer = !!(bot && tokenData.Server && bot.guilds.cache.has(tokenData.Server));
+                    return {
+                        bot,
+                        name: bot?.user?.username || tokenData.invalidBotName || 'Music Bot',
+                        inServer,
+                        status: bot ? (inServer ? 'داخل السيرفر' : 'خارج السيرفر') : 'غير متصل',
+                    };
+                }
+
+                async function sendLinksAsEmbeds(interaction, mode = 'all') {
+                    const key = mode === 'outside' ? `Off-serverlinks-${message.author.id}` : `linktime_${message.author.id}`;
+                    const lastClaimTime = await db.get(key) || 0;
+                    const currentTime = Date.now();
+                    const timeDifference = currentTime - lastClaimTime;
+
+                    if (timeDifference < 240000) {
+                        const remainingTime = 240000 - timeDifference;
+                        const minutes = Math.floor(remainingTime / 60000);
+                        const seconds = Math.ceil((remainingTime % 60000) / 1000);
+                        const formattedTime = `${minutes < 10 ? '0' : ''}${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
+                        return interaction.reply({ content: `**Cooldown :** *انتظر \`${formattedTime}\` قبل استخدام هذا الخيار مرة أخرى.*`, ephemeral: true }).catch(() => {});
+                    }
+
+                    await interaction.deferUpdate().catch(() => {});
+                    const entries = userTokens
+                        .map((token, index) => {
+                            const runtime = botRuntimeInfo(token);
+                            const url = inviteUrlFromToken(token.token);
+                            return { token, index, runtime, url };
+                        })
+                        .filter(entry => entry.url && (mode === 'all' || !entry.runtime.inServer));
+
+                    if (!entries.length) {
+                        await interaction.followUp({
+                            content: mode === 'outside'
+                                ? '**Bot Links :** *كل البوتات موجودة داخل السيرفر بالفعل.*'
+                                : '**Bot Links :** *لا توجد روابط جاهزة للإرسال.*',
+                            ephemeral: true,
+                        }).catch(() => {});
+                        return interaction.message.edit({ components: disabledRowsFrom(interaction.message.components) }).catch(() => {});
+                    }
+
+                    for (const [chunkIndex, chunk] of chunkArray(entries, 10).entries()) {
+                        const embed = new EmbedBuilder()
+                            .setColor(getEmbedColor(client))
+                            .setTitle(mode === 'outside' ? 'Outside Server Bot Links' : 'Bot Links')
+                            .setDescription(chunk.map(entry => [
+                                `**${entry.index + 1}. ${entry.runtime.name} :**`,
+                                `*${entry.url}*`,
+                                `**Status :** *${entry.runtime.status}*`,
+                            ].join('\n')).join('\n\n'))
+                            .setFooter({ text: `Page ${chunkIndex + 1} | ${selectedCodes.join(', ')}` });
+                        await interaction.user.send({ embeds: [embed] }).catch(() => {});
+                    }
+
+                    db.set(key, currentTime);
+                    await interaction.followUp({
+                        embeds: [new EmbedBuilder()
+                            .setColor(getEmbedColor(client))
+                            .setTitle('Links Sent')
+                            .setDescription([
+                                `**User :** *<@${interaction.user.id}>*`,
+                                '',
+                                `**Mode :** *${mode === 'outside' ? 'Outside Server' : 'All Links'}*`,
+                                '',
+                                `**Sent :** *\`${entries.length}\` رابط*`,
+                                '',
+                                `**Subscriptions :** *${selectedCodes.map(code => `\`${code}\``).join(', ')}*`,
+                            ].join('\n'))],
+                    }).catch(() => {});
+                    return interaction.message.edit({ components: disabledRowsFrom(interaction.message.components) }).catch(() => {});
+                }
+
+                async function showLinksMenu(interaction) {
+                    const linksMenu = new StringSelectMenuBuilder()
+                        .setCustomId('muLinksOptions')
+                        .setPlaceholder('اختر نوع الروابط')
+                        .addOptions([
+                            {
+                                label: 'كل الروابط',
+                                description: 'إرسال روابط كل بوتات الاشتراك في الخاص',
+                                value: 'all',
+                            },
+                            {
+                                label: 'خارج السيرفر فقط',
+                                description: 'إرسال روابط البوتات غير الموجودة في السيرفر',
+                                value: 'outside',
+                            },
+                        ]);
+
+                    const cancel = new ButtonBuilder().setCustomId('cancel').setLabel('إلغاء').setStyle(ButtonStyle.Danger);
+                    const embed = new EmbedBuilder()
+                        .setColor(getEmbedColor(client))
+                        .setTitle('Bot Links')
+                        .setDescription([
+                            `**Bot Count :** *\`${userTokens.length}\` بوت*`,
+                            '',
+                            '**All Links :** *يرسل كل روابط البوتات في الخاص بإيمبدات منظمة.*',
+                            '',
+                            '**Outside Server :** *يرسل فقط روابط البوتات غير الموجودة داخل السيرفر المحدد.*',
+                        ].join('\n'));
+
+                    await interaction.update({
+                        content: '',
+                        embeds: [embed],
+                        components: [
+                            new ActionRowBuilder().addComponents(linksMenu),
+                            new ActionRowBuilder().addComponents(cancel),
+                        ],
+                    });
+
+                    const linkCollector = interaction.message.createMessageComponentCollector({ filter: i => i.user.id === message.author.id, time: 60000 });
+                    linkCollector.on('collect', async i => {
+                        if (i.isButton() && i.customId === 'cancel') {
+                            await i.deferUpdate().catch(() => {});
+                            await i.message.delete().catch(() => {});
+                            linkCollector.stop('cancel');
+                            return;
+                        }
+                        if (!i.isStringSelectMenu() || i.customId !== 'muLinksOptions') return;
+                        linkCollector.stop('selected');
+                        return sendLinksAsEmbeds(i, i.values[0]);
+                    });
+                }
+
+                async function showSubscriptionInfo(interaction) {
+                    const logsArray = store.get('time') || [];
+                    const entries = logsArray.filter(entry => selectedCodes.includes(entry.code) && entry.user === targetUser.id);
+                    const selectedTokenCount = userTokens.length;
+                    const lines = entries.map((entry, index) => {
+                        const remainingTime = entry.expirationTime - Date.now();
+                        const serverId = entry.server || userTokens.find(token => token.code === entry.code)?.Server || 'غير محدد';
+                        return [
+                            `**${index + 1}. Subscription :** *\`${entry.code}\`*`,
+                            `**Bots :** *\`${entry.botsCount}\` بوت*`,
+                            `**Server :** *\`${serverId}\`*`,
+                            `**Remaining :** *\`${formatDuration(remainingTime)}\`*`,
+                            `**Expires :** *<t:${Math.floor(entry.expirationTime / 1000)}:R>*`,
+                        ].join('\n');
+                    });
+
+                    const embed = new EmbedBuilder()
+                        .setColor(getEmbedColor(client))
+                        .setTitle('Subscription Overview')
+                        .setThumbnail(targetUser.displayAvatarURL({ dynamic: true, size: 256 }))
+                        .setDescription([
+                            `**User :** *<@${targetUser.id}>*`,
+                            '',
+                            `**Selected Subscriptions :** *\`${entries.length}\`*`,
+                            '',
+                            `**Active Bots :** *\`${selectedTokenCount}\` بوت*`,
+                            '',
+                            lines.join('\n\n') || '*لا توجد بيانات اشتراك متاحة.*',
+                        ].join('\n'))
+                        .setFooter({ text: `${client.user.username} | Subscription`, iconURL: client.user.displayAvatarURL({ dynamic: true }) });
+
+                    return interaction.update({ content: '', embeds: [embed], components: [] }).catch(() => {});
+                }
+
+                async function transferOwnershipWithModal(interaction) {
+                    const modal = new ModalBuilder()
+                        .setCustomId(`mu_transfer_owner_${message.id}`)
+                        .setTitle('Transfer Ownership');
+                    modal.addComponents(new ActionRowBuilder().addComponents(
+                        new TextInputBuilder()
+                            .setCustomId('newOwner')
+                            .setLabel('New Owner ID')
+                            .setPlaceholder('User ID or mention')
+                            .setStyle(TextInputStyle.Short)
+                            .setRequired(true),
+                    ));
+                    await interaction.showModal(modal);
+                    const submit = await interaction.awaitModalSubmit({
+                        filter: i => i.customId === `mu_transfer_owner_${message.id}` && i.user.id === interaction.user.id,
+                        time: 60000,
+                    }).catch(() => null);
+                    if (!submit) return;
+
+                    const newUserId = parseUserId(submit.fields.getTextInputValue('newOwner'));
+                    if (!newUserId) return submit.reply({ content: '**Transfer Ownership :** *ارسل منشن أو ايدي مستخدم صحيح.*', ephemeral: true });
+                    const newOwner = await client.users.fetch(newUserId).catch(() => null);
+                    if (!newOwner) return submit.reply({ content: '**Transfer Ownership :** *لم أستطع العثور على المستخدم الجديد.*', ephemeral: true });
+
+                    const timeArray = store.get('time') || [];
+                    let movedBots = 0;
+                    timeArray.forEach(sub => {
+                        if (selectedCodes.includes(sub.code) && sub.user === targetUser.id) {
+                            sub.user = newUserId;
+                            movedBots += Number(sub.botsCount || 0);
+                        }
+                    });
+                    store.set('time', timeArray);
+
+                    const allTokens = store.get('tokens') || [];
+                    allTokens.forEach(token => {
+                        if (selectedCodes.includes(token.code) && token.client === targetUser.id) {
+                            token.client = newUserId;
+                        }
+                    });
+                    store.set('tokens', allTokens);
+
+                    const successEmbed = new EmbedBuilder()
+                        .setColor(0x2ecc71)
+                        .setTitle('Ownership Transferred')
+                        .setDescription([
+                            `**Old Owner :** *<@${targetUser.id}>*`,
+                            '',
+                            `**New Owner :** *<@${newUserId}>*`,
+                            '',
+                            `**Subscriptions :** *${selectedCodes.map(code => `\`${code}\``).join(', ')}*`,
+                            '',
+                            `**Bot Count :** *\`${movedBots}\` بوت*`,
+                        ].join('\n'));
+
+                    await submit.reply({ embeds: [successEmbed], ephemeral: true }).catch(() => {});
+                    await newOwner.send({ embeds: [successEmbed] }).catch(() => {});
+                    await targetUser.send({ embeds: [successEmbed] }).catch(() => {});
+                }
+
+                async function moveServerWithModal(interaction) {
+                    const modal = new ModalBuilder()
+                        .setCustomId(`mu_move_server_${message.id}`)
+                        .setTitle('Move Server');
+                    modal.addComponents(new ActionRowBuilder().addComponents(
+                        new TextInputBuilder()
+                            .setCustomId('serverId')
+                            .setLabel('New Server ID')
+                            .setPlaceholder('Example: 123456789012345678')
+                            .setStyle(TextInputStyle.Short)
+                            .setRequired(true),
+                    ));
+                    await interaction.showModal(modal);
+                    const submit = await interaction.awaitModalSubmit({
+                        filter: i => i.customId === `mu_move_server_${message.id}` && i.user.id === interaction.user.id,
+                        time: 60000,
+                    }).catch(() => null);
+                    if (!submit) return;
+
+                    const newServerId = submit.fields.getTextInputValue('serverId').trim();
+                    if (!/^\d{15,20}$/.test(newServerId)) return submit.reply({ content: '**Move Server :** *اكتب ايدي سيرفر صحيح.*', ephemeral: true });
+
+                    const timeArray = store.get('time') || [];
+                    timeArray.forEach(sub => {
+                        if (selectedCodes.includes(sub.code) && sub.user === targetUser.id) sub.server = newServerId;
+                    });
+                    store.set('time', timeArray);
+
+                    const allTokens = store.get('tokens') || [];
+                    let movedBots = 0;
+                    allTokens.forEach(token => {
+                        if (selectedCodes.includes(token.code) && token.client === targetUser.id) {
+                            token.Server = newServerId;
+                            token.channel = null;
+                            token.chat = null;
+                            movedBots++;
+                        }
+                    });
+                    store.set('tokens', allTokens);
+
+                    const linkEntries = userTokens
+                        .map((token, index) => ({ index, runtime: botRuntimeInfo(token), url: inviteUrlFromToken(token.token) }))
+                        .filter(entry => entry.url);
+                    for (const [chunkIndex, chunk] of chunkArray(linkEntries, 10).entries()) {
+                        const embed = new EmbedBuilder()
+                            .setColor(getEmbedColor(client))
+                            .setTitle('Move Server Links')
+                            .setDescription(chunk.map(entry => [
+                                `**${entry.index + 1}. ${entry.runtime.name} :**`,
+                                `*${entry.url}*`,
+                            ].join('\n')).join('\n\n'))
+                            .setFooter({ text: `Page ${chunkIndex + 1} | New server ${newServerId}` });
+                        await interaction.user.send({ embeds: [embed] }).catch(() => {});
+                    }
+
+                    const successEmbed = new EmbedBuilder()
+                        .setColor(0x2ecc71)
+                        .setTitle('Server Updated')
+                        .setDescription([
+                            `**User :** *<@${targetUser.id}>*`,
+                            '',
+                            `**New Server :** *\`${newServerId}\`*`,
+                            '',
+                            `**Subscriptions :** *${selectedCodes.map(code => `\`${code}\``).join(', ')}*`,
+                            '',
+                            `**Moved Bots :** *\`${movedBots}\` بوت*`,
+                            '',
+                            `**Links :** *تم إرسال روابط البوتات في الخاص.*`,
+                        ].join('\n'));
+
+                    await submit.reply({ embeds: [successEmbed], ephemeral: true }).catch(() => {});
+                    await targetUser.send({ embeds: [successEmbed] }).catch(() => {});
+                }
 
                 collector.on('collect', async (interaction) => {
                     // زر الإلغاء
@@ -174,6 +517,11 @@ module.exports = {
 
                     collector.stop('selected');
                     const selectedOption = interaction.values[0];
+
+                    if (selectedOption === 'musictime') return showSubscriptionInfo(interaction);
+                    if (selectedOption === 'mylinks') return showLinksMenu(interaction);
+                    if (selectedOption === 'updateServerId') return moveServerWithModal(interaction);
+                    if (selectedOption === 'transferOwnership') return transferOwnershipWithModal(interaction);
 
                     if (selectedOption === 'mylinks') {
 
