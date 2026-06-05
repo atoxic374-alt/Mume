@@ -4200,22 +4200,27 @@ module.exports = {
                                     track.info.requester = message.author;
                                     player.queue.add(track);
                                 }
-                                await bumpQueueVersion(player, 'playlist_add');
+                                runBackground('playlist queue bump', () => bumpQueueVersion(player, 'playlist_add'));
                             } else {
                                 const track = res.tracks[0];
                                 track.info.requester = message.author;
                                 player.queue.add(track);
-                                await bumpQueueVersion(player, 'track_add');
 
                                 if (player.isPlaying) {
-                                    return message.reply(musicPayload(tokenObj, {
-                                title: 'Add Song',
-                                description: `**[${track.info.title}](${track.info.uri})**`,
-                                fields: [{ name: 'Song Duration', value: `**${shortDuration(track.info.length)}**`, inline: true }],
-                                thumbnail: 'attachment://AddSong.png',
-                                files: ['./assets/image/icons/AddSong.png'],
-                            }));
-                        }
+                                    // bump queue + Discord reply start at the same instant
+                                    await Promise.all([
+                                        bumpQueueVersion(player, 'track_add'),
+                                        message.reply(musicPayload(tokenObj, {
+                                            title: 'Add Song',
+                                            description: `**[${track.info.title}](${track.info.uri})**`,
+                                            fields: [{ name: 'Song Duration', value: `**${shortDuration(track.info.length)}**`, inline: true }],
+                                            thumbnail: 'attachment://AddSong.png',
+                                            files: ['./assets/image/icons/AddSong.png'],
+                                        })),
+                                    ]);
+                                    return;
+                                }
+                                await bumpQueueVersion(player, 'track_add');
                             }
 
                                     await safePlay(player);
@@ -4424,7 +4429,7 @@ module.exports = {
 
                             if (interaction.customId === `queue_${message.id}_clear`) {
                                 player.queue.clear();
-                                await bumpQueueVersion(player, 'queue_clear');
+                                runBackground('queue clear bump', () => bumpQueueVersion(player, 'queue_clear'));
                                 collector.stop('cleared');
                                 return interaction.update(musicPayload(tokenObj, {
                                     title: 'Queue Cleared',
@@ -4635,9 +4640,10 @@ module.exports = {
                 }
 
                 const seekTime = Math.min(seconds * 1000, player.currentTrack.info.length);
-                await player.seekTo(seekTime).catch(err => console.warn('[message seek]', err?.message || err));
-
-                reactCustom(message, MUSIC_EMOJIS.skip, '✅');
+                await Promise.all([
+                    player.seekTo(seekTime).catch(err => console.warn('[message seek]', err?.message || err)),
+                    reactCustom(message, MUSIC_EMOJIS.skip, '✅'),
+                ]);
             }
 
             else if (cmdsArray.forward.includes(command)) {
@@ -4687,8 +4693,10 @@ module.exports = {
 
                 const currentPosition = Number(player.position || 0);
                 const newPosition = Math.min(currentPosition + seconds * 1000, player.currentTrack.info.length - 1000);
-                await player.seekTo(newPosition).catch(err => console.warn('[message forward]', err?.message || err));
-                reactCustom(message, MUSIC_EMOJIS.skip, '⏩');
+                await Promise.all([
+                    player.seekTo(newPosition).catch(err => console.warn('[message forward]', err?.message || err)),
+                    reactCustom(message, MUSIC_EMOJIS.skip, '⏩'),
+                ]);
             }
 
             else if (cmdsArray.remove.includes(command)) {
@@ -4719,13 +4727,16 @@ module.exports = {
 
                 const removed = player.queue[pos - 1];
                 player.queue.splice(pos - 1, 1);
-                await bumpQueueVersion(player, 'remove');
-                return message.reply(musicPayload(tokenObj, {
-                    title: 'Removed',
-                    description: `**Removed ${removed?.info?.title || 'Unknown'} from the queue**.`,
-                    thumbnail: 'attachment://Skip.png',
-                    files: ['./assets/image/icons/Skip.png'],
-                }));
+                await Promise.all([
+                    bumpQueueVersion(player, 'remove'),
+                    message.reply(musicPayload(tokenObj, {
+                        title: 'Removed',
+                        description: `**Removed ${removed?.info?.title || 'Unknown'} from the queue**.`,
+                        thumbnail: 'attachment://Skip.png',
+                        files: ['./assets/image/icons/Skip.png'],
+                    })),
+                ]);
+                return;
             }
 
             else if (cmdsArray.search.includes(command)) {
@@ -5047,16 +5058,19 @@ module.exports = {
 
                                 const queuedTrack = { ...selectedTrack, info: { ...selectedTrack.info, requester: message.author } };
                                 player.queue.add(queuedTrack);
-                                await bumpQueueVersion(player, 'search_add');
 
                                 completed = true;
                         collector.stop('selected');
 
-                                await sourceMessage.edit(musicPayload(tokenObj, {
-                                    title: player.isPlaying ? 'Add Song' : 'Playing',
-                                    description: `**Song :** ${queuedTrack.info.title}\n**Source :** ${platformDisplay(sourceKeyFromTrack(queuedTrack) || selectedSource, TrueMusic)}\n**Added by :** ${message.author.displayName}`,
-                                    ...smartSearchThumbnail,
-                                }));
+                                // bump queue version + update search message at the same instant
+                                await Promise.all([
+                                    bumpQueueVersion(player, 'search_add'),
+                                    sourceMessage.edit(musicPayload(tokenObj, {
+                                        title: player.isPlaying ? 'Add Song' : 'Playing',
+                                        description: `**Song :** ${queuedTrack.info.title}\n**Source :** ${platformDisplay(sourceKeyFromTrack(queuedTrack) || selectedSource, TrueMusic)}\n**Added by :** ${message.author.displayName}`,
+                                        ...smartSearchThumbnail,
+                                    })),
+                                ]);
 
                                 await safePlay(player);
                             }
@@ -5302,19 +5316,20 @@ module.exports = {
                             const prevTrack = player.queue.previous;
                             player.queue.unshift(currentBeforePrev);
                             player.queue.unshift(prevTrack);
-                            const skippedOk = await runSyncedControl('button prev skip', () => skipPlayerSynced(TrueMusic.poru, player, currentBeforePrev));
-                            if (!skippedOk && typeof player.queue.shift === 'function') {
-                                if (player.queue[0] === prevTrack) player.queue.shift();
-                                if (player.queue[0] === currentBeforePrev) player.queue.shift();
-                            }
-                            if (skippedOk) runBackground('button prev cleanup', () => bumpQueueVersion(player, 'button_prev'));
-                            responseMessage = skippedOk
-                                ? `⏮ رجعنا للأغنية السابقة.`
-                                : '**Failed to play the previous track.**';
+                            responseMessage = `⏮ رجعنا للأغنية السابقة.`;
+                            // Lavalink + panel in parallel — same instant
+                            await Promise.all([
+                                skipPlayerSynced(TrueMusic.poru, player, currentBeforePrev).catch(() => {}),
+                                editPanel(!!ui.liked),
+                            ]);
+                            runBackground('button prev cleanup', () => bumpQueueVersion(player, 'button_prev'));
                         } else {
-                            await player.seek(0).catch(err => console.warn('[button prev seek]', err?.message || err));
-                            runBackground('prev panel edit', () => editPanel(!!ui.liked));
                             responseMessage = `⏮ تم إعادة الأغنية من البداية.`;
+                            // Seek + panel in parallel — same instant
+                            await Promise.all([
+                                player.seekTo(0).catch(err => console.warn('[button prev seek]', err?.message || err)),
+                                editPanel(!!ui.liked),
+                            ]);
                         }
                     }
 
@@ -5380,7 +5395,7 @@ module.exports = {
                                     if (i.customId === `queue_${refId}_next`) { const tot = Math.max(1, Math.ceil(player.queue.length / qItemsPerPage)); if (qPage < tot - 1) qPage++; return renderQ(i); }
                                     if (i.customId === `queue_${refId}_clear`) {
                                         player.queue.clear();
-                                        await bumpQueueVersion(player, 'queue_clear');
+                                        runBackground('queue clear bump', () => bumpQueueVersion(player, 'queue_clear'));
                                         qCollector.stop('cleared');
                                         return i.update(musicPayload(tokenObj, {
                                             title: 'Queue Cleared',
