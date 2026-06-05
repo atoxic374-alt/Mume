@@ -176,6 +176,7 @@ function patchNodeConnectV4(node) {
 /**
  * Fix #11 — يعترض ready packet ليكشف resumed:true/false.
  * مفيد للتشخيص: نعرف هل الـ session استُعيد فعلاً أم أُنشئ من جديد.
+ * يحفظ sessionId فور وصوله (Lavalink يُرسله في ready، ليس عند فتح WS).
  */
 function patchNodeMessageHandler(node) {
     if (node._llKaMsgPatched) return;
@@ -187,10 +188,17 @@ function patchNodeMessageHandler(node) {
             const packet = JSON.parse(payload);
             if (packet?.op === 'ready') {
                 const key = _nodeKey(node);
+                // ── حفظ sessionId فور وصوله من ready packet ──────────────────
+                if (packet.sessionId) {
+                    _saveSession(key, packet.sessionId);
+                    node.resumeKey = packet.sessionId;
+                    // حقن في node.sessionId حتى تجده onNodeConnect في الاتصال القادم
+                    node.sessionId = packet.sessionId;
+                    if (node.rest) node.rest.sessionId = packet.sessionId;
+                }
                 if (packet.resumed === true) {
                     console.log(`[LL-KA] ✅ Session RESUMED (${key}) session:…${String(packet.sessionId || '').slice(-6)}`);
                 } else {
-                    // session جديد — سنحتاج لإعادة تأسيس كل شيء
                     console.log(`[LL-KA] 🆕 New session (${key}) session:…${String(packet.sessionId || '').slice(-6)}`);
                 }
             }
@@ -329,13 +337,13 @@ async function reapplyPlayerFilters(player) {
  */
 async function onNodeConnect(node, client) {
     const key       = _nodeKey(node);
+    // sessionId arrives in the ready packet (after WS open), not at nodeConnect.
+    // patchNodeMessageHandler saves it from the ready packet automatically.
+    // If it is somehow already set (re-connect path), persist it now.
     const sessionId = node.sessionId || node.rest?.sessionId;
-
     if (sessionId) {
         _saveSession(key, sessionId);
         node.resumeKey = sessionId;
-    } else {
-        console.warn(`[LL-KA] ⚠️  No sessionId on nodeConnect for ${key}`);
     }
 
     // Fix #1: اعترض PATCH الخاطئ (يُصلّح timing bug الحرج)

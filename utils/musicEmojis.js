@@ -282,13 +282,17 @@ function validateCustomEmojis(client = null) {
 // Normal operation: Map lookup → react() → done. Zero extra API calls.
 //
 // Startup race (message arrives before loadMusicEmojis finishes):
-//   Falls back to 'name:id' string format. _reactionFailedIds remembers
-//   IDs that Discord rejected so they're never retried (no delay).
+//   Falls back to 'name:mappedId' or 'name:id' string format.
+//   _reactionFailedIds remembers IDs that Discord rejected; it is cleared
+//   every 30 minutes so temporary failures don't become permanent.
 //
-// If a cached emoji stops working at runtime (bot left guild, emoji deleted):
-//   Cache entry is removed; next call falls through to unicode.
+// If a cached emoji object fails at runtime:
+//   Try 'name:id' string format before giving up, then fall to unicode.
 //
 const _reactionFailedIds = new Set();
+
+// Clear the failed-IDs set every 30 minutes so transient failures self-heal
+setInterval(() => _reactionFailedIds.clear(), 30 * 60 * 1000);
 
 async function react(message, emojiData, fallback = null, client = null) {
     const emoji = parseEmojiData(emojiData);
@@ -300,8 +304,16 @@ async function react(message, emojiData, fallback = null, client = null) {
             try {
                 return await message.react(cached);
             } catch {
-                // Cached value no longer valid (bot left guild, emoji deleted, etc.)
-                // Remove it and fall through — next call gets unicode immediately
+                // Object-based react failed — try name:id string format.
+                // Application emojis often need the string form for reactions.
+                if (cached && typeof cached === 'object' && cached.id) {
+                    try {
+                        const reactName = cached.name || emoji.name || 'emoji';
+                        return await message.react(`${reactName}:${cached.id}`);
+                    } catch {
+                        // String form also failed — evict cache entry
+                    }
+                }
                 _reactionCache.delete(emoji.id);
                 _reactionFailedIds.add(emoji.id);
             }
@@ -310,6 +322,13 @@ async function react(message, emojiData, fallback = null, client = null) {
         // ── Slow path: cache not yet populated (startup race) ─────────────────
         if (!_reactionFailedIds.has(emoji.id)) {
             const name = emoji.name || 'emoji';
+            // Prefer the mapped application emoji ID so Discord can resolve it
+            const mappedId = _emojiIdMap[emoji.id];
+            if (mappedId && mappedId !== emoji.id) {
+                try {
+                    return await message.react(`${name}:${mappedId}`);
+                } catch { /* fall through to original ID */ }
+            }
             try {
                 return await message.react(`${name}:${emoji.id}`);
             } catch {
