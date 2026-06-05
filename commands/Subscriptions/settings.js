@@ -1257,16 +1257,78 @@ module.exports = {
                         .setTitle(`Subscription Settings — ${selectedCode}`)
                         .setDescription('تحكم سريع ومنظم في البوتات، العرض، الغرف، والمنصة.')
                         .addFields(
-                            { name: 'Owner', value: primaryOwnerId ? `<@${primaryOwnerId}>` : '`غير معروف`', inline: true },
-                            { name: 'Bots', value: `\`${subTokens.length}\`${waitingCount ? `\nWaiting: \`${waitingCount}\`` : ''}`, inline: true },
-                            { name: 'Server', value: `\`${subTokens[0]?.Server || allSubTokens[0]?.Server || 'غير محدد'}\``, inline: true },
-                            { name: 'Expires', value: subInfo?.expirationTime ? `<t:${Math.floor(subInfo.expirationTime / 1000)}:R>` : 'غير معروف', inline: true },
-                            { name: 'Subscribe Owners', value: subOwnerIds.length ? subOwnerIds.map(id => `<@${id}>`).join('\n') : '`لا يوجد`', inline: true },
-                            { name: 'Display', value: `الأزرار: **${display.buttons ? 'مفعلة' : 'معطلة'}**\nالإيمبد: **${display.embeds ? 'مفعل' : 'معطل'}**\nStatus الروم: **${display.voiceStatus ? 'مفعل' : 'معطل'}**`, inline: true },
-                            { name: 'Platform', value: `\`${display.platform}\``, inline: true },
-                            { name: 'Back to Voice', value: `${backVoice.label}\n${backVoice.details}`, inline: true },
-                            { name: 'Command Chat', value: `${chat.label}\n${chat.details}`, inline: false },
-                            { name: 'Voice Status', value: `بروم: **${voiceStats.inRoom}**\nخامل: **${voiceStats.idle}**\nخارج السيرفر: **${voiceStats.outside}**\nغير متصل: **${voiceStats.offline}**`, inline: false }
+                            {
+                                name: '👤  Owner',
+                                value: primaryOwnerId ? `*<@${primaryOwnerId}>*` : '*`غير معروف`*',
+                                inline: true
+                            },
+                            {
+                                name: '🤖  Bots',
+                                value: [
+                                    `**Active :** *\`${subTokens.length}\`*`,
+                                    waitingCount ? `**Waiting :** *\`${waitingCount}\`*` : null,
+                                ].filter(Boolean).join('\n'),
+                                inline: true
+                            },
+                            {
+                                name: '🖥️  Server',
+                                value: `**ID :** *\`${subTokens[0]?.Server || allSubTokens[0]?.Server || 'غير محدد'}\`*`,
+                                inline: true
+                            },
+                            {
+                                name: '📅  Expires',
+                                value: subInfo?.expirationTime
+                                    ? `**Time :** *<t:${Math.floor(subInfo.expirationTime / 1000)}:R>*`
+                                    : '**Time :** *`غير معروف`*',
+                                inline: true
+                            },
+                            {
+                                name: '👥  Subscribe Owners',
+                                value: subOwnerIds.length
+                                    ? subOwnerIds.map(id => `*<@${id}>*`).join('\n')
+                                    : '*`لا يوجد`*',
+                                inline: true
+                            },
+                            {
+                                name: '🎛️  Display',
+                                value: [
+                                    `**Buttons :** *${display.buttons ? '`ON`' : '`OFF`'}*`,
+                                    `**Embeds :** *${display.embeds ? '`ON`' : '`OFF`'}*`,
+                                    `**Voice Status :** *${display.voiceStatus ? '`ON`' : '`OFF`'}*`,
+                                ].join('\n'),
+                                inline: true
+                            },
+                            {
+                                name: '🎵  Platform',
+                                value: `**Source :** *\`${display.platform}\`*`,
+                                inline: true
+                            },
+                            {
+                                name: '🔁  Back to Voice',
+                                value: [
+                                    `**Status :** ${backVoice.label}`,
+                                    `**Info :** *${backVoice.details}*`,
+                                ].join('\n'),
+                                inline: true
+                            },
+                            {
+                                name: '💬  Command Chat',
+                                value: [
+                                    `**Channel :** ${chat.label}`,
+                                    `**Info :** *${chat.details}*`,
+                                ].join('\n'),
+                                inline: false
+                            },
+                            {
+                                name: '📊  Voice Status',
+                                value: [
+                                    `**In Room :** *\`${voiceStats.inRoom}\`*`,
+                                    `**Idle :** *\`${voiceStats.idle}\`*`,
+                                    `**Outside :** *\`${voiceStats.outside}\`*`,
+                                    `**Offline :** *\`${voiceStats.offline}\`*`,
+                                ].join('\n'),
+                                inline: false
+                            },
                         )
                         .setColor(getEmbedColor(client));
                     
@@ -1304,14 +1366,28 @@ module.exports = {
                     const subOwnerIds = subscriptionOwnerIdsFor(selectedCode);
                     const embed = new EmbedBuilder()
                         .setTitle(`Subscribe Owners — ${selectedCode}`)
-                        .setDescription([
-                            `**مالك الاشتراك:** ${primaryOwnerId ? `<@${primaryOwnerId}>` : '`غير معروف`'}`,
-                            '',
-                            '**الأونرز الحاليين:**',
-                            subOwnerIds.length ? subOwnerIds.map((id, index) => `\`${index + 1}\` <@${id}>`).join('\n') : '`لا يوجد`',
-                            '',
-                            'الأونرز يقدرون يستخدمون Settings وأوامر التحكم بالبـوتات مثل join/setup/settc. نقل الملكية ونقل الاشتراك والسيرفر تبقى للمالك الأصلي فقط.',
-                        ].join('\n'))
+                        .addFields(
+                            {
+                                name: '👑  مالك الاشتراك',
+                                value: primaryOwnerId ? `*<@${primaryOwnerId}>*` : '*`غير معروف`*',
+                                inline: true,
+                            },
+                            {
+                                name: '👥  الأونرز الحاليين',
+                                value: subOwnerIds.length
+                                    ? subOwnerIds.map((id, i) => `**${i + 1} :** *<@${id}>*`).join('\n')
+                                    : '*`لا يوجد`*',
+                                inline: false,
+                            },
+                            {
+                                name: '📋  الصلاحيات',
+                                value: [
+                                    '**يقدرون :** *استخدام Settings وأوامر التحكم مثل join / setup / settc.*',
+                                    '**لا يقدرون :** *نقل الملكية أو نقل الاشتراك — تبقى للمالك الأصلي فقط.*',
+                                ].join('\n'),
+                                inline: false,
+                            },
+                        )
                         .setColor(getEmbedColor(client));
                     embeds.push(embed);
 
@@ -1389,26 +1465,46 @@ module.exports = {
                                     const display = getDisplay(selectedCode);
                                     const embed = new EmbedBuilder()
                                         .setTitle(`Room Settings — ${selectedCode}`)
-                                        .setDescription(
-                                            `راقب البوتات، وزّعها، وحدد شات استقبال الأوامر.\n\n` +
-                                            `**شات الأوامر:** ${chat.label}\n${chat.details}\n\n` +
-                                            `**Back to Voice:** ${backVoice.label}\n${backVoice.details}\n\n` +
-                                            `**Voice Status:** \`${display.voiceStatus ? 'ON' : 'OFF'}\`  ${display.voiceStatusEmoji || '🎵'}\n` +
-                                            `عند تشغيل أغنية يتم تحديث Status الروم باسم مختصر للأغنية.`
+                                        .setDescription('راقب البوتات، وزّعها، وحدد شات استقبال الأوامر.')
+                                        .addFields(
+                                            {
+                                                name: '💬  Command Chat',
+                                                value: [
+                                                    `**Channel :** ${chat.label}`,
+                                                    `**Info :** *${chat.details}*`,
+                                                ].join('\n'),
+                                                inline: true,
+                                            },
+                                            {
+                                                name: '🔁  Back to Voice',
+                                                value: [
+                                                    `**Status :** ${backVoice.label}`,
+                                                    `**Info :** *${backVoice.details}*`,
+                                                ].join('\n'),
+                                                inline: true,
+                                            },
+                                            {
+                                                name: '🎙️  Voice Status',
+                                                value: [
+                                                    `**Status :** *\`${display.voiceStatus ? 'ON' : 'OFF'}\`*  ${display.voiceStatusEmoji || '🎵'}`,
+                                                    `**Info :** *عند تشغيل أغنية يتم تحديث Status الروم باسم مختصر للأغنية.*`,
+                                                ].join('\n'),
+                                                inline: false,
+                                            },
+                                            {
+                                                name: '📖  ماذا تفعل الأزرار؟',
+                                                value: [
+                                                    '**Voice Status :** *يعرض مكان كل بوت — داخل روم، خامل، خارج السيرفر، أو غير متصل.*',
+                                                    '**Smart Distribution :** *يوزع البوتات على نطاق رومات تختاره ويحافظ على ترتيبها.*',
+                                                    '**Move Idle :** *يدخل البوتات الخاملة فقط إلى روم أو عدة رومات تحددها.*',
+                                                    '**Back to Voice :** *يرجع البوت تلقائياً للروم المحدد إذا خرج أو انتقل.*',
+                                                    '**Status :** *يفعّل أو يعطل كتابة اسم الأغنية المختصر على Status الروم.*',
+                                                    '**Command Chat :** *يحدد الشات الذي يستقبل أوامر التشغيل.*',
+                                                    '**All Links / Outside Server :** *يعرض روابط دعوة البوتات حسب حالتها.*',
+                                                ].join('\n'),
+                                                inline: false,
+                                            },
                                         )
-                                        .addFields({
-                                            name: 'ماذا تفعل الأزرار؟',
-                                            value: [
-                                                '**Voice Status:** يعرض مكان كل بوت: داخل روم، خامل، خارج السيرفر، أو غير متصل.',
-                                                '**Smart Distribution:** يوزع البوتات على نطاق رومات تختاره ويحافظ على ترتيبها.',
-                                                '**Move Idle:** يدخل البوتات الخاملة فقط إلى روم أو عدة رومات تحددها.',
-                                                '**Back to Voice:** يرجع البوت تلقائياً للروم المحدد إذا خرج أو انتقل.',
-                                                '**Status:** يفعّل أو يعطل كتابة اسم الأغنية المختصر على Status الروم.',
-                                                '**Command Chat:** يحدد الشات الذي يستقبل أوامر التشغيل.',
-                                                '**All Links / Outside Server:** يعرض روابط دعوة البوتات حسب حالتها.',
-                                            ].join('\n'),
-                                            inline: false,
-                                        })
                                         .setColor(getEmbedColor(client));
                                     embeds.push(embed);
 
@@ -1441,9 +1537,20 @@ module.exports = {
                             const chat = chatSummary();
                             const embed = new EmbedBuilder()
                                 .setTitle(`Command Chat — ${selectedCode}`)
-                                .setDescription(
-                                    `**الحالي:** ${chat.label}\n${chat.details}\n\n` +
-                                    'عند تحديد شات استقبال، أوامر كل البوتات تعمل فقط في شات الاستقبال أو شات الفويس الخاص بكل بوت.'
+                                .addFields(
+                                    {
+                                        name: '💬  الشات الحالي',
+                                        value: [
+                                            `**Channel :** ${chat.label}`,
+                                            `**Info :** *${chat.details}*`,
+                                        ].join('\n'),
+                                        inline: false,
+                                    },
+                                    {
+                                        name: '📋  كيف يعمل؟',
+                                        value: '**Info :** *عند تحديد شات استقبال، أوامر كل البوتات تعمل فقط في شات الاستقبال أو شات الفويس الخاص بكل بوت.*',
+                                        inline: false,
+                                    },
                                 )
                                 .setColor(getEmbedColor(client));
                             embeds.push(embed);
