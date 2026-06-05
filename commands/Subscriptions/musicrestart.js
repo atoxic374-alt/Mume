@@ -20,7 +20,14 @@ module.exports = {
         if (!owners.includes(message.author.id)) return;
 
         try {
-            const botsArray = store.get('bots') || [];
+            const allBots = store.get('bots') || [];
+            const activeSubs = new Set((store.get('tokens') || []).map(t => t.token));
+            const botsArray = allBots.filter(b => !activeSubs.has(b.token));
+            const skipped = allBots.length - botsArray.length;
+
+            if (botsArray.length === 0) {
+                return message.reply(`**Restart :** *لا توجد بوتات حرة في الستوك${skipped > 0 ? ` (${skipped} بوت في اشتراكات نشطة لم تُمس)` : ''}.*`);
+            }
 
             let totalBots = botsArray.length;
             let timePerBot = 5000; 
@@ -28,7 +35,7 @@ module.exports = {
             let estimatedMinutes = Math.floor(estimatedTimeInSeconds / 60);
             let estimatedSeconds = Math.round(estimatedTimeInSeconds % 60);
 
-            message.reply(`سستم خروج **${totalBots}** بوت. سيتغرق حوالي (\`${estimatedMinutes}:${estimatedSeconds < 10 ? '0' : ''}${estimatedSeconds}\`) دقيقة تقريبًا`);
+            message.reply(`**Restart :** *جاري إعادة تهيئة \`${totalBots}\` بوت حر (~\`${estimatedMinutes}:${estimatedSeconds < 10 ? '0' : ''}${estimatedSeconds}\` دقيقة)${skipped > 0 ? ` — تم تخطي \`${skipped}\` بوت في اشتراكات نشطة.` : ''}*`);
 
             for (const bot of botsArray) {
                 const token = bot.token;

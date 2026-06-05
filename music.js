@@ -1537,6 +1537,13 @@ async function skipPlayerSynced(poru, player, currentTrack) {
     return true;
 }
 
+async function pausePlayerSynced(player, pause) {
+    player.isPaused = pause;
+    player.isPlaying = !pause;
+    await updateLavalinkPlayer(player, { paused: pause }, pause ? 'pause update' : 'resume update');
+    return pause;
+}
+
 async function runSyncedControl(label, task) {
     try {
         await task();
@@ -4342,12 +4349,12 @@ module.exports = {
 
                 if (player.isPaused) {
                     await Promise.all([
-                        player.pause(false).catch(err => console.warn('[message resume]', err?.message || err)),
+                        pausePlayerSynced(player, false).catch(err => console.warn('[message resume]', err?.message || err)),
                         reactCustom(message, MUSIC_EMOJIS.skip, '▶️'),
                     ]);
                 } else {
                     await Promise.all([
-                        player.pause(true).catch(err => console.warn('[message pause]', err?.message || err)),
+                        pausePlayerSynced(player, true).catch(err => console.warn('[message pause]', err?.message || err)),
                         reactCustom(message, MUSIC_EMOJIS.pause, '⏸️'),
                     ]);
                 }
@@ -5241,13 +5248,13 @@ module.exports = {
                         if (player.isPaused) {
                             responseMessage = '**Done resume the music.**';
                             await Promise.all([
-                                player.pause(false).catch(err => console.warn('[button resume]', err?.message || err)),
+                                pausePlayerSynced(player, false).catch(err => console.warn('[button resume]', err?.message || err)),
                                 editPanel(!!ui.liked),
                             ]);
                         } else {
                             responseMessage = '**Done pause the music.**';
                             await Promise.all([
-                                player.pause(true).catch(err => console.warn('[button pause]', err?.message || err)),
+                                pausePlayerSynced(player, true).catch(err => console.warn('[button pause]', err?.message || err)),
                                 editPanel(!!ui.liked),
                             ]);
                         }
