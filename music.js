@@ -2970,30 +2970,64 @@ module.exports = {
         let lastVCStatus = null;
         let voiceReturnLock = false;
 
+        // ── مؤقت retry للرجوع للروم عند الطرد القسري ────────────────────────────
+        let voiceRejoinRetryTimer = null;
+
+        async function _attemptVoiceRejoin(guild, tokenObj, attempt = 1) {
+            if (!guild || !tokenObj?.channel || tokenObj.awaitingReplacement) return;
+            if (!TrueMusic.readyAt) return;
+
+            try {
+                await ensureConfiguredVoice(guild, tokenObj, `voice_state_update_retry_${attempt}`);
+            } catch {
+                // فشل — أعد المحاولة بـ backoff (2s → 4s → 8s → 12s → 20s)
+                const delays = [2000, 4000, 8000, 12000, 20000];
+                const delay = delays[Math.min(attempt - 1, delays.length - 1)];
+                if (attempt < 6) {
+                    clearTimeout(voiceRejoinRetryTimer);
+                    voiceRejoinRetryTimer = setTimeout(() => {
+                        const freshTokenObj = (store.get('tokens') || []).find(t => t.token === token);
+                        if (freshTokenObj?.channel && !freshTokenObj.awaitingReplacement) {
+                            _attemptVoiceRejoin(guild, freshTokenObj, attempt + 1);
+                        }
+                    }, delay);
+                    voiceRejoinRetryTimer.unref?.();
+                }
+            }
+        }
+
         TrueMusic.on('voiceStateUpdate', async (oldState, newState) => {
             if (newState.member?.id !== TrueMusic.user?.id) return;
             if (voiceReturnLock) return;
-            if (isStopped()) return; // user manually stopped — don't auto-return
 
             const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
             if (!tokenObj?.channel || tokenObj.awaitingReplacement) return;
 
             const targetChannelId = tokenObj.channel;
-            if (newState.channelId === targetChannelId) return;
+            // البوت وصل للروم الصح — ألغِ أي retry معلق
+            if (newState.channelId === targetChannelId) {
+                clearTimeout(voiceRejoinRetryTimer);
+                voiceRejoinRetryTimer = null;
+                return;
+            }
+            // تم نقله لروم ثاني وـ backToVoice مغلق — لا نرجعه
             if (newState.channelId && tokenObj.backToVoice === 'off') return;
 
+            // ── البوت طُرد أو خرج من الروم — أرجعه فوراً بغض النظر عن isStopped ──
+            // isStopped() تعني "أوقف التشغيل" لا "اخرج من الروم"
+            // إذا فيه channel محدد → البوت يبقى في الروم دائماً
             const guild = newState.guild || oldState.guild;
             const targetChannel = guild?.channels.cache.get(targetChannelId)
                 || await guild?.channels.fetch(targetChannelId).catch(() => null);
             if (!targetChannel) return;
 
             voiceReturnLock = true;
+            clearTimeout(voiceRejoinRetryTimer);
+            voiceRejoinRetryTimer = null;
             try {
-                await ensureConfiguredVoice(guild, tokenObj, 'voice_state_update');
-            } catch {
-                // periodic voice guard will retry
+                await _attemptVoiceRejoin(guild, tokenObj, 1);
             } finally {
-                setTimeout(() => { voiceReturnLock = false; }, 1200);
+                setTimeout(() => { voiceReturnLock = false; }, 800);
             }
         });
 
@@ -3134,7 +3168,8 @@ module.exports = {
 
                             if (shouldReconnect) {
                                 if (!TrueMusic.readyAt) return;
-                                if (isStopped()) return; // respect manual stop
+                                // لا نتحقق من isStopped() — البوت يبقى في الروم دائماً
+                                // حتى لو أوقف المستخدم التشغيل، الـ 24/7 channel يعني البوت لا يخرج
 
                                 try {
                                     await ensureConfiguredVoice(guild, tokenObj, 'periodic_guard');
