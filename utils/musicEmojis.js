@@ -179,32 +179,50 @@ function validateCustomEmojis(client = null) {
 
 // ── react() — universal emoji reaction ───────────────────────────────────────
 //
-// Only GUILD emojis can be used in message reactions.
-// Application emojis (uploaded via client.application.emojis) are component-only —
-// Discord rejects them in reactions. We check the guild cache exclusively here.
-// Falls straight to the unicode fallback when no guild emoji is found,
-// avoiding the failed-API-call delay.
+// Root cause: TrueMusic clients have BaseGuildEmojiManager: 0 (guild emoji
+// cache is intentionally zeroed to save memory). So client.emojis.cache is
+// always empty — we CANNOT rely on it for reactions.
 //
+// Solution: bypass the cache entirely and pass 'name:id' directly to
+// message.react(). Discord's API validates access server-side. If the bot is
+// in the emoji's guild (or owns the application emoji), the reaction goes
+// through; otherwise Discord returns a 400 and we fall back to unicode.
+//
+// To prevent delay on repeated failures: failed emoji IDs are tracked in
+// _reactionFailedIds. Once an ID fails, it is skipped immediately on all
+// subsequent calls (zero extra API calls, zero delay).
+//
+const _reactionFailedIds = new Set();
+
 async function react(message, emojiData, fallback = null, client = null) {
-    const resolvedClient = client || message?.client || null;
     const emoji = parseEmojiData(emojiData);
 
-    // Look for a guild emoji only (reactions require guild membership)
-    let guildEmoji = null;
     if (emoji?.id) {
-        guildEmoji = resolvedClient?.emojis?.cache?.get?.(emoji.id) || null;
-        if (!guildEmoji) {
-            const mappedId = _emojiIdMap[emoji.id];
-            if (mappedId) {
-                guildEmoji = resolvedClient?.emojis?.cache?.get?.(mappedId) || null;
+        const name = emoji.name || 'emoji';
+
+        // 1. Try original ID — works when bot is in the emoji's guild.
+        //    Also works for application emojis since Discord 2024 update.
+        if (!_reactionFailedIds.has(emoji.id)) {
+            try {
+                return await message.react(`${name}:${emoji.id}`);
+            } catch {
+                _reactionFailedIds.add(emoji.id);
+            }
+        }
+
+        // 2. Try the mapped/uploaded ID (syncMusicEmojis application emoji)
+        //    Only if different from original and not already known to fail.
+        const mappedId = _emojiIdMap[emoji.id];
+        if (mappedId && mappedId !== emoji.id && !_reactionFailedIds.has(mappedId)) {
+            try {
+                return await message.react(`${name}:${mappedId}`);
+            } catch {
+                _reactionFailedIds.add(mappedId);
             }
         }
     }
 
-    if (guildEmoji) {
-        try { return await message.react(guildEmoji); } catch {}
-    }
-
+    // 3. Unicode fallback — always fast, no API ambiguity.
     if (fallback) {
         try { return await message.react(fallback); } catch {}
     }
