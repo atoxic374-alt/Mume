@@ -1780,6 +1780,14 @@ function clearAutoPlaySessionData(player) {
 
 function clearStoppedPlaybackCaches(player) {
     if (!player?.data) return;
+    // Clear artistTrackCache entries for the seed artist of this player
+    const seedArtist = player.data.autoPlaySeedArtist?.primary;
+    if (seedArtist) {
+        const normalized = normalizeSearchText(seedArtist);
+        for (const key of artistTrackCache.keys()) {
+            if (key.endsWith(`:${normalized}`)) artistTrackCache.delete(key);
+        }
+    }
     clearAutoPlaySessionData(player);
     if (player.data.ui) {
         player.data.ui.artistTracks = [];
