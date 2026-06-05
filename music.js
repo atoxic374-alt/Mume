@@ -116,7 +116,7 @@ function warnUnavailableMusicEmojis(client) {
         });
 
     if (!freshMissing.length) return;
-    console.warn(`[MusicEmoji] unavailable custom emojis: ${freshMissing.map(({ key, emoji }) => `${key}(${emoji.name || 'emoji'}:${emoji.id})`).join(', ')}`);
+    console.log(`[MusicEmoji] ${freshMissing.length} emoji(s) not in bot cache — buttons/menus work fine, reactions will use unicode fallback: ${freshMissing.map(({ key, emoji }) => `${key}(${emoji.name || 'emoji'}:${emoji.id})`).join(', ')}`);
 }
 
 const BASE_FILTERS = {
@@ -3180,6 +3180,12 @@ module.exports = {
                                     progressWidth: PLAY_PROGRESS_WIDTH,
                                 });
                 await safeEditMessage(msg, payload3).catch((err) => {
+                    const code = err?.code ?? err?.status ?? 0;
+                    if (code === 10008 || String(err?.message || '').includes('Unknown Message')) {
+                        player.data.nowPlayingMessage = null;
+                        clearProgressInterval(player, 'message deleted');
+                        return;
+                    }
                     warnPlayerOnce(player, `edit-failed:${msg.id}`, `[ProgressUpdate] edit failed for ${msg.id}: ${err?.message || err}`);
                 });
             } catch (err) {
@@ -4567,7 +4573,6 @@ module.exports = {
                                     if (!['closed', 'cleared'].includes(reason)) queueMsg.edit({ components: disableComponents(queueMsg.components) }).catch(() => {});
                                 });
                             }
-                            setTimeout(() => interaction.deleteReply().catch(() => {}), 8000);
                             return;
                         }
                     }

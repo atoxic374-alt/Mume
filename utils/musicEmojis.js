@@ -162,40 +162,27 @@ function validateCustomEmojis(client = null) {
     return customEmojiEntries().filter(entry => !cachedEmoji(entry.emoji, client));
 }
 
-// ── react() — universal emoji reaction with Unicord compatibility ─────────────
+// ── react() — universal emoji reaction ───────────────────────────────────────
 //
-// Unicord (and other third-party Discord clients) do NOT render application
-// emojis (emojis owned by the bot application, not a guild) in reactions.
-// When the emoji is application-only we place the unicode fallback FIRST so
-// every client sees a working reaction.  Guild emojis keep the custom-first
-// order for regular Discord users.
+// message.react() requires the bot to own the emoji (guild emoji in a shared
+// guild, or an application emoji).  If the emoji is not in any cache the bot
+// cannot access it for reactions, so we go straight to the unicode fallback
+// to avoid hitting Discord's rate-limit with doomed custom-emoji attempts.
+//
+// If the emoji IS in cache (accessible) we try it first, then fall back to
+// unicode if it still somehow fails.
 //
 async function react(message, emojiData, fallback = null, client = null) {
     const resolvedClient = client || message?.client || null;
+    const cached = cachedEmoji(emojiData, resolvedClient);
 
-    // Determine if this emoji is only an application emoji (no guild copy).
-    // For application-only emojis, prefer the unicode fallback first so
-    // third-party clients like Unicord see the reaction correctly.
-    const appOnly = isApplicationOnlyEmoji(emojiData, resolvedClient);
-
-    let candidates;
-    if (appOnly && fallback) {
-        // Unicord-safe order: unicode first, then custom emoji as secondary
-        candidates = [
-            fallback,
-            cachedEmoji(emojiData, resolvedClient),
-            reactionIdentifier(emojiData),
-            emojiStr(emojiData),
-        ].filter(Boolean);
-    } else {
-        // Normal order: custom emoji first, unicode fallback last
-        candidates = [
-            cachedEmoji(emojiData, resolvedClient),
-            reactionIdentifier(emojiData),
-            emojiStr(emojiData),
-            fallback,
-        ].filter(Boolean);
-    }
+    // Build candidate list: only include custom emoji if it is actually
+    // accessible (in cache).  Otherwise go straight to the unicode fallback.
+    const candidates = cached
+        ? [cached, fallback].filter(Boolean)
+        : fallback
+            ? [fallback]
+            : [];
 
     const seen = new Set();
     for (const candidate of candidates) {
