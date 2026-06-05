@@ -122,7 +122,7 @@ async function executeAddTime(code, durationMs, durationStr, message, client, pr
         { name: '➕ الوقت المضاف', value: `\`${durationStr}\``, inline: true },
         { name: '📅 الانتهاء الجديد', value: `<t:${Math.floor(entry.expirationTime/1000)}:F>`, inline: false }
       )
-      .setColor('#2ecc71');
+      .setColor(getEmbedColor(client));
 
     await prompt.edit({ embeds: [embed], components: [] });
     message.react('✅');

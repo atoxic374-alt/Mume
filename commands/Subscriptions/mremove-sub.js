@@ -12,6 +12,7 @@ function getSubBotProfile() {
 const { EmbedBuilder, Client, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
+const { getEmbedColor } = require('../../utils/embedColor');
 
 module.exports = {
   name: 'musicremovesub',
@@ -42,7 +43,7 @@ module.exports = {
           { name: '🤖 البوتات', value: `\`${entry.botsCount}\``, inline: true },
           { name: '🖥️ السيرفر', value: `\`${entry.server}\``, inline: true }
         )
-        .setColor('#f1c40f');
+        .setColor(getEmbedColor(client));
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`confirm_rem_${code}_${mid}`).setLabel('تأكيد الحذف').setStyle(ButtonStyle.Danger),
@@ -120,7 +121,7 @@ async function executeRemoval(code, message, client) {
 
     // DM Owner
     client.users.fetch(userId).then(u => {
-      u.send({ embeds: [new EmbedBuilder().setTitle('⚠️ تم إنهاء اشتراكك').setDescription(`تم إزالة اشتراكك برقم \`${code}\`.`).setColor('#e74c3c').setTimestamp()] }).catch(() => {});
+      u.send({ embeds: [new EmbedBuilder().setTitle('⚠️ تم إنهاء اشتراكك').setDescription(`تم إزالة اشتراكك برقم \`${code}\`.`).setColor(getEmbedColor(client)).setTimestamp()] }).catch(() => {});
     }).catch(() => {});
 
     // Log
@@ -135,7 +136,7 @@ async function executeRemoval(code, message, client) {
             { name: '🤖 البوتات', value: `\`${tokensToRemove.length}\``, inline: true },
             { name: '🛠️ بواسطة', value: `<@${message.author.id}>`, inline: true }
           )
-          .setColor('#e74c3c')
+          .setColor(getEmbedColor(client))
           .setTimestamp()]
       });
     }

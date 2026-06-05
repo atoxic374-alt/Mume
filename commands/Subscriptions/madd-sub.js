@@ -24,7 +24,7 @@ module.exports = {
     const mention = message.mentions.members.first();
     if (!mention) {
       return message.reply({
-        embeds: [new EmbedBuilder().setDescription('> يرجى منشن الشخص.\n> مثال: `!madd-sub @user`').setColor('#e74c3c')]
+        embeds: [new EmbedBuilder().setDescription('> يرجى منشن الشخص.\n> مثال: `!madd-sub @user`').setColor(getEmbedColor(client))]
       });
     }
 
@@ -126,7 +126,7 @@ module.exports = {
       const cid = i.customId;
 
       if (cid === `st_cancel_${mid}`) {
-        await i.update({ embeds: [new EmbedBuilder().setDescription('> ✖️ تم الإلغاء.').setColor('#e74c3c')], components: [] });
+        await i.update({ embeds: [new EmbedBuilder().setDescription('> ✖️ تم الإلغاء.').setColor(getEmbedColor(client))], components: [] });
         return collector.stop();
       }
 
@@ -212,7 +212,7 @@ module.exports = {
 
       const bots = getBots();
       if (bots.length < selectedCount) {
-        return prompt.edit({ embeds: [new EmbedBuilder().setDescription('> ❌ عذراً، لم يعد هناك بوتات كافية.').setColor('#e74c3c')], components: [] });
+        return prompt.edit({ embeds: [new EmbedBuilder().setDescription('> ❌ عذراً، لم يعد هناك بوتات كافية.').setColor(getEmbedColor(client))], components: [] });
       }
 
       const randomCode = generateRandomCode(5);
@@ -248,7 +248,7 @@ module.exports = {
 
       // Success
       await prompt.edit({
-        embeds: [new EmbedBuilder().setTitle('✅ تمت إضافة الاشتراك بنجاح!').addFields({ name: '👤 المستخدم', value: `<@${userId}>`, inline: true }, { name: '🖥️ السيرفر', value: `\`${serverId}\``, inline: true }, { name: '🤖 البوتات', value: `\`${selectedCount}\``, inline: true }, { name: '⏳ المدة', value: `\`${formattedDuration}\``, inline: true }, { name: '🔖 SuID', value: `\`#${randomCode}\``, inline: true }).setColor('#2ecc71').setFooter({ text: `${message.guild.name} | Timer`, iconURL: message.guild.iconURL({ dynamic: true }) })],
+        embeds: [new EmbedBuilder().setTitle('✅ تمت إضافة الاشتراك بنجاح!').addFields({ name: '👤 المستخدم', value: `<@${userId}>`, inline: true }, { name: '🖥️ السيرفر', value: `\`${serverId}\``, inline: true }, { name: '🤖 البوتات', value: `\`${selectedCount}\``, inline: true }, { name: '⏳ المدة', value: `\`${formattedDuration}\``, inline: true }, { name: '🔖 SuID', value: `\`#${randomCode}\``, inline: true }).setColor(getEmbedColor(client)).setFooter({ text: `${message.guild.name} | Timer`, iconURL: message.guild.iconURL({ dynamic: true }) })],
         components: []
       });
     });
