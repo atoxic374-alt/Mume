@@ -3749,6 +3749,12 @@ module.exports = {
 
     TrueMusic.poru.on('trackEnd', async (player, track, data) => {
       ensurePlayerData(player);
+      // ── Cancel any pending pre-fetch timer for the ending track ──────────────
+      if (player.data._prefetchTimer) {
+          clearTimeout(player.data._prefetchTimer);
+          player.data._prefetchTimer = null;
+      }
+      // ─────────────────────────────────────────────────────────────────────────
       const reason = data?.reason || 'unknown';
       const naturalEnd = isNaturalTrackEnd(reason);
       player.data.lastTrackEndReason = reason;
@@ -3981,6 +3987,46 @@ module.exports = {
                 if (shouldResumeStuckTrack) {
                     applyStuckRecoveryResume();
                 }
+
+        // ── Pre-fetch: resolve next track while current one plays ─────────────
+        // Poru's play() calls resolveTrack() when track.track is missing, adding
+        // 100–500ms latency at every transition. We resolve the next track ~5s
+        // early as a background task so it's ready the moment play() is called.
+        {
+            if (player.data._prefetchTimer) {
+                clearTimeout(player.data._prefetchTimer);
+                player.data._prefetchTimer = null;
+            }
+            const trackLen = Number(track.info?.length || 0);
+            if (trackLen > 8_000 && player.queue.length > 0) {
+                const prefetchDelay = Math.max(500, trackLen - 5_000);
+                const prefetchTimer = setTimeout(() => {
+                    player.data._prefetchTimer = null;
+                    const nextTrack = player.queue[0];
+                    if (!nextTrack || nextTrack.track || nextTrack._prefetched) return;
+                    // Still playing the same track?
+                    if (!player.currentTrack || trackIdentity(player.currentTrack) !== identity) return;
+                    runBackground('prefetch-next-track', async () => {
+                        try {
+                            const resolved = await player.resolveTrack(nextTrack);
+                            // Verify the track is still at the front of the queue
+                            if (resolved?.track && player.queue[0] === nextTrack) {
+                                player.queue[0].track = resolved.track;
+                                player.queue[0]._prefetched = true;
+                                if (process.env.DEBUG_PREFETCH)
+                                    console.log(`[Prefetch] ✅ pre-resolved: ${nextTrack.info?.title}`);
+                            }
+                        } catch (err) {
+                            if (process.env.DEBUG_PREFETCH)
+                                console.warn(`[Prefetch] ⚠ failed for ${nextTrack.info?.title}: ${err?.message}`);
+                        }
+                    });
+                }, prefetchDelay);
+                prefetchTimer.unref?.();
+                player.data._prefetchTimer = prefetchTimer;
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────────────
 
                 const requester = track.info?.requester;
                 const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
