@@ -6,6 +6,8 @@ const {
   ActivityType,
   ButtonBuilder,
   ButtonStyle,
+  ChannelSelectMenuBuilder,
+  ChannelType,
   Client,
   EmbedBuilder,
   GatewayIntentBits,
@@ -184,9 +186,30 @@ function panelLink(settings = automaticSettings()) {
 }
 
 function autoImagePayload(embed) {
+  const settings = automaticSettings();
+  if (settings.panelImageUrl) {
+    embed.setImage(settings.panelImageUrl);
+    return { embeds: [embed] };
+  }
   if (!fs.existsSync(AUTO_IMAGE_PATH)) return { embeds: [embed] };
   embed.setImage('attachment://Auto.png');
   return { embeds: [embed], files: [AUTO_IMAGE_PATH] };
+}
+
+// Public panel: image + buttons only — no embed text, no title, no description
+function publicPanelPayload(client) {
+  const settings = automaticSettings();
+  const components = publicPanelRows();
+  if (settings.panelImageUrl) {
+    return {
+      embeds: [new EmbedBuilder().setImage(settings.panelImageUrl).setColor(getEmbedColor(client))],
+      components,
+    };
+  }
+  if (fs.existsSync(AUTO_IMAGE_PATH)) {
+    return { files: [AUTO_IMAGE_PATH], components };
+  }
+  return { embeds: [publicPanelEmbed(client)], components };
 }
 
 function buildOwnerEmbed(client, requester) {
@@ -242,9 +265,9 @@ function ownerRows() {
         .setEmoji('🖼️')
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
-        .setCustomId('auto_admin_refresh')
-        .setLabel('Refresh')
-        .setEmoji('🔄')
+        .setCustomId('auto_admin_image')
+        .setLabel('Panel Image')
+        .setEmoji('🎨')
         .setStyle(ButtonStyle.Secondary),
     ),
     new ActionRowBuilder().addComponents(
@@ -406,8 +429,9 @@ async function refreshSavedPublicPanel(client) {
   const message = await channel?.messages?.fetch(settings.panelMessageId).catch(() => null);
   if (!message?.edit) return;
   await message.edit({
-    ...autoImagePayload(publicPanelEmbed(client)),
-    components: publicPanelRows(),
+    embeds: [],
+    files: [],
+    ...publicPanelPayload(client),
   }).catch(() => {});
 }
 
@@ -527,6 +551,22 @@ async function showSubscriptionPicker(interaction, action) {
 async function requestAddBots(interaction, code, count) {
   const entry = findSubscription(code, interaction.user.id);
   if (!entry) return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', ephemeral: true }).catch(() => {});
+
+  // Anti-spam: block duplicate pending add_bots requests within 24 hours
+  const existing = readRequests().find(r =>
+    r.type === 'add_bots' &&
+    r.userId === interaction.user.id &&
+    r.code === code &&
+    r.status === 'pending' &&
+    Date.now() - Number(r.createdAt || 0) < 24 * 60 * 60 * 1000,
+  );
+  if (existing) {
+    return interaction.reply({
+      content: '**Add Bots :** *لديك طلب إضافة بوتات معلق بالفعل. انتظر قبوله أو رفضه قبل إرسال طلب جديد.*',
+      ephemeral: true,
+    }).catch(() => {});
+  }
+
   const settings = automaticSettings();
   const unitPrice = Number(settings.botPrice || 0);
   const currency = settings.currency || 'SAR';
@@ -1064,19 +1104,96 @@ async function handleAdminPricing(interaction) {
 
 async function sendPublicPanel(interaction) {
   if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
-  const embed = publicPanelEmbed(interaction.client);
-  const payload = {
-    ...autoImagePayload(embed),
-    components: publicPanelRows(),
-  };
-  const msg = await interaction.channel.send(payload);
+
+  // Step 1: Ask owner which channel to send the panel to
+  const selectRow = new ActionRowBuilder().addComponents(
+    new ChannelSelectMenuBuilder()
+      .setCustomId('auto_panel_channel_select')
+      .setPlaceholder('اختر الروم لإرسال البانل')
+      .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement),
+  );
+  const cancelRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('auto_panel_cancel').setLabel('إلغاء').setStyle(ButtonStyle.Secondary),
+  );
+
+  return interaction.update({
+    content: '**اختر الروم الذي تريد إرسال البانل فيه:**',
+    embeds: [],
+    files: [],
+    components: [selectRow, cancelRow],
+  });
+}
+
+async function handlePanelChannelSelect(interaction) {
+  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+
+  const targetChannelId = interaction.values[0];
+  const targetChannel = await interaction.client.channels.fetch(targetChannelId).catch(() => null);
+
+  if (!targetChannel?.send) {
+    return interaction.update({
+      content: '**Channel :** *لم أستطع الوصول للروم، تأكد من الصلاحيات.*',
+      embeds: [],
+      files: [],
+      components: ownerRows(),
+    });
+  }
+
+  const msg = await targetChannel.send({ embeds: [], files: [], ...publicPanelPayload(interaction.client) });
   saveAutomaticSettings({
     panelGuildId: msg.guildId,
     panelChannelId: msg.channelId,
     panelMessageId: msg.id,
     panelUrl: msg.url,
   });
-  return interaction.reply({ content: '**Customer Panel :** *تم إرسال لوحة العملاء وتحديث رابط الأوتوماتك.*', ephemeral: true });
+
+  return interaction.update({
+    content: '',
+    ...autoImagePayload(buildOwnerEmbed(interaction.client, interaction.user)),
+    components: ownerRows(),
+  });
+}
+
+async function handleAdminImage(interaction) {
+  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+
+  const settings = automaticSettings();
+  const modal = new ModalBuilder().setCustomId('auto_image_modal').setTitle('Panel Image');
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('image_url')
+        .setLabel('رابط الصورة (فارغ = استخدم الافتراضية)')
+        .setPlaceholder('https://...')
+        .setValue(settings.panelImageUrl || '')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false),
+    ),
+  );
+  await interaction.showModal(modal);
+
+  const submit = await interaction.awaitModalSubmit({
+    filter: i => i.customId === 'auto_image_modal' && i.user.id === interaction.user.id,
+    time: 60000,
+  }).catch(() => null);
+  if (!submit) return;
+
+  const url = submit.fields.getTextInputValue('image_url').trim();
+  saveAutomaticSettings({ panelImageUrl: url || null });
+
+  await submit.reply({
+    content: url
+      ? `**Panel Image :** *تم حفظ رابط الصورة الجديد.*`
+      : `**Panel Image :** *تم المسح — سيتم استخدام الصورة الافتراضية.*`,
+    ephemeral: true,
+  });
+  await interaction.message?.edit({
+    embeds: [],
+    files: [],
+    ...autoImagePayload(buildOwnerEmbed(interaction.client, interaction.user)),
+    components: ownerRows(),
+  }).catch(() => {});
+  await refreshSavedPublicPanel(interaction.client);
 }
 
 async function handleAdminProfile(interaction) {
@@ -1241,6 +1358,15 @@ async function handleInteraction(interaction) {
     if (id === 'auto_admin_target') return handleAdminTarget(interaction);
     if (id === 'auto_admin_pricing') return handleAdminPricing(interaction);
     if (id === 'auto_admin_send') return sendPublicPanel(interaction);
+    if (id === 'auto_admin_image') return handleAdminImage(interaction);
+    if (id === 'auto_panel_cancel') {
+      if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+      return interaction.update({
+        content: '',
+        ...autoImagePayload(buildOwnerEmbed(interaction.client, interaction.user)),
+        components: ownerRows(),
+      });
+    }
     if (id === 'auto_admin_profile') return handleAdminProfile(interaction);
     if (id === 'auto_profile_back') {
       if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
@@ -1251,10 +1377,6 @@ async function handleInteraction(interaction) {
     if (id === 'auto_profile_banner') return handleProfileAction(interaction, 'banner');
     if (id === 'auto_profile_streaming') return handleProfileAction(interaction, 'streaming');
     if (id === 'auto_profile_applyall') return handleProfileAction(interaction, 'applyall');
-    if (id === 'auto_admin_refresh') {
-      if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
-      return interaction.update({ ...autoImagePayload(buildOwnerEmbed(interaction.client, interaction.user)), components: ownerRows() });
-    }
     if (id === 'auto_user_my') return showSubscriptionPicker(interaction, 'my');
     if (id === 'auto_user_renew') return showSubscriptionPicker(interaction, 'renew');
     if (id === 'auto_user_control') return showSubscriptionPicker(interaction, 'control');
@@ -1366,6 +1488,10 @@ async function handleInteraction(interaction) {
     if (id.startsWith('auto_select_pause_')) return togglePause(interaction, interaction.values[0]);
     if (id.startsWith('auto_select_control_')) return showControlPanel(interaction, interaction.values[0]);
     if (id.startsWith('auto_select_links_all_')) return sendLinks(interaction, interaction.values[0], 'all');
+  }
+
+  if (interaction.isChannelSelectMenu()) {
+    if (id === 'auto_panel_channel_select') return handlePanelChannelSelect(interaction);
   }
 }
 

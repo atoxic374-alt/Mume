@@ -1254,98 +1254,109 @@ module.exports = {
                         return acc;
                     }, { inRoom: 0, idle: 0, outside: 0, offline: 0 });
 
-                    const stockTokens = store.get('bots') || [];
-                    const allActiveTokens = store.get('tokens') || [];
+                    // Is the current user the primary owner or a bot admin?
+                    const isPrimaryOrAdmin = isAdmin || (primaryOwnerId && primaryOwnerId === userId);
+
+                    // Stock is only visible to primary owner / bot admins — not to sub-admins
+                    const stockTokens = isPrimaryOrAdmin ? (store.get('bots') || []) : [];
+                    const allActiveTokens = isPrimaryOrAdmin ? (store.get('tokens') || []) : [];
                     const tokenStock = stockTokens.length;
                     const tokenActive = allActiveTokens.length;
                     const tokenTotal = tokenStock + tokenActive;
 
+                    const panelTitle = isPrimaryOrAdmin
+                        ? `إعدادات الاشتراك — ${selectedCode}`
+                        : `إعدادات الاشتراك — ${selectedCode} *(مشرف)*`;
+
+                    const embedFields = [
+                        {
+                            name: '👑  المالك',
+                            value: primaryOwnerId ? `*<@${primaryOwnerId}>*` : '*`غير معروف`*',
+                            inline: true
+                        },
+                        {
+                            name: '🤖  البوتات',
+                            value: [
+                                `**نشط :** *\`${subTokens.length}\`*`,
+                                waitingCount ? `**انتظار :** *\`${waitingCount}\`*` : null,
+                            ].filter(Boolean).join('\n'),
+                            inline: true
+                        },
+                        {
+                            name: '🖥️  السيرفر',
+                            value: `**ID :** *\`${subTokens[0]?.Server || allSubTokens[0]?.Server || 'غير محدد'}\`*`,
+                            inline: true
+                        },
+                        {
+                            name: '⏰  الانتهاء',
+                            value: subInfo?.expirationTime
+                                ? `**الوقت :** *<t:${Math.floor(subInfo.expirationTime / 1000)}:R>*`
+                                : '**الوقت :** *`غير معروف`*',
+                            inline: true
+                        },
+                        {
+                            name: '👥  الأونرز',
+                            value: subOwnerIds.length
+                                ? subOwnerIds.map(id => `*<@${id}>*`).join('\n')
+                                : '*`لا يوجد`*',
+                            inline: true
+                        },
+                        // Tokens (stock) — primary owner / admin only
+                        ...(isPrimaryOrAdmin ? [{
+                            name: '📦  المخزون',
+                            value: [
+                                `**متاح :** *\`${tokenStock}\`*`,
+                                `**مفعّل :** *\`${tokenActive}\`*`,
+                                `**المجموع :** *\`${tokenTotal}\`*`,
+                            ].join('\n'),
+                            inline: true
+                        }] : []),
+                        {
+                            name: '🎛️  العرض',
+                            value: [
+                                `**الأزرار :** *${display.buttons ? '`ON`' : '`OFF`'}*`,
+                                `**الإيمبد :** *${display.embeds ? '`ON`' : '`OFF`'}*`,
+                                `**حالة الروم :** *${display.voiceStatus ? '`ON`' : '`OFF`'}*`,
+                            ].join('\n'),
+                            inline: true
+                        },
+                        {
+                            name: '🎵  المنصة',
+                            value: `**المصدر :** *\`${display.platform}\`*`,
+                            inline: true
+                        },
+                        {
+                            name: '🔁  العودة للروم',
+                            value: [
+                                `**الحالة :** ${backVoice.label}`,
+                                `**تفاصيل :** *${backVoice.details}*`,
+                            ].join('\n'),
+                            inline: true
+                        },
+                        {
+                            name: '💬  شات الأوامر',
+                            value: [
+                                `**الشات :** ${chat.label}`,
+                                `**تفاصيل :** *${chat.details}*`,
+                            ].join('\n'),
+                            inline: false
+                        },
+                        {
+                            name: '🔊  حالة الصوت',
+                            value: [
+                                `**في روم :** *\`${voiceStats.inRoom}\`*`,
+                                `**خامل :** *\`${voiceStats.idle}\`*`,
+                                `**خارج السيرفر :** *\`${voiceStats.outside}\`*`,
+                                `**غير متصل :** *\`${voiceStats.offline}\`*`,
+                            ].join('\n'),
+                            inline: false
+                        },
+                    ];
+
                     const embed = new EmbedBuilder()
-                        .setTitle(`إعدادات الاشتراك — ${selectedCode}`)
+                        .setTitle(panelTitle)
                         .setDescription('تحكم سريع ومنظم في البوتات، العرض، الغرف، والمنصة.')
-                        .addFields(
-                            {
-                                name: 'Owner',
-                                value: primaryOwnerId ? `*<@${primaryOwnerId}>*` : '*`غير معروف`*',
-                                inline: true
-                            },
-                            {
-                                name: 'Bots',
-                                value: [
-                                    `**Active :** *\`${subTokens.length}\`*`,
-                                    waitingCount ? `**Waiting :** *\`${waitingCount}\`*` : null,
-                                ].filter(Boolean).join('\n'),
-                                inline: true
-                            },
-                            {
-                                name: 'Server',
-                                value: `**ID :** *\`${subTokens[0]?.Server || allSubTokens[0]?.Server || 'غير محدد'}\`*`,
-                                inline: true
-                            },
-                            {
-                                name: 'Expires',
-                                value: subInfo?.expirationTime
-                                    ? `**Time :** *<t:${Math.floor(subInfo.expirationTime / 1000)}:R>*`
-                                    : '**Time :** *`غير معروف`*',
-                                inline: true
-                            },
-                            {
-                                name: 'Subscribe Owners',
-                                value: subOwnerIds.length
-                                    ? subOwnerIds.map(id => `*<@${id}>*`).join('\n')
-                                    : '*`لا يوجد`*',
-                                inline: true
-                            },
-                            {
-                                name: 'Tokens',
-                                value: [
-                                    `**Stock :** *\`${tokenStock}\`*`,
-                                    `**Active :** *\`${tokenActive}\`*`,
-                                    `**Total :** *\`${tokenTotal}\`*`,
-                                ].join('\n'),
-                                inline: true
-                            },
-                            {
-                                name: 'Display',
-                                value: [
-                                    `**Buttons :** *${display.buttons ? '`ON`' : '`OFF`'}*`,
-                                    `**Embeds :** *${display.embeds ? '`ON`' : '`OFF`'}*`,
-                                    `**Voice Status :** *${display.voiceStatus ? '`ON`' : '`OFF`'}*`,
-                                ].join('\n'),
-                                inline: true
-                            },
-                            {
-                                name: 'Platform',
-                                value: `**Source :** *\`${display.platform}\`*`,
-                                inline: true
-                            },
-                            {
-                                name: 'Back to Voice',
-                                value: [
-                                    `**Status :** ${backVoice.label}`,
-                                    `**Info :** *${backVoice.details}*`,
-                                ].join('\n'),
-                                inline: true
-                            },
-                            {
-                                name: 'Command Chat',
-                                value: [
-                                    `**Channel :** ${chat.label}`,
-                                    `**Info :** *${chat.details}*`,
-                                ].join('\n'),
-                                inline: false
-                            },
-                            {
-                                name: 'Voice Status',
-                                value: [
-                                    `**In Room :** *\`${voiceStats.inRoom}\`*`,
-                                    `**Idle :** *\`${voiceStats.idle}\`*`,
-                                    `**Outside :** *\`${voiceStats.outside}\`*`,
-                                    `**Offline :** *\`${voiceStats.offline}\`*`,
-                                ].join('\n'),
-                                inline: false
-                            },
-                        )
+                        .addFields(embedFields)
                         .setColor(getEmbedColor(client));
                     
                     embeds.push(embed);
@@ -1353,22 +1364,22 @@ module.exports = {
                     const row1 = new ActionRowBuilder().addComponents(
                         new StringSelectMenuBuilder()
                             .setCustomId(`stg_${mid}_main_menu`)
-                            .setPlaceholder('Select settings section')
+                            .setPlaceholder('اختر القسم')
                             .addOptions([
-                                { label: 'Appearance', value: 'APPEARANCE', description: 'تغيير الصورة، البنر، والحالة لكل البوتات' },
-                                { label: 'Rooms', value: 'ROOMS', description: 'الغرف، التوزيع الذكي، الروابط، وشات الأوامر' },
-                                { label: 'Display', value: 'DISPLAY', description: 'تفعيل أو تعطيل الأزرار والإيمبد' },
-                                { label: 'Platform', value: 'PLATFORM', description: 'اختيار منصة البحث والتشغيل' },
+                                { label: 'المظهر', value: 'APPEARANCE', description: 'تغيير الصورة، البنر، والحالة لكل البوتات' },
+                                { label: 'الغرف', value: 'ROOMS', description: 'الغرف، التوزيع الذكي، الروابط، وشات الأوامر' },
+                                { label: 'العرض', value: 'DISPLAY', description: 'تفعيل أو تعطيل الأزرار والإيمبد' },
+                                { label: 'المنصة', value: 'PLATFORM', description: 'اختيار منصة البحث والتشغيل' },
                                 ...(canManageSubscriptionOwners(selectedCode)
-                                    ? [{ label: 'Subscribe Owners', value: 'OWNERS', description: 'إضافة وإزالة أونرز يتحكمون ببوتات الاشتراك' }]
+                                    ? [{ label: 'الأونرز', value: 'OWNERS', description: 'إضافة وإزالة أونرز يتحكمون ببوتات الاشتراك' }]
                                     : []),
                             ])
                     );
                     const row2 = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`stg_${mid}_close`).setLabel('Close').setStyle(ButtonStyle.Danger)
+                        new ButtonBuilder().setCustomId(`stg_${mid}_close`).setLabel('إغلاق').setStyle(ButtonStyle.Danger)
                     );
                     if (uniqueCodes.length > 1) {
-                        row2.addComponents(new ButtonBuilder().setCustomId(`stg_${mid}_back_to_select`).setLabel('Change Subscription').setStyle(ButtonStyle.Secondary));
+                        row2.addComponents(new ButtonBuilder().setCustomId(`stg_${mid}_back_to_select`).setLabel('تغيير الاشتراك').setStyle(ButtonStyle.Secondary));
                     }
                     components.push(row1, row2);
                 }
