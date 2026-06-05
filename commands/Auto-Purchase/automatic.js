@@ -53,8 +53,46 @@ function automaticSettings() {
     panelUrl: null,
     botPrice: 0,
     currency: 'SAR',
+    subBotPrefix: 'music',
+    subBotAvatar: null,
+    subBotBanner: null,
+    subBotStatus: null,
     ...readJson(AUTO_SETTINGS_FILE, {}),
   };
+}
+
+function subBotProfile() {
+  const s = automaticSettings();
+  return {
+    prefix: s.subBotPrefix || 'music',
+    avatar: s.subBotAvatar || null,
+    banner: s.subBotBanner || null,
+    status: s.subBotStatus || null,
+  };
+}
+
+async function applyProfileToToken(token, profile) {
+  const { Client: DClient, GatewayIntentBits: GI } = require('discord.js');
+  const axios = require('axios');
+  const bc = new DClient({ intents: [GI.Guilds] });
+  try {
+    await bc.login(token);
+    const num = Math.floor(1000 + Math.random() * 9000);
+    await bc.user.setUsername(`${profile.prefix}-${num}`).catch(() => {});
+    if (profile.avatar) await bc.user.setAvatar(profile.avatar).catch(() => {});
+    if (profile.banner) {
+      try {
+        const resp = await axios.get(profile.banner, { responseType: 'arraybuffer' });
+        const b64 = Buffer.from(resp.data).toString('base64');
+        await axios.patch('https://discord.com/api/v9/users/@me',
+          { banner: `data:image/png;base64,${b64}` },
+          { headers: { Authorization: `Bot ${token}` } }
+        );
+      } catch {}
+    }
+  } finally {
+    bc.destroy().catch(() => {});
+  }
 }
 
 function saveAutomaticSettings(next) {
@@ -1044,33 +1082,33 @@ async function sendPublicPanel(interaction) {
 async function handleAdminProfile(interaction) {
   if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
 
-  const cfg = readJson(path.join(process.cwd(), 'settings', 'config.json'), {});
-  const currentBotsname = Array.isArray(cfg.Botsname) ? cfg.Botsname[0] : (cfg.Botsname || 'غير محدد');
-  const currentStatus   = Array.isArray(cfg.statuses)  ? cfg.statuses[0]  : (cfg.statuses  || 'غير محدد');
+  const profile = subBotProfile();
+  const stock = (store.get('bots') || []).length;
 
   const profileEmbed = new EmbedBuilder()
     .setColor(getEmbedColor(interaction.client))
-    .setTitle('Bot Profile')
+    .setTitle('🤖  Sub-Bot Profile')
     .setDescription([
-      `**Name :** *اسم البوت الرئيسي الحالي — \`${interaction.client.user.username}\`*`,
+      '> إعدادات البوتات الفرعية — تُطبَّق تلقائياً عند إضافة أي توكن جديد.',
       '',
-      `**Bots Prefix :** *البادئة المستخدمة لأسماء البوتات الفرعية — \`${currentBotsname}\`*`,
+      `**🏷️ Prefix :** *\`${profile.prefix}\`  — البادئة قبل الأرقام العشوائية في الاسم*`,
       '',
-      `**Streaming :** *نص حالة البوت التلقائية الحالي — \`${currentStatus}\`*`,
+      `**🖼️ Avatar :** *${profile.avatar ? `[رابط محفوظ](${profile.avatar})` : '`غير محدد`'}*`,
       '',
-      '**Avatar :** *تغيير صورة البوت الرئيسي.*',
+      `**🎨 Banner :** *${profile.banner ? `[رابط محفوظ](${profile.banner})` : '`غير محدد`'}*`,
       '',
-      '**Banner :** *تغيير بنر البوت الرئيسي.*',
+      `**🎙️ Streaming :** *\`${profile.status || 'غير محدد'}\`*`,
+      '',
+      `**📦 في الستوك :** *\`${stock}\` بوت — زر Apply يطبق الإعدادات عليهم جميعاً*`,
     ].join('\n'))
-    .setThumbnail(interaction.client.user.displayAvatarURL({ dynamic: true, size: 256 }))
-    .setFooter({ text: `${interaction.client.user.username} | Bot Profile`, iconURL: interaction.client.user.displayAvatarURL({ dynamic: true }) });
+    .setFooter({ text: `${interaction.client.user.username} | Sub-Bot Profile`, iconURL: interaction.client.user.displayAvatarURL({ dynamic: true }) });
 
   const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('auto_profile_name').setLabel('Name').setEmoji('📝').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('auto_profile_botsname').setLabel('Bots Prefix').setEmoji('🏷️').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('auto_profile_streaming').setLabel('Streaming').setEmoji('🎙️').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('auto_profile_botsname').setLabel('Prefix').setEmoji('🏷️').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('auto_profile_avatar').setLabel('Avatar').setEmoji('🖼️').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('auto_profile_banner').setLabel('Banner').setEmoji('🎨').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('auto_profile_streaming').setLabel('Streaming').setEmoji('🎙️').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('auto_profile_applyall').setLabel('Apply to All').setEmoji('🔄').setStyle(ButtonStyle.Success),
   );
   const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('auto_profile_back').setLabel('Back').setEmoji('◀️').setStyle(ButtonStyle.Primary),
@@ -1081,102 +1119,16 @@ async function handleAdminProfile(interaction) {
 
 async function handleProfileAction(interaction, action) {
   if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
-  const client = interaction.client;
-
-  if (action === 'name') {
-    const modal = new ModalBuilder().setCustomId('auto_profile_modal_name').setTitle('Set Bot Name');
-    modal.addComponents(new ActionRowBuilder().addComponents(
-      new TextInputBuilder().setCustomId('name').setLabel('New Bot Name').setPlaceholder('Max 32 characters').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(32),
-    ));
-    await interaction.showModal(modal);
-    const submit = await interaction.awaitModalSubmit({ filter: i => i.customId === 'auto_profile_modal_name' && i.user.id === interaction.user.id, time: 60000 }).catch(() => null);
-    if (!submit) return;
-    try {
-      await client.user.setUsername(submit.fields.getTextInputValue('name').trim().slice(0, 32));
-      return submit.reply({ content: `**Name :** *تم تحديث اسم البوت إلى \`${client.user.username}\` بنجاح.*`, ephemeral: true });
-    } catch (err) {
-      return submit.reply({ content: `**Name :** *فشل تغيير الاسم: ${err?.message || 'Unknown error'}*`, ephemeral: true });
-    }
-  }
-
-  if (action === 'avatar') {
-    const modal = new ModalBuilder().setCustomId('auto_profile_modal_avatar').setTitle('Set Bot Avatar');
-    modal.addComponents(new ActionRowBuilder().addComponents(
-      new TextInputBuilder().setCustomId('url').setLabel('Avatar Image URL').setPlaceholder('https://...').setStyle(TextInputStyle.Short).setRequired(true),
-    ));
-    await interaction.showModal(modal);
-    const submit = await interaction.awaitModalSubmit({ filter: i => i.customId === 'auto_profile_modal_avatar' && i.user.id === interaction.user.id, time: 60000 }).catch(() => null);
-    if (!submit) return;
-    try {
-      await client.user.setAvatar(submit.fields.getTextInputValue('url').trim());
-      const { refreshEmbedColor } = require('../../utils/embedColor');
-      refreshEmbedColor(client).catch(() => {});
-      return submit.reply({ content: '**Avatar :** *تم تحديث صورة البوت بنجاح.*', ephemeral: true });
-    } catch (err) {
-      return submit.reply({ content: `**Avatar :** *فشل تغيير الصورة: ${err?.message || 'Unknown error'}*`, ephemeral: true });
-    }
-  }
-
-  if (action === 'banner') {
-    const modal = new ModalBuilder().setCustomId('auto_profile_modal_banner').setTitle('Set Bot Banner');
-    modal.addComponents(new ActionRowBuilder().addComponents(
-      new TextInputBuilder().setCustomId('url').setLabel('Banner Image URL').setPlaceholder('https://...').setStyle(TextInputStyle.Short).setRequired(true),
-    ));
-    await interaction.showModal(modal);
-    const submit = await interaction.awaitModalSubmit({ filter: i => i.customId === 'auto_profile_modal_banner' && i.user.id === interaction.user.id, time: 60000 }).catch(() => null);
-    if (!submit) return;
-    try {
-      await client.user.setBanner(submit.fields.getTextInputValue('url').trim());
-      return submit.reply({ content: '**Banner :** *تم تحديث بنر البوت بنجاح.*', ephemeral: true });
-    } catch (err) {
-      return submit.reply({ content: `**Banner :** *فشل تغيير البنر: ${err?.message || 'Unknown error'}*`, ephemeral: true });
-    }
-  }
-
-  if (action === 'streaming') {
-    const configPath = path.join(process.cwd(), 'settings', 'config.json');
-    const cfg = readJson(configPath, {});
-    const currentStatus = Array.isArray(cfg.statuses) ? cfg.statuses[0] : (cfg.statuses || '');
-    const twitchUrl = (Array.isArray(cfg.TwitchUrl) ? cfg.TwitchUrl[0] : cfg.TwitchUrl) || 'https://www.twitch.tv/tnbeh';
-
-    const modal = new ModalBuilder().setCustomId('auto_profile_modal_streaming').setTitle('Set Streaming Status');
-    modal.addComponents(new ActionRowBuilder().addComponents(
-      new TextInputBuilder()
-        .setCustomId('status')
-        .setLabel('Streaming Status Text')
-        .setPlaceholder('Name shown in streaming status')
-        .setValue(currentStatus)
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true),
-    ));
-    await interaction.showModal(modal);
-    const submit = await interaction.awaitModalSubmit({ filter: i => i.customId === 'auto_profile_modal_streaming' && i.user.id === interaction.user.id, time: 60000 }).catch(() => null);
-    if (!submit) return;
-    const statusText = submit.fields.getTextInputValue('status').trim();
-    try {
-      client.user.setPresence({
-        activities: [{ name: statusText, type: ActivityType.Streaming, url: twitchUrl }],
-        status: 'online',
-      });
-      writeJson(configPath, { ...cfg, statuses: [statusText] });
-      return submit.reply({ content: `**Streaming :** *تم تحديث حالة البوت إلى \`${statusText}\` وحُفظت بشكل دائم.*`, ephemeral: true });
-    } catch (err) {
-      return submit.reply({ content: `**Streaming :** *فشل تحديث الحالة: ${err?.message || 'Unknown error'}*`, ephemeral: true });
-    }
-  }
 
   if (action === 'botsname') {
-    const configPath = path.join(process.cwd(), 'settings', 'config.json');
-    const cfg = readJson(configPath, {});
-    const currentBotsname = Array.isArray(cfg.Botsname) ? cfg.Botsname[0] : (cfg.Botsname || '');
-
-    const modal = new ModalBuilder().setCustomId('auto_profile_modal_botsname').setTitle('Set Bots Prefix');
+    const profile = subBotProfile();
+    const modal = new ModalBuilder().setCustomId('auto_profile_modal_botsname').setTitle('Sub-Bot Name Prefix');
     modal.addComponents(new ActionRowBuilder().addComponents(
       new TextInputBuilder()
         .setCustomId('botsname')
-        .setLabel('Bots Name Prefix')
-        .setPlaceholder('اسم البادئة (مثال: music)')
-        .setValue(currentBotsname)
+        .setLabel('Prefix')
+        .setPlaceholder('مثال: music')
+        .setValue(profile.prefix)
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
         .setMaxLength(20),
@@ -1184,13 +1136,88 @@ async function handleProfileAction(interaction, action) {
     await interaction.showModal(modal);
     const submit = await interaction.awaitModalSubmit({ filter: i => i.customId === 'auto_profile_modal_botsname' && i.user.id === interaction.user.id, time: 60000 }).catch(() => null);
     if (!submit) return;
-    const newBotsname = submit.fields.getTextInputValue('botsname').trim();
-    try {
-      writeJson(configPath, { ...cfg, Botsname: [newBotsname] });
-      return submit.reply({ content: `**Bots Prefix :** *تم تحديث البادئة إلى \`${newBotsname}\` — ستُستخدم هذه البادئة عند إعادة تسمية البوتات الفرعية.*`, ephemeral: true });
-    } catch (err) {
-      return submit.reply({ content: `**Bots Prefix :** *فشل الحفظ: ${err?.message || 'Unknown error'}*`, ephemeral: true });
+    const val = submit.fields.getTextInputValue('botsname').trim();
+    saveAutomaticSettings({ subBotPrefix: val });
+    return submit.reply({ content: `**Prefix :** *تم حفظ البادئة \`${val}\` — ستُطبَّق على البوتات الجديدة عند إضافتها.*`, ephemeral: true });
+  }
+
+  if (action === 'avatar') {
+    const profile = subBotProfile();
+    const modal = new ModalBuilder().setCustomId('auto_profile_modal_avatar').setTitle('Sub-Bot Avatar URL');
+    modal.addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('url')
+        .setLabel('Avatar Image URL')
+        .setPlaceholder('https://...')
+        .setValue(profile.avatar || '')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true),
+    ));
+    await interaction.showModal(modal);
+    const submit = await interaction.awaitModalSubmit({ filter: i => i.customId === 'auto_profile_modal_avatar' && i.user.id === interaction.user.id, time: 60000 }).catch(() => null);
+    if (!submit) return;
+    const val = submit.fields.getTextInputValue('url').trim();
+    saveAutomaticSettings({ subBotAvatar: val });
+    return submit.reply({ content: `**Avatar :** *تم حفظ رابط الصورة — ستُطبَّق على البوتات الجديدة عند إضافتها.*`, ephemeral: true });
+  }
+
+  if (action === 'banner') {
+    const profile = subBotProfile();
+    const modal = new ModalBuilder().setCustomId('auto_profile_modal_banner').setTitle('Sub-Bot Banner URL');
+    modal.addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('url')
+        .setLabel('Banner Image URL')
+        .setPlaceholder('https://...')
+        .setValue(profile.banner || '')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true),
+    ));
+    await interaction.showModal(modal);
+    const submit = await interaction.awaitModalSubmit({ filter: i => i.customId === 'auto_profile_modal_banner' && i.user.id === interaction.user.id, time: 60000 }).catch(() => null);
+    if (!submit) return;
+    const val = submit.fields.getTextInputValue('url').trim();
+    saveAutomaticSettings({ subBotBanner: val });
+    return submit.reply({ content: `**Banner :** *تم حفظ رابط البنر — سيُطبَّق على البوتات الجديدة عند إضافتها.*`, ephemeral: true });
+  }
+
+  if (action === 'streaming') {
+    const profile = subBotProfile();
+    const modal = new ModalBuilder().setCustomId('auto_profile_modal_streaming').setTitle('Sub-Bot Streaming Status');
+    modal.addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('status')
+        .setLabel('Streaming Status Text')
+        .setPlaceholder('النص الظاهر في حالة البوتات الفرعية')
+        .setValue(profile.status || '')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false),
+    ));
+    await interaction.showModal(modal);
+    const submit = await interaction.awaitModalSubmit({ filter: i => i.customId === 'auto_profile_modal_streaming' && i.user.id === interaction.user.id, time: 60000 }).catch(() => null);
+    if (!submit) return;
+    const val = submit.fields.getTextInputValue('status').trim();
+    saveAutomaticSettings({ subBotStatus: val || null });
+    return submit.reply({ content: `**Streaming :** *تم حفظ الحالة \`${val || '(فارغة)'}\` — ستُطبَّق على البوتات الجديدة.*`, ephemeral: true });
+  }
+
+  if (action === 'applyall') {
+    const bots = store.get('bots') || [];
+    if (bots.length === 0) return interaction.reply({ content: '**Apply :** *لا توجد بوتات في الستوك.*', ephemeral: true });
+    await interaction.reply({ content: `**Apply :** *جاري تطبيق الإعدادات على \`${bots.length}\` بوت... قد يستغرق بعض الوقت.*`, ephemeral: true });
+    const profile = subBotProfile();
+    let done = 0;
+    let failed = 0;
+    for (const bot of bots) {
+      try {
+        await applyProfileToToken(bot.token, profile);
+        done++;
+        await new Promise(r => setTimeout(r, 5000));
+      } catch {
+        failed++;
+      }
     }
+    return interaction.followUp({ content: `**Apply :** *تم ✅ \`${done}\` بوت | فشل ❌ \`${failed}\` بوت.*`, ephemeral: true }).catch(() => {});
   }
 }
 
@@ -1208,11 +1235,11 @@ async function handleInteraction(interaction) {
       if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
       return interaction.update({ ...autoImagePayload(buildOwnerEmbed(interaction.client, interaction.user)), components: ownerRows() });
     }
-    if (id === 'auto_profile_name') return handleProfileAction(interaction, 'name');
     if (id === 'auto_profile_botsname') return handleProfileAction(interaction, 'botsname');
     if (id === 'auto_profile_avatar') return handleProfileAction(interaction, 'avatar');
     if (id === 'auto_profile_banner') return handleProfileAction(interaction, 'banner');
     if (id === 'auto_profile_streaming') return handleProfileAction(interaction, 'streaming');
+    if (id === 'auto_profile_applyall') return handleProfileAction(interaction, 'applyall');
     if (id === 'auto_admin_refresh') {
       if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
       return interaction.update({ ...autoImagePayload(buildOwnerEmbed(interaction.client, interaction.user)), components: ownerRows() });

@@ -1,5 +1,14 @@
 const path = require('path');
-const { owners, logChannelId, Botsname } = require(`${process.cwd()}/settings/config`);
+const fs = require('fs');
+const { owners, logChannelId } = require(`${process.cwd()}/settings/config`);
+
+function getSubBotProfile() {
+  const file = path.join(process.cwd(), 'settings', 'automatic.json');
+  try {
+    const saved = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+    return { prefix: saved.subBotPrefix || 'music', avatar: saved.subBotAvatar || null };
+  } catch { return { prefix: 'music', avatar: null }; }
+}
 const { EmbedBuilder, Client, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
@@ -137,9 +146,9 @@ async function executeRemoval(code, message, client) {
         const botClient = new Client({ intents: [GatewayIntentBits.Guilds] });
         await botClient.login(t.token);
         for (const [id, guild] of botClient.guilds.cache) { await guild.leave(); }
-        const musicAvatarPath = path.join(process.cwd(), 'settings', 'image', 'music.png');
-        if (fs.existsSync(musicAvatarPath)) await botClient.user.setAvatar(musicAvatarPath);
-        const randomName = `${Botsname}-${Math.floor(Math.random() * 9000) + 1000}`;
+        const profile = getSubBotProfile();
+        if (profile.avatar) await botClient.user.setAvatar(profile.avatar).catch(() => {});
+        const randomName = `${profile.prefix}-${Math.floor(Math.random() * 9000) + 1000}`;
         await botClient.user.setUsername(randomName);
         await botClient.destroy();
       } catch (e) { console.error(`Error cleaning bot ${t.token.slice(0,10)}...:`, e); }

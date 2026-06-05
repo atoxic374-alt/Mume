@@ -1,8 +1,17 @@
 const fs = require('fs');
 const store = require('../../utils/store');
-const { owners, emco, logChannelId, prefix, Services, price, Botsname } = require(`${process.cwd()}/settings/config`);
+const { owners, emco, logChannelId, prefix, Services, price } = require(`${process.cwd()}/settings/config`);
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js'); 
 const path = require('path');
+const axios = require('axios');
+
+function getSubBotProfile() {
+  const file = path.join(process.cwd(), 'settings', 'automatic.json');
+  try {
+    const saved = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+    return { prefix: saved.subBotPrefix || 'music', avatar: saved.subBotAvatar || null, banner: saved.subBotBanner || null };
+  } catch { return { prefix: 'music', avatar: null, banner: null }; }
+}
 
 module.exports = {
     name: 'musicrestart',
@@ -29,18 +38,22 @@ module.exports = {
                     await botClient.login(token);
                     console.log(`Logged in as ${botClient.user.tag}`);
 
+                    const profile = getSubBotProfile();
                     const randomNumber = generateRandomNumber();
-                    await botClient.user.setUsername(`${Botsname}-${randomNumber}`);
+                    await botClient.user.setUsername(`${profile.prefix}-${randomNumber}`);
 
-                    const musicAvatar = path.join(process.cwd(), 'settings', 'image', 'music.png');
-                    await botClient.user.setAvatar(musicAvatar);
+                    if (profile.avatar) await botClient.user.setAvatar(profile.avatar).catch(() => {});
 
-                    const bannerPath = path.join(process.cwd(), 'settings', 'image', 'banner.png');
-                    const bannerImage = fs.readFileSync(bannerPath);
-                    const base64BannerImage = bannerImage.toString('base64');
-                    const bannerUrl = `data:image/png;base64,${base64BannerImage}`;
-
-                    await botClient.user.setBanner(bannerUrl); 
+                    if (profile.banner) {
+                      try {
+                        const resp = await axios.get(profile.banner, { responseType: 'arraybuffer' });
+                        const b64 = Buffer.from(resp.data).toString('base64');
+                        await axios.patch('https://discord.com/api/v9/users/@me',
+                          { banner: `data:image/png;base64,${b64}` },
+                          { headers: { Authorization: `Bot ${token}` } }
+                        );
+                      } catch {}
+                    }
 
                 } catch (error) {
                     console.error(`Error setting avatar or banner for bot with token ${token}:`, error);

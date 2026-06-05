@@ -1,4 +1,12 @@
-const { owners, logChannelId, Botsname } = require(`${process.cwd()}/settings/config`);
+const { owners, logChannelId } = require(`${process.cwd()}/settings/config`);
+
+function getSubBotProfile() {
+  const AUTO_SETTINGS_FILE = require('path').join(process.cwd(), 'settings', 'automatic.json');
+  try {
+    const saved = require('fs').existsSync(AUTO_SETTINGS_FILE) ? JSON.parse(require('fs').readFileSync(AUTO_SETTINGS_FILE, 'utf8')) : {};
+    return { prefix: saved.subBotPrefix || 'music', avatar: saved.subBotAvatar || null, banner: saved.subBotBanner || null };
+  } catch { return { prefix: 'music', avatar: null, banner: null }; }
+}
 const {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ModalBuilder, TextInputBuilder, TextInputStyle,
@@ -284,9 +292,9 @@ async function executeRemoval(code, interaction, client, prompt) {
         const bc = new Client({ intents: [GatewayIntentBits.Guilds] });
         await bc.login(t.token);
         for (const [, g] of bc.guilds.cache) { await g.leave().catch(() => {}); }
-        const imgPath = path.join(process.cwd(), 'settings', 'image', 'music.png');
-        if (fs.existsSync(imgPath)) await bc.user.setAvatar(imgPath).catch(() => {});
-        await bc.user.setUsername(`${Botsname}-${Math.floor(Math.random() * 9000) + 1000}`).catch(() => {});
+        const profile = getSubBotProfile();
+        if (profile.avatar) await bc.user.setAvatar(profile.avatar).catch(() => {});
+        await bc.user.setUsername(`${profile.prefix}-${Math.floor(Math.random() * 9000) + 1000}`).catch(() => {});
         await bc.destroy();
       } catch (e) { console.error(`[Subs] cleanup bot error:`, e.message); }
     }
@@ -427,23 +435,23 @@ async function handleAddTokens(interaction, client) {
   const timeStr = `${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, '0')}`;
   await sub.followUp({ content: `✅ تم إضافة **${validTokens.length}** بوت. سيستغرق تغيير الاسم والصورة (~${timeStr}) دقيقة.`, ephemeral: true }).catch(() => {});
 
-  const SWAY_AVATAR_URL = 'https://j.top4top.io/p_3715crnb61.png';
-  const SWAY_BANNER_URL = 'https://c.top4top.io/p_3715wqk8w2.png';
-
   setTimeout(async () => {
+    const profile = getSubBotProfile();
     for (const token of validTokens) {
       try {
         const bc = new Client({ intents: botIntents });
         await bc.login(token);
         for (const [, g] of bc.guilds.cache) { await g.leave().catch(() => {}); }
         const num = Math.floor(1000 + Math.random() * 9000);
-        await bc.user.setUsername(`${Botsname}-${num}`).catch(() => {});
-        await bc.user.setAvatar(SWAY_AVATAR_URL).catch(() => {});
-        try {
-          const resp = await axios.get(SWAY_BANNER_URL, { responseType: 'arraybuffer' });
-          const b64 = Buffer.from(resp.data).toString('base64');
-          await axios.patch('https://discord.com/api/v9/users/@me', { banner: `data:image/png;base64,${b64}` }, { headers: { Authorization: `Bot ${token}` } });
-        } catch {}
+        await bc.user.setUsername(`${profile.prefix}-${num}`).catch(() => {});
+        if (profile.avatar) await bc.user.setAvatar(profile.avatar).catch(() => {});
+        if (profile.banner) {
+          try {
+            const resp = await axios.get(profile.banner, { responseType: 'arraybuffer' });
+            const b64 = Buffer.from(resp.data).toString('base64');
+            await axios.patch('https://discord.com/api/v9/users/@me', { banner: `data:image/png;base64,${b64}` }, { headers: { Authorization: `Bot ${token}` } });
+          } catch {}
+        }
         await bc.destroy();
       } catch (e) { console.error('[Subs] token setup error:', e.message); }
     }

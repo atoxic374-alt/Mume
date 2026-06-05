@@ -3,10 +3,20 @@ const store = require('../../utils/store');
 const path = require('path');
 const axios = require('axios');
 
-const SWAY_AVATAR_URL = 'https://j.top4top.io/p_3715crnb61.png';
-const SWAY_BANNER_URL = 'https://c.top4top.io/p_3715wqk8w2.png';
 const { Client, GatewayIntentBits } = require('discord.js');
-const { owners, prefix, Botsname } = require(`${process.cwd()}/settings/config`);
+const { owners, prefix } = require(`${process.cwd()}/settings/config`);
+
+function getSubBotProfile() {
+  const AUTO_SETTINGS_FILE = path.join(process.cwd(), 'settings', 'automatic.json');
+  try {
+    const saved = fs.existsSync(AUTO_SETTINGS_FILE) ? JSON.parse(fs.readFileSync(AUTO_SETTINGS_FILE, 'utf8')) : {};
+    return {
+      prefix: saved.subBotPrefix || 'music',
+      avatar: saved.subBotAvatar || null,
+      banner: saved.subBotBanner || null,
+    };
+  } catch { return { prefix: 'music', avatar: null, banner: null }; }
+}
 
 module.exports = {
   name: 'musicaddtokens',
@@ -85,23 +95,19 @@ module.exports = {
               });
             }
 
+            const profile = getSubBotProfile();
             const randomNumber = generateRandomNumber();
-            await botClient.user.setUsername(`${Botsname}-${randomNumber}`);
-            
-            // تغيير صورة البوت
-            await botClient.user.setAvatar(SWAY_AVATAR_URL);
+            await botClient.user.setUsername(`${profile.prefix}-${randomNumber}`);
 
-// تغيير بنر البوت
-            const bannerResp = await axios.get(SWAY_BANNER_URL, { responseType: 'arraybuffer' });
-            const base64_banner_image = Buffer.from(bannerResp.data).toString('base64');
-            
-await axios.patch(`https://discord.com/api/v9/users/@me`, {
-              banner: `data:image/png;base64,${base64_banner_image}`
-            }, {
-              headers: {
-                'Authorization': `Bot ${tokenValue}`
-              }
-            });
+            if (profile.avatar) await botClient.user.setAvatar(profile.avatar);
+
+            if (profile.banner) {
+              const bannerResp = await axios.get(profile.banner, { responseType: 'arraybuffer' });
+              const base64_banner_image = Buffer.from(bannerResp.data).toString('base64');
+              await axios.patch(`https://discord.com/api/v9/users/@me`, {
+                banner: `data:image/png;base64,${base64_banner_image}`
+              }, { headers: { 'Authorization': `Bot ${tokenValue}` } });
+            }
 
             await botClient.destroy();
           } catch (avatarError) {
