@@ -15,7 +15,7 @@ const {
   TextInputStyle,
 } = require('discord.js');
 
-const { owners } = require(`${process.cwd()}/settings/config`);
+const { owners } = require('../../config');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
 const { getEmbedColor } = require('../../utils/embedColor');

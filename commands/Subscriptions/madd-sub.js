@@ -1,4 +1,4 @@
-const { owners, logChannelId } = require(`${process.cwd()}/settings/config`);
+const { owners, logChannelId } = require('../../config');
 const {
   EmbedBuilder,
   ActionRowBuilder,

@@ -1,7 +1,7 @@
 const fs = require('fs');
 const store = require('../../utils/store');
 const { Client, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, ComponentType, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
-const { owners, prefix } = require(`${process.cwd()}/settings/config`);
+const { owners, prefix } = require('../../config');
 const { getEmbedColor } = require('../../utils/embedColor');
 const axios = require("axios");
 const db = require('../../utils/db');

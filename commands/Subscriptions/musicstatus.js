@@ -1,4 +1,4 @@
-const { owners } = require(`${process.cwd()}/settings/config`);
+const { owners } = require('../../config');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const store = require('../../utils/store');
 const { getEmbedColor } = require('../../utils/embedColor');

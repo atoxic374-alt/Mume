@@ -4,7 +4,7 @@ const path = require('path');
 const axios = require('axios');
 
 const { Client, GatewayIntentBits } = require('discord.js');
-const { owners, prefix } = require(`${process.cwd()}/settings/config`);
+const { owners, prefix } = require('../../config');
 
 function getSubBotProfile() {
   const AUTO_SETTINGS_FILE = path.join(process.cwd(), 'settings', 'automatic.json');

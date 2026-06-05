@@ -1,6 +1,6 @@
 const fs = require('fs');
 const store = require('../../utils/store');
-const { owners, emco, logChannelId, prefix, Services, price } = require(`${process.cwd()}/settings/config`);
+const { owners, emco, logChannelId, prefix, Services, price } = require('../../config');
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js'); 
 const path = require('path');
 const axios = require('axios');

@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { owners, logChannelId } = require(`${process.cwd()}/settings/config`);
+const { owners, logChannelId } = require('../../config');
 
 function getSubBotProfile() {
   const file = path.join(process.cwd(), 'settings', 'automatic.json');

@@ -1,4 +1,4 @@
-const { owners, logChannelId } = require(`${process.cwd()}/settings/config`);
+const { owners, logChannelId } = require('../../config');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const ms = require('ms');
 const store = require('../../utils/store');

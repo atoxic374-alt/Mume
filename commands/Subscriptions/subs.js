@@ -1,4 +1,4 @@
-const { owners, logChannelId } = require(`${process.cwd()}/settings/config`);
+const { owners, logChannelId } = require('../../config');
 
 function getSubBotProfile() {
   const AUTO_SETTINGS_FILE = require('path').join(process.cwd(), 'settings', 'automatic.json');
