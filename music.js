@@ -2778,62 +2778,119 @@ module.exports = {
                     if (!args[0]) return;
                     if (args[0] == 'help') {
                         const botOwnerId = tokenObj.client;
-                        const button1 = new ButtonBuilder()
-                            .setLabel('Support Server')
-                            .setStyle('Link')
-                            .setURL('https://discord.gg/ens');
+                        const embedColor = getEmbedColor(TrueMusic);
+                        const avatarUrl = message.author.displayAvatarURL({ dynamic: true, size: 256 });
 
-                        const row1 = new ActionRowBuilder().addComponents(button1);
-                        const helpEmbed = new EmbedBuilder()
-                            .setColor(getEmbedColor(TrueMusic))
-                            .setThumbnail(message.author.displayAvatarURL({ dynamic: true, size: 256 }))
-                            .setDescription([
-                                '***Music Commands :***',
-                                '',
-                                '``play`` : Play a song or add it to the queue',
-                                '``search`` : Search across the enabled music platforms',
-                                '``autoplay`` : Toggle auto music player',
-                                '``stop`` : Stop the music and clear playback',
-                                '``skip`` : Skip the current song',
-                                '``volume`` : Set the music volume',
-                                '``nowplaying`` : Show the song playing now',
-                                '``queue`` : Show the server playlist',
-                                '``loop`` : Loop the current song',
-                                '``pause`` : Pause the music',
-                                '``seek`` : Seek to a specific time',
-                                '``forward`` : Move forward in the current song',
-                                '``remove`` : Remove a song from the queue',
-                                '``mylikes`` : Show your liked songs',
-                                '',
-                                '***Owner Commands :***',
-                                '',
-                                '``join`` : Set bot voice channel & enable 24/7',
-                                '``leave`` : Leave voice channel & disable 24/7',
-                                '``setchat`` : Set commands chat',
-                                '``unchat`` : Clear commands chat',
-                                '``setprefix`` : Change the bot prefix',
-                                '``unsetprefix`` : Remove the bot prefix',
-                                '``settings`` : Display subscription bot settings',
-                                '``setname`` : Change the bot name',
-                                '``setavatar`` : Change the bot avatar',
-                                '``streaming`` : Change the bot status',
-                                '``restart`` : Restart the bot',
-                                '``ping`` : Show bot response speed',
-                            ].join('\n'));
+                        const EN_DESC = [
+                            '***Music Commands :***',
+                            '',
+                            '``play`` : Play a song or add it to the queue',
+                            '``search`` : Search across the enabled music platforms',
+                            '``autoplay`` : Toggle auto music player',
+                            '``stop`` : Stop the music and clear playback',
+                            '``skip`` : Skip the current song',
+                            '``volume`` : Set the music volume',
+                            '``nowplaying`` : Show the song playing now',
+                            '``queue`` : Show the server playlist',
+                            '``loop`` : Loop the current song',
+                            '``pause`` : Pause the music',
+                            '``seek`` : Seek to a specific time',
+                            '``forward`` : Move forward in the current song',
+                            '``remove`` : Remove a song from the queue',
+                            '``mylikes`` : Show your liked songs',
+                            '',
+                            '***Owner Commands :***',
+                            '',
+                            '``join`` : Set bot voice channel & enable 24/7',
+                            '``leave`` : Leave voice channel & disable 24/7',
+                            '``setchat`` : Set commands chat',
+                            '``unchat`` : Clear commands chat',
+                            '``setprefix`` : Change the bot prefix',
+                            '``unsetprefix`` : Remove the bot prefix',
+                            '``settings`` : Display subscription bot settings',
+                            '``setname`` : Change the bot name',
+                            '``setavatar`` : Change the bot avatar',
+                            '``streaming`` : Change the bot status',
+                            '``restart`` : Restart the bot',
+                            '``ping`` : Show bot response speed',
+                        ].join('\n');
+
+                        const AR_DESC = [
+                            '***أوامر الموسيقى :***',
+                            '',
+                            '``play`` : شغّل أغنية أو أضفها للقائمة',
+                            '``search`` : ابحث في منصات الموسيقى المفعّلة',
+                            '``autoplay`` : تشغيل/إيقاف التشغيل التلقائي',
+                            '``stop`` : أوقف الموسيقى وامسح التشغيل',
+                            '``skip`` : تخطّ الأغنية الحالية',
+                            '``volume`` : اضبط مستوى الصوت',
+                            '``nowplaying`` : اعرض الأغنية التي تعمل الآن',
+                            '``queue`` : اعرض قائمة الانتظار',
+                            '``loop`` : كرّر الأغنية الحالية',
+                            '``pause`` : وقّف الموسيقى مؤقتاً',
+                            '``seek`` : اذهب لوقت محدد في الأغنية',
+                            '``forward`` : تقدّم للأمام في الأغنية الحالية',
+                            '``remove`` : احذف أغنية من القائمة',
+                            '``mylikes`` : اعرض أغانيك المفضّلة',
+                            '',
+                            '***أوامر المالك :***',
+                            '',
+                            '``join`` : حدّد قناة الصوت وفعّل 24/7',
+                            '``leave`` : اخرج من القناة وأوقف 24/7',
+                            '``setchat`` : حدّد قناة الأوامر',
+                            '``unchat`` : امسح قناة الأوامر',
+                            '``setprefix`` : غيّر البادئة',
+                            '``unsetprefix`` : احذف البادئة',
+                            '``settings`` : اعرض إعدادات البوت',
+                            '``setname`` : غيّر اسم البوت',
+                            '``setavatar`` : غيّر صورة البوت',
+                            '``streaming`` : غيّر حالة البوت',
+                            '``restart`` : أعد تشغيل البوت',
+                            '``ping`` : اعرض سرعة استجابة البوت',
+                        ].join('\n');
+
+                        const buildHelpRow = (isArabic) => new ActionRowBuilder().addComponents(
+                            new ButtonBuilder()
+                                .setLabel('Support Server')
+                                .setStyle(ButtonStyle.Link)
+                                .setURL('https://discord.gg/ens'),
+                            new ButtonBuilder()
+                                .setCustomId('help_translate')
+                                .setLabel(isArabic ? '🌐 English' : '🌐 عربي')
+                                .setStyle(ButtonStyle.Secondary),
+                        );
+
+                        const buildHelpEmbed = (isArabic) => new EmbedBuilder()
+                            .setColor(embedColor)
+                            .setThumbnail(avatarUrl)
+                            .setDescription(isArabic ? AR_DESC : EN_DESC);
 
                         const additionalEmbed = new EmbedBuilder()
-                            .setColor(getEmbedColor(TrueMusic))
+                            .setColor(embedColor)
                             .setDescription(`**Owner :** <@${botOwnerId}>\n**Owner ID :** \`${botOwnerId}\``);
 
                         message.author.send({
-                            embeds: [helpEmbed, additionalEmbed],
-                            components: [row1],
-                        }).then(async () => {
+                            embeds: [buildHelpEmbed(false), additionalEmbed],
+                            components: [buildHelpRow(false)],
+                        }).then(async (dmMsg) => {
                             const helpdma = new EmbedBuilder()
-                                .setColor(getEmbedColor(TrueMusic))
+                                .setColor(embedColor)
                                 .setDescription(`> **تم إرسال الاوامر في الخاص.**`)
                                 .setFooter({ text: 'Ens 𝐒𝐭𝐨𝐫𝐞' });
                             message.reply({ embeds: [helpdma] }).catch(() => 0);
+
+                            let isArabic = false;
+                            const collector = dmMsg.createMessageComponentCollector({
+                                filter: i => i.customId === 'help_translate' && i.user.id === message.author.id,
+                                time: 10 * 60 * 1000,
+                            });
+                            collector.on('collect', async i => {
+                                isArabic = !isArabic;
+                                await i.update({
+                                    embeds: [buildHelpEmbed(isArabic), additionalEmbed],
+                                    components: [buildHelpRow(isArabic)],
+                                }).catch(() => {});
+                            });
                         }).catch(() => {
                             message.react('🔒').catch(() => 0);
                         });
