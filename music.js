@@ -1531,6 +1531,8 @@ function waitForPlaybackTransition(poru, player, previousTrack, timeoutMs = MUSI
 }
 
 async function skipPlayerSynced(poru, player, currentTrack) {
+    // Reset pause state before skipping so the next queued track starts playing
+    player.isPaused = false;
     await updateLavalinkPlayer(player, { track: { encoded: null } }, 'skip update');
     player.position = 0;
     player.isPlaying = false;
@@ -4272,11 +4274,9 @@ module.exports = {
                                 setAutoPlayState(player, false);
                                 clearStoppedPlaybackCaches(player);
                                 clearProgressInterval(player, 'message stop');
-                                // Lavalink + Discord in parallel — both start at the same instant
-                                await Promise.all([
-                                    stopPlayerAudio(player, { wait: false }),
-                                    reactCustom(message, MUSIC_EMOJIS.stop, '🔴'),
-                                ]);
+                                // Fire both without waiting — Lavalink stop + reaction run immediately
+                                stopPlayerAudio(player, { wait: false });
+                                reactCustom(message, MUSIC_EMOJIS.stop, '🔴');
                                 runBackground('stop cleanup', async () => {
                                     await finalizePlayerUi(player, finalOptions);
                                     await bumpQueueVersion(player, 'stop');
@@ -4486,7 +4486,7 @@ module.exports = {
             } else if (cmdsArray.skip.includes(command)) {
                 let player = TrueMusic.poru.players.get(message.guild.id);
 
-                if (!player || !player.isPlaying) {
+                if (!player || (!player.isPlaying && !player.isPaused)) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'No Music',
                         description: '*No music is currently playing*.',

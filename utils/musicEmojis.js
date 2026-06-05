@@ -179,31 +179,34 @@ function validateCustomEmojis(client = null) {
 
 // ── react() — universal emoji reaction ───────────────────────────────────────
 //
-// Uses cachedEmoji() which now checks the emojiIdMap from syncMusicEmojis.
-// If the emoji is accessible (in cache after upload), tries it first.
-// Otherwise falls straight to the unicode fallback to avoid Discord rate-limit
-// errors from doomed custom-emoji react() attempts.
+// Only GUILD emojis can be used in message reactions.
+// Application emojis (uploaded via client.application.emojis) are component-only —
+// Discord rejects them in reactions. We check the guild cache exclusively here.
+// Falls straight to the unicode fallback when no guild emoji is found,
+// avoiding the failed-API-call delay.
 //
 async function react(message, emojiData, fallback = null, client = null) {
     const resolvedClient = client || message?.client || null;
-    const cached = cachedEmoji(emojiData, resolvedClient);
+    const emoji = parseEmojiData(emojiData);
 
-    const candidates = cached
-        ? [cached, fallback].filter(Boolean)
-        : fallback
-            ? [fallback]
-            : [];
+    // Look for a guild emoji only (reactions require guild membership)
+    let guildEmoji = null;
+    if (emoji?.id) {
+        guildEmoji = resolvedClient?.emojis?.cache?.get?.(emoji.id) || null;
+        if (!guildEmoji) {
+            const mappedId = _emojiIdMap[emoji.id];
+            if (mappedId) {
+                guildEmoji = resolvedClient?.emojis?.cache?.get?.(mappedId) || null;
+            }
+        }
+    }
 
-    const seen = new Set();
-    for (const candidate of candidates) {
-        const key = typeof candidate === 'string'
-            ? candidate
-            : `${candidate.animated ? 'a:' : ''}${candidate.name || ''}:${candidate.id || ''}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        try {
-            return await message.react(candidate);
-        } catch {}
+    if (guildEmoji) {
+        try { return await message.react(guildEmoji); } catch {}
+    }
+
+    if (fallback) {
+        try { return await message.react(fallback); } catch {}
     }
 
     return '';

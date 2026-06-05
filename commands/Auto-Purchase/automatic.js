@@ -1387,7 +1387,6 @@ module.exports = {
   description: 'Automatic purchase panel',
   async execute(client, message) {
     if (!owners.includes(message.author.id)) return;
-    if (!check(message.author.id, 'automatic')) return;
     installAutomaticHandlers(client);
     await refreshSavedPublicPanel(client).catch(() => {});
 
