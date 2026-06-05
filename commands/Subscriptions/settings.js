@@ -1259,74 +1259,74 @@ module.exports = {
                         .setDescription('تحكم سريع ومنظم في البوتات، العرض، الغرف، والمنصة.')
                         .addFields(
                             {
-                                name: 'المالك',
+                                name: 'Owner',
                                 value: primaryOwnerId ? `*<@${primaryOwnerId}>*` : '*`غير معروف`*',
                                 inline: true
                             },
                             {
-                                name: 'البوتات',
+                                name: 'Bots',
                                 value: [
-                                    `**نشط :** *\`${subTokens.length}\`*`,
-                                    waitingCount ? `**انتظار :** *\`${waitingCount}\`*` : null,
+                                    `**Active :** *\`${subTokens.length}\`*`,
+                                    waitingCount ? `**Waiting :** *\`${waitingCount}\`*` : null,
                                 ].filter(Boolean).join('\n'),
                                 inline: true
                             },
                             {
-                                name: 'السيرفر',
+                                name: 'Server',
                                 value: `**ID :** *\`${subTokens[0]?.Server || allSubTokens[0]?.Server || 'غير محدد'}\`*`,
                                 inline: true
                             },
                             {
-                                name: 'الانتهاء',
+                                name: 'Expires',
                                 value: subInfo?.expirationTime
-                                    ? `*<t:${Math.floor(subInfo.expirationTime / 1000)}:R>*`
-                                    : '*`غير معروف`*',
+                                    ? `**Time :** *<t:${Math.floor(subInfo.expirationTime / 1000)}:R>*`
+                                    : '**Time :** *`غير معروف`*',
                                 inline: true
                             },
                             {
-                                name: 'الأونرز',
+                                name: 'Subscribe Owners',
                                 value: subOwnerIds.length
                                     ? subOwnerIds.map(id => `*<@${id}>*`).join('\n')
                                     : '*`لا يوجد`*',
                                 inline: true
                             },
                             {
-                                name: 'العرض',
+                                name: 'Display',
                                 value: [
-                                    `**أزرار :** *${display.buttons ? '`ON`' : '`OFF`'}*`,
-                                    `**إيمبد :** *${display.embeds ? '`ON`' : '`OFF`'}*`,
-                                    `**Status الروم :** *${display.voiceStatus ? '`ON`' : '`OFF`'}*`,
+                                    `**Buttons :** *${display.buttons ? '`ON`' : '`OFF`'}*`,
+                                    `**Embeds :** *${display.embeds ? '`ON`' : '`OFF`'}*`,
+                                    `**Voice Status :** *${display.voiceStatus ? '`ON`' : '`OFF`'}*`,
                                 ].join('\n'),
                                 inline: true
                             },
                             {
-                                name: 'المنصة',
-                                value: `*\`${display.platform}\`*`,
+                                name: 'Platform',
+                                value: `**Source :** *\`${display.platform}\`*`,
                                 inline: true
                             },
                             {
-                                name: 'العودة للروم',
+                                name: 'Back to Voice',
                                 value: [
-                                    `**الحالة :** ${backVoice.label}`,
-                                    `*${backVoice.details}*`,
+                                    `**Status :** ${backVoice.label}`,
+                                    `**Info :** *${backVoice.details}*`,
                                 ].join('\n'),
                                 inline: true
                             },
                             {
-                                name: 'شات الأوامر',
+                                name: 'Command Chat',
                                 value: [
-                                    `**الشات :** ${chat.label}`,
-                                    `*${chat.details}*`,
+                                    `**Channel :** ${chat.label}`,
+                                    `**Info :** *${chat.details}*`,
                                 ].join('\n'),
                                 inline: false
                             },
                             {
-                                name: 'حالة البوتات',
+                                name: 'Voice Status',
                                 value: [
-                                    `**في روم :** *\`${voiceStats.inRoom}\`*`,
-                                    `**خامل :** *\`${voiceStats.idle}\`*`,
-                                    `**خارج السيرفر :** *\`${voiceStats.outside}\`*`,
-                                    `**أوفلاين :** *\`${voiceStats.offline}\`*`,
+                                    `**In Room :** *\`${voiceStats.inRoom}\`*`,
+                                    `**Idle :** *\`${voiceStats.idle}\`*`,
+                                    `**Outside :** *\`${voiceStats.outside}\`*`,
+                                    `**Offline :** *\`${voiceStats.offline}\`*`,
                                 ].join('\n'),
                                 inline: false
                             },
