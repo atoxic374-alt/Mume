@@ -2955,9 +2955,11 @@ module.exports = {
                 ensurePlayerData(player);
                 if (player.isPlaying || player.isPaused) {
                     // Preserve currentTrack so scheduleNodeRecovery can restart it.
-                    // Only clear the playback state flags.
+                    // Only clear isPlaying — intentionally keep isPaused as-is so
+                    // scheduleNodeRecovery skips paused players (its `if (player.isPaused) return`
+                    // guard) and the user's pause state survives the node reconnect.
+                    player.data._wasPlayingBeforeDisconnect = player.isPlaying;
                     player.isPlaying = false;
-                    player.isPaused  = false;
                     ghostCount++;
                 }
                 // Mark for voice-session re-establishment when the node comes back.
@@ -3218,6 +3220,12 @@ module.exports = {
                     if (guild) {
                         const player = TrueMusic.poru.players.get(guild.id);
                         if (player) {
+                            // Cancel pre-fetch timer before destroy to prevent the
+                            // callback from calling player.resolveTrack on a dead player
+                            if (player.data?._prefetchTimer) {
+                                clearTimeout(player.data._prefetchTimer);
+                                player.data._prefetchTimer = null;
+                            }
                             await finalizePlayerUi(player);
                             await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
                             player.destroy();
