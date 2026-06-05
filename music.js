@@ -1211,6 +1211,10 @@ async function refreshPlayerVoiceSession(player, reason = 'play') {
     data.needsVoiceRefresh = false;
     data.lastVoiceRefreshAt = Date.now();
     data.lastVoiceRefreshReason = reason;
+
+    // Fix #6: أعد إرسال الفلاتر — session جديد = Lavalink ينسى كل شيء
+    lavalinkKeepAlive.reapplyPlayerFilters(player).catch(() => {});
+
     return true;
 }
 
