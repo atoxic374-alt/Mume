@@ -2990,7 +2990,12 @@ module.exports = {
             await refreshEmbedColor(TrueMusic).catch(() => {});
             // Sync custom emojis to this bot's application so react() can use them
             syncMusicEmojis(TrueMusic, MUSIC_EMOJIS)
-                .then(map => MUSIC_EMOJIS.setEmojiMap(map))
+                .then(map => {
+                    MUSIC_EMOJIS.setEmojiMap(map);
+                    // Load + cache emojis for reactions using 3 methods (guild → app → string).
+                    // Runs once at startup; react() becomes a pure Map lookup afterwards.
+                    return MUSIC_EMOJIS.loadMusicEmojis(TrueMusic);
+                })
                 .catch(err => console.warn(`[EmojiSync] ${err?.message || err}`));
             warnUnavailableMusicEmojis(TrueMusic);
             warmTintCache(TINTED_ICON_FILES, [getEmbedColor(TrueMusic)]);

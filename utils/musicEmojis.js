@@ -37,6 +37,105 @@ function setEmojiMap(map) {
     _emojiIdMap = (map && typeof map === 'object') ? map : {};
 }
 
+// ── Reaction cache (populated once at startup, zero API calls at runtime) ───
+// Maps original emoji ID → best resolvable for message.react():
+//   • GuildEmoji object  (Method 1 — most reliable)
+//   • ApplicationEmoji object  (Method 2 — works since Discord 2024)
+//   • 'name:id' string  (Method 3 — guaranteed, API-call on first use)
+const _reactionCache = new Map();
+
+/**
+ * loadMusicEmojis(client)
+ *
+ * Called ONCE at bot startup (after syncMusicEmojis + setEmojiMap).
+ * Tries three methods in priority order and fills _reactionCache so that
+ * every subsequent react() call is a plain Map lookup — no extra API calls.
+ *
+ * Method 1 — Guild scan
+ *   Iterates every guild the bot is in and fetches its emoji list.
+ *   Guild emojis are the gold standard for message reactions.
+ *   Stops scanning guilds early once all IDs are resolved.
+ *
+ * Method 2 — Application emojis
+ *   Reads client.application.emojis (already fetched by syncMusicEmojis).
+ *   Discord has supported application emoji reactions since late 2024.
+ *   Covers both original IDs and mapped (re-uploaded) IDs.
+ *
+ * Method 3 — Pre-built string cache
+ *   For any emoji still unresolved, stores 'name:id' string.
+ *   Discord validates access server-side on the first react; if rejected
+ *   the ID is added to _reactionFailedIds so future calls go straight
+ *   to the unicode fallback without another API round-trip.
+ */
+async function loadMusicEmojis(client) {
+    const entries = customEmojiEntries();
+    if (!entries.length) return;
+
+    // Working set: original ID → emoji data — removed as each ID is resolved
+    const pending = new Map(entries.map(e => [e.emoji.id, e.emoji]));
+
+    let byGuild = 0;
+    let byApp   = 0;
+    let byStr   = 0;
+
+    // ── Method 1: Guild scan ──────────────────────────────────────────────────
+    const guilds = [...(client.guilds?.cache?.values() || [])];
+    for (const guild of guilds) {
+        if (pending.size === 0) break;
+        try {
+            const fetched = await guild.emojis.fetch();
+            for (const [id, guildEmoji] of fetched) {
+                if (pending.has(id)) {
+                    _reactionCache.set(id, guildEmoji);
+                    pending.delete(id);
+                    byGuild++;
+                }
+            }
+        } catch { /* guild fetch failed — try next */ }
+    }
+
+    // ── Method 2: Application emojis ─────────────────────────────────────────
+    if (pending.size > 0) {
+        try {
+            const appEmojis = await client.application.emojis.fetch();
+            const byId = new Map([...appEmojis.values()].map(e => [e.id, e]));
+
+            for (const [origId, emojiData] of [...pending]) {
+                // Try the original ID directly (bot may own it as an app emoji)
+                if (byId.has(origId)) {
+                    _reactionCache.set(origId, byId.get(origId));
+                    pending.delete(origId);
+                    byApp++;
+                    continue;
+                }
+                // Try the mapped/re-uploaded ID from syncMusicEmojis
+                const mappedId = _emojiIdMap[origId];
+                if (mappedId && byId.has(mappedId)) {
+                    _reactionCache.set(origId, byId.get(mappedId));
+                    pending.delete(origId);
+                    byApp++;
+                }
+            }
+        } catch { /* application emoji fetch failed */ }
+    }
+
+    // ── Method 3: Pre-built string cache ─────────────────────────────────────
+    // Anything still pending gets a pre-built 'name:id' string.
+    // react() will attempt this string once; failures are cached in
+    // _reactionFailedIds so the next call goes straight to unicode.
+    for (const [origId, emojiData] of pending) {
+        const name = emojiData.name || 'emoji';
+        _reactionCache.set(origId, `${name}:${origId}`);
+        byStr++;
+    }
+
+    const total = entries.length;
+    console.log(
+        `[MusicEmojis] startup load — ${total} emojis: ` +
+        `${byGuild} guild ✅  ${byApp} app ✅  ${byStr} string 🔤`
+    );
+}
+
 // ── Core helpers ──────────────────────────────────────────────────────────────
 
 function parseEmojiData(data) {
@@ -179,18 +278,15 @@ function validateCustomEmojis(client = null) {
 
 // ── react() — universal emoji reaction ───────────────────────────────────────
 //
-// Root cause: TrueMusic clients have BaseGuildEmojiManager: 0 (guild emoji
-// cache is intentionally zeroed to save memory). So client.emojis.cache is
-// always empty — we CANNOT rely on it for reactions.
+// _reactionCache is populated once at startup by loadMusicEmojis().
+// Normal operation: Map lookup → react() → done. Zero extra API calls.
 //
-// Solution: bypass the cache entirely and pass 'name:id' directly to
-// message.react(). Discord's API validates access server-side. If the bot is
-// in the emoji's guild (or owns the application emoji), the reaction goes
-// through; otherwise Discord returns a 400 and we fall back to unicode.
+// Startup race (message arrives before loadMusicEmojis finishes):
+//   Falls back to 'name:id' string format. _reactionFailedIds remembers
+//   IDs that Discord rejected so they're never retried (no delay).
 //
-// To prevent delay on repeated failures: failed emoji IDs are tracked in
-// _reactionFailedIds. Once an ID fails, it is skipped immediately on all
-// subsequent calls (zero extra API calls, zero delay).
+// If a cached emoji stops working at runtime (bot left guild, emoji deleted):
+//   Cache entry is removed; next call falls through to unicode.
 //
 const _reactionFailedIds = new Set();
 
@@ -198,12 +294,22 @@ async function react(message, emojiData, fallback = null, client = null) {
     const emoji = parseEmojiData(emojiData);
 
     if (emoji?.id) {
-        const name = emoji.name || 'emoji';
+        // ── Fast path: startup cache hit ─────────────────────────────────────
+        if (_reactionCache.has(emoji.id)) {
+            const cached = _reactionCache.get(emoji.id);
+            try {
+                return await message.react(cached);
+            } catch {
+                // Cached value no longer valid (bot left guild, emoji deleted, etc.)
+                // Remove it and fall through — next call gets unicode immediately
+                _reactionCache.delete(emoji.id);
+                _reactionFailedIds.add(emoji.id);
+            }
+        }
 
-        // Try original ID — works when bot is in the emoji's guild.
-        // No cache needed: Discord validates access server-side via the API.
-        // Failed IDs are remembered so subsequent calls skip the API call entirely.
+        // ── Slow path: cache not yet populated (startup race) ─────────────────
         if (!_reactionFailedIds.has(emoji.id)) {
+            const name = emoji.name || 'emoji';
             try {
                 return await message.react(`${name}:${emoji.id}`);
             } catch {
@@ -212,7 +318,7 @@ async function react(message, emojiData, fallback = null, client = null) {
         }
     }
 
-    // Unicode fallback — always fast, no API ambiguity.
+    // ── Unicode fallback — always fast, no API ambiguity ─────────────────────
     if (fallback) {
         try { return await message.react(fallback); } catch {}
     }
@@ -221,13 +327,14 @@ async function react(message, emojiData, fallback = null, client = null) {
 }
 
 module.exports = MUSIC_EMOJIS;
-module.exports.setEmojiMap      = setEmojiMap;
-module.exports.emojiStr         = emojiStr;
-module.exports.parseEmojiData   = parseEmojiData;
-module.exports.emojiResolvable  = emojiResolvable;
-module.exports.componentEmoji   = componentEmoji;
-module.exports.messageEmoji     = messageEmoji;
+module.exports.setEmojiMap        = setEmojiMap;
+module.exports.loadMusicEmojis    = loadMusicEmojis;
+module.exports.emojiStr           = emojiStr;
+module.exports.parseEmojiData     = parseEmojiData;
+module.exports.emojiResolvable    = emojiResolvable;
+module.exports.componentEmoji     = componentEmoji;
+module.exports.messageEmoji       = messageEmoji;
 module.exports.reactionIdentifier = reactionIdentifier;
 module.exports.customEmojiEntries = customEmojiEntries;
 module.exports.validateCustomEmojis = validateCustomEmojis;
-module.exports.react            = react;
+module.exports.react              = react;
