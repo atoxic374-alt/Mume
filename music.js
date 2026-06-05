@@ -1566,9 +1566,19 @@ function finalUiOptionsFor(player, track, options = {}) {
 async function stopPlayerAudio(player, options = {}) {
     if (!player) return false;
     const hadTrack = !!player.currentTrack;
+    // Set local state immediately before the REST call so the bot
+    // reflects stopped state even before Lavalink confirms
+    player.isPaused = false;
+    player.isPlaying = false;
     let stopRequest = Promise.resolve();
-    if (player.currentTrack && player.node?.rest) {
-        stopRequest = updateLavalinkPlayer(player, { track: { encoded: null } }, 'stop update');
+    if (player.node?.rest) {
+        // Send paused:true + track:null together in one PATCH — Lavalink
+        // silences the audio buffer immediately instead of draining it first
+        stopRequest = updateLavalinkPlayer(
+            player,
+            { paused: true, track: { encoded: null } },
+            'stop update'
+        );
         if (options.wait === false) stopRequest = stopRequest.catch(() => {});
     }
     if (options.wait !== false) await stopRequest;
