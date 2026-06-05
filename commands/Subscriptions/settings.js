@@ -1254,6 +1254,12 @@ module.exports = {
                         return acc;
                     }, { inRoom: 0, idle: 0, outside: 0, offline: 0 });
 
+                    const stockTokens = store.get('bots') || [];
+                    const allActiveTokens = store.get('tokens') || [];
+                    const tokenStock = stockTokens.length;
+                    const tokenActive = allActiveTokens.length;
+                    const tokenTotal = tokenStock + tokenActive;
+
                     const embed = new EmbedBuilder()
                         .setTitle(`إعدادات الاشتراك — ${selectedCode}`)
                         .setDescription('تحكم سريع ومنظم في البوتات، العرض، الغرف، والمنصة.')
@@ -1288,6 +1294,15 @@ module.exports = {
                                 value: subOwnerIds.length
                                     ? subOwnerIds.map(id => `*<@${id}>*`).join('\n')
                                     : '*`لا يوجد`*',
+                                inline: true
+                            },
+                            {
+                                name: 'Tokens',
+                                value: [
+                                    `**Stock :** *\`${tokenStock}\`*`,
+                                    `**Active :** *\`${tokenActive}\`*`,
+                                    `**Total :** *\`${tokenTotal}\`*`,
+                                ].join('\n'),
                                 inline: true
                             },
                             {
