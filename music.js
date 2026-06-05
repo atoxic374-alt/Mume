@@ -267,6 +267,10 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
                 .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.loop))
                 .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
+                .setCustomId('queue_btn')
+                .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.queue))
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
                 .setCustomId('volume_up')
                 .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.volumeUp))
                 .setStyle(ButtonStyle.Secondary),
@@ -4757,6 +4761,7 @@ module.exports = {
                                     files: ['./assets/image/icons/Queue.png'],
                                     footer: buildQueueFooter(player, qPage, qItemsPerPage),
                                 }),
+                                ephemeral: true,
                             }).catch(() => null);
                             if (queueMsg) {
                                 let qVersion = ensurePlayerData(player).queueVersion;
