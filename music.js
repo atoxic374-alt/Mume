@@ -1285,8 +1285,8 @@ function firePlayerAction(label, task) {
     }
 }
 
-const MUSIC_CONTROL_SYNC_TIMEOUT_MS = Math.max(200, Number(process.env.MUSIC_CONTROL_SYNC_TIMEOUT_MS || 650));
-const LAVALINK_FAST_REST_TIMEOUT_MS = Math.max(500, Number(process.env.LAVALINK_FAST_REST_TIMEOUT_MS || 1800));
+const MUSIC_CONTROL_SYNC_TIMEOUT_MS = Math.max(100, Number(process.env.MUSIC_CONTROL_SYNC_TIMEOUT_MS || 250));
+const LAVALINK_FAST_REST_TIMEOUT_MS = Math.max(200, Number(process.env.LAVALINK_FAST_REST_TIMEOUT_MS || 600));
 const LAVALINK_FAST_REST_ENABLED = process.env.LAVALINK_FAST_REST !== 'off';
 
 function playerVolumeValue(player) {
@@ -1424,9 +1424,8 @@ function waitUntil(predicate, timeoutMs = 500, intervalMs = 25) {
 
 async function setPlayerVolumeSynced(player, volume) {
     const nextVolume = clampPlayerVolume(volume);
-    await updateLavalinkPlayer(player, { volume: nextVolume }, 'volume update');
     player.volume = nextVolume;
-    await waitUntil(() => playerVolumeValue(player) === nextVolume, 250, 25);
+    updateLavalinkPlayer(player, { volume: nextVolume }, 'volume update').catch(() => {});
     return nextVolume;
 }
 
@@ -1465,11 +1464,9 @@ function waitForPlaybackTransition(poru, player, previousTrack, timeoutMs = MUSI
 }
 
 async function skipPlayerSynced(poru, player, currentTrack) {
-    const transition = waitForPlaybackTransition(poru, player, currentTrack);
     await updateLavalinkPlayer(player, { track: { encoded: null } }, 'skip update');
     player.position = 0;
     player.isPlaying = false;
-    await transition;
     return true;
 }
 
@@ -4175,22 +4172,17 @@ module.exports = {
 
                                 const stoppedTrack = player.currentTrack;
                                 const finalOptions = finalUiOptionsFor(player, stoppedTrack);
-                                const stoppedOk = await runSyncedControl('message stop audio', () => stopPlayerAudio(player, { wait: true }));
-                                if (!stoppedOk) {
-                                    return message.reply(musicPayload(tokenObj, {
-                                        title: 'Stop Failed',
-                                        description: '**Lavalink did not stop the track. Try again in a moment.**',
-                                        thumbnail: 'attachment://Error.png',
-                                        files: ['./assets/image/icons/Error.png'],
-                                    }));
-                                }
                                 markStopped();
                                 player.setLoop('NONE');
                                 player.queue.clear();
                                 setAutoPlayState(player, false);
                                 clearStoppedPlaybackCaches(player);
                                 clearProgressInterval(player, 'message stop');
-                                reactCustom(message, MUSIC_EMOJIS.stop, '🔴');
+                                // Lavalink + Discord in parallel — both start at the same instant
+                                await Promise.all([
+                                    stopPlayerAudio(player, { wait: false }),
+                                    reactCustom(message, MUSIC_EMOJIS.stop, '🔴'),
+                                ]);
                                 runBackground('stop cleanup', async () => {
                                     await finalizePlayerUi(player, finalOptions);
                                     await bumpQueueVersion(player, 'stop');
@@ -4272,11 +4264,15 @@ module.exports = {
                 if (!memberVoice || !clientVoice || memberVoice.id !== clientVoice.id) return;
 
                 if (player.isPaused) {
-                    await player.pause(false).catch(err => console.warn('[message resume]', err?.message || err));
-                    reactCustom(message, MUSIC_EMOJIS.skip, '▶️');
+                    await Promise.all([
+                        player.pause(false).catch(err => console.warn('[message resume]', err?.message || err)),
+                        reactCustom(message, MUSIC_EMOJIS.skip, '▶️'),
+                    ]);
                 } else {
-                    await player.pause(true).catch(err => console.warn('[message pause]', err?.message || err));
-                    reactCustom(message, MUSIC_EMOJIS.pause, '⏸️');
+                    await Promise.all([
+                        player.pause(true).catch(err => console.warn('[message pause]', err?.message || err)),
+                        reactCustom(message, MUSIC_EMOJIS.pause, '⏸️'),
+                    ]);
                 }
             }
 
@@ -4414,69 +4410,57 @@ module.exports = {
 
                         if (player.queue.length === 0 && player.data?.autoPlay) {
                             const skippedTrack = currentTrack;
-                            const skippedOk = await runSyncedControl('message skip autoplay', () => skipPlayerSynced(TrueMusic.poru, player, currentTrack));
-                            if (!skippedOk) {
-                                return message.reply(musicPayload(tokenObj, {
-                                    title: 'Skip Failed',
-                                    description: '**Lavalink did not skip the track. Try again in a moment.**',
-                                    thumbnail: 'attachment://Error.png',
-                                    files: ['./assets/image/icons/Error.png'],
-                                }));
-                            }
-                            return message.reply(musicPayload(tokenObj, {
-                                title: 'Skipped',
-                                description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
-                                thumbnail: 'attachment://Skip.png',
-                                files: ['./assets/image/icons/Skip.png'],
-                            }));
+                            // Lavalink + Discord reply start at the same instant
+                            await Promise.all([
+                                skipPlayerSynced(TrueMusic.poru, player, currentTrack),
+                                message.reply(musicPayload(tokenObj, {
+                                    title: 'Skipped',
+                                    description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
+                                    thumbnail: 'attachment://Skip.png',
+                                    files: ['./assets/image/icons/Skip.png'],
+                                })),
+                            ]);
+                            return;
                         }
 
                         if (player.queue.length === 0) {
                             const finalOptions = finalUiOptionsFor(player, currentTrack);
-                            const stoppedOk = await runSyncedControl('message skip end audio', () => stopPlayerAudio(player, { wait: true }));
-                            if (!stoppedOk) {
-                                return message.reply(musicPayload(tokenObj, {
-                                    title: 'Skip Failed',
-                                    description: '**Lavalink did not stop the track. Try again in a moment.**',
-                                    thumbnail: 'attachment://Error.png',
-                                    files: ['./assets/image/icons/Error.png'],
-                                }));
-                            }
+                            const skippedTrack = currentTrack;
                             markStopped();
                             setAutoPlayState(player, false);
                             clearStoppedPlaybackCaches(player);
                             clearProgressInterval(player, 'message skip end');
+                            // Lavalink + Discord reply start at the same instant
+                            await Promise.all([
+                                stopPlayerAudio(player, { wait: false }),
+                                message.reply(musicPayload(tokenObj, {
+                                    title: 'Skipped',
+                                    description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
+                                    thumbnail: 'attachment://Skip.png',
+                                    files: ['./assets/image/icons/Skip.png'],
+                                })),
+                            ]);
                             runBackground('skip end cleanup', async () => {
                                 await finalizePlayerUi(player, finalOptions);
                                 await bumpQueueVersion(player, 'skip_end');
                                 await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
                             });
-                            return message.reply(musicPayload(tokenObj, {
-                        title: 'Skipped',
-                        description: `**${currentTrack.info.title}\nBy : ${message.author.displayName}**`,
-                        thumbnail: 'attachment://Skip.png',
-                        files: ['./assets/image/icons/Skip.png'],
-                    }));
+                            return;
                         } else {
                             const skippedTrack = currentTrack;
-                            const skippedOk = await runSyncedControl('message skip', () => skipPlayerSynced(TrueMusic.poru, player, currentTrack));
-                            if (!skippedOk) {
-                                return message.reply(musicPayload(tokenObj, {
-                                    title: 'Skip Failed',
-                                    description: '**Lavalink did not skip the track. Try again in a moment.**',
-                                    thumbnail: 'attachment://Error.png',
-                                    files: ['./assets/image/icons/Error.png'],
-                                }));
-                            }
+                            // Lavalink + Discord reply start at the same instant
+                            await Promise.all([
+                                skipPlayerSynced(TrueMusic.poru, player, currentTrack),
+                                message.reply(musicPayload(tokenObj, {
+                                    title: 'Skipped',
+                                    description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
+                                    thumbnail: 'attachment://Skip.png',
+                                    files: ['./assets/image/icons/Skip.png'],
+                                })),
+                            ]);
                             runBackground('skip cleanup', () => bumpQueueVersion(player, 'skip'));
-
-                    return message.reply(musicPayload(tokenObj, {
-                        title: 'Skipped',
-                        description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
-                        thumbnail: 'attachment://Skip.png',
-                        files: ['./assets/image/icons/Skip.png'],
-                    }));
-                }
+                            return;
+                        }
             }
 
 
@@ -4520,17 +4504,7 @@ module.exports = {
                     }));
                 }
 
-                try {
-                    await setPlayerVolumeSynced(player, volume);
-                } catch (err) {
-                    console.warn('[message volume]', err?.message || err);
-                    return message.reply(musicPayload(tokenObj, {
-                        title: 'Volume',
-                        description: '**Failed to change the volume. Try again in a moment.**',
-                        thumbnail: 'attachment://Error.png',
-                        files: ['./assets/image/icons/Error.png'],
-                    }));
-                }
+                setPlayerVolumeSynced(player, volume).catch(err => console.warn('[message volume]', err?.message || err));
 
                 return message.reply(musicPayload(tokenObj, {
                     title: 'Volume',
@@ -5176,37 +5150,36 @@ module.exports = {
 
                     if (interaction.customId === 'pause') {
                         if (player.isPaused) {
-                            await player.pause(false).catch(err => console.warn('[button resume]', err?.message || err));
                             responseMessage = '**Done resume the music.**';
+                            await Promise.all([
+                                player.pause(false).catch(err => console.warn('[button resume]', err?.message || err)),
+                                editPanel(!!ui.liked),
+                            ]);
                         } else {
-                            await player.pause(true).catch(err => console.warn('[button pause]', err?.message || err));
                             responseMessage = '**Done pause the music.**';
+                            await Promise.all([
+                                player.pause(true).catch(err => console.warn('[button pause]', err?.message || err)),
+                                editPanel(!!ui.liked),
+                            ]);
                         }
-                        runBackground('pause panel edit', () => editPanel(!!ui.liked));
                     }
 
                     if (interaction.customId === 'volume_down') {
                         const newVolume = clampPlayerVolume(playerVolumeValue(player) - 10);
-                        try {
-                            await setPlayerVolumeSynced(player, newVolume);
-                            await editPanel(!!ui.liked);
-                            responseMessage = `**Volume is now __${newVolume}%__.**`;
-                        } catch (err) {
-                            console.warn('[button volume down]', err?.message || err);
-                            responseMessage = '**Failed to change the volume.**';
-                        }
+                        responseMessage = `**Volume is now __${newVolume}%__.**`;
+                        await Promise.all([
+                            setPlayerVolumeSynced(player, newVolume).catch(err => console.warn('[button volume down]', err?.message || err)),
+                            editPanel(!!ui.liked),
+                        ]);
                     }
 
                     if (interaction.customId === 'volume_up') {
                         const newVolume = clampPlayerVolume(playerVolumeValue(player) + 10);
-                        try {
-                            await setPlayerVolumeSynced(player, newVolume);
-                            await editPanel(!!ui.liked);
-                            responseMessage = `**Volume is now __${newVolume}%__.**`;
-                        } catch (err) {
-                            console.warn('[button volume up]', err?.message || err);
-                            responseMessage = '**Failed to change the volume.**';
-                        }
+                        responseMessage = `**Volume is now __${newVolume}%__.**`;
+                        await Promise.all([
+                            setPlayerVolumeSynced(player, newVolume).catch(err => console.warn('[button volume up]', err?.message || err)),
+                            editPanel(!!ui.liked),
+                        ]);
                     }
 
                             if (interaction.customId === 'skip') {
@@ -5214,33 +5187,37 @@ module.exports = {
                                 if (!currentTrack) {
                                     responseMessage = '*لا توجد أغنية للتخطي*.';
                                 } else if (player.queue.length === 0 && player.data?.autoPlay) {
-                                    const skippedOk = await runSyncedControl('button skip autoplay', () => skipPlayerSynced(TrueMusic.poru, player, currentTrack));
-                                    responseMessage = skippedOk
-                                        ? `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`
-                                        : '**Failed to skip the track.**';
+                                    responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
+                                    // Lavalink + panel in parallel — same instant
+                                    await Promise.all([
+                                        skipPlayerSynced(TrueMusic.poru, player, currentTrack),
+                                        editPanel(!!ui.liked),
+                                    ]);
                                 } else if (player.queue.length === 0) {
                                     const finalOptions = finalUiOptionsFor(player, currentTrack);
-                                    const stoppedOk = await runSyncedControl('button skip end audio', () => stopPlayerAudio(player, { wait: true }));
-                                    if (stoppedOk) {
-                                        markStopped();
-                                        setAutoPlayState(player, false);
-                                        clearStoppedPlaybackCaches(player);
-                                        clearProgressInterval(player, 'button skip end');
-                                        runBackground('button skip end cleanup', async () => {
-                                            await finalizePlayerUi(player, finalOptions);
-                                            await bumpQueueVersion(player, 'button_skip_end');
-                                            await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
-                                        });
-                                    }
-                                    responseMessage = stoppedOk
-                                        ? `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`
-                                        : '**Failed to skip the track.**';
+                                    markStopped();
+                                    setAutoPlayState(player, false);
+                                    clearStoppedPlaybackCaches(player);
+                                    clearProgressInterval(player, 'button skip end');
+                                    responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
+                                    // Lavalink + panel in parallel — same instant
+                                    await Promise.all([
+                                        stopPlayerAudio(player, { wait: false }),
+                                        editPanel(!!ui.liked),
+                                    ]);
+                                    runBackground('button skip end cleanup', async () => {
+                                        await finalizePlayerUi(player, finalOptions);
+                                        await bumpQueueVersion(player, 'button_skip_end');
+                                        await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
+                                    });
                                 } else {
-                                    const skippedOk = await runSyncedControl('button skip', () => skipPlayerSynced(TrueMusic.poru, player, currentTrack));
-                                    if (skippedOk) runBackground('button skip cleanup', () => bumpQueueVersion(player, 'button_skip'));
-                                    responseMessage = skippedOk
-                                        ? `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`
-                                        : '**Failed to skip the track.**';
+                                    responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
+                                    // Lavalink + panel in parallel — same instant
+                                    await Promise.all([
+                                        skipPlayerSynced(TrueMusic.poru, player, currentTrack),
+                                        editPanel(!!ui.liked),
+                                    ]);
+                                    runBackground('button skip cleanup', () => bumpQueueVersion(player, 'button_skip'));
                                 }
                     }
 
@@ -5272,23 +5249,23 @@ module.exports = {
                     if (interaction.customId === 'stop') {
                         const stoppedTrack = player.currentTrack;
                         const finalOptions = finalUiOptionsFor(player, stoppedTrack);
-                        const stoppedOk = await runSyncedControl('button stop audio', () => stopPlayerAudio(player, { wait: true }));
-                        if (stoppedOk) {
-                            markStopped();
-                            player.setLoop('NONE');
-                            player.queue.clear();
-                            setAutoPlayState(player, false);
-                            clearStoppedPlaybackCaches(player);
-                            clearProgressInterval(player, 'button stop');
-                            runBackground('button stop cleanup', async () => {
-                                await finalizePlayerUi(player, finalOptions);
-                                await bumpQueueVersion(player, 'button_stop');
-                                await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
-                            });
-                        }
-                        responseMessage = stoppedOk
-                            ? '**Done stopped the song.**'
-                            : '**Failed to stop the song.**';
+                        markStopped();
+                        player.setLoop('NONE');
+                        player.queue.clear();
+                        setAutoPlayState(player, false);
+                        clearStoppedPlaybackCaches(player);
+                        clearProgressInterval(player, 'button stop');
+                        responseMessage = '**Done stopped the song.**';
+                        // Lavalink + panel update in parallel — same instant
+                        await Promise.all([
+                            stopPlayerAudio(player, { wait: false }),
+                            editPanel(!!ui.liked),
+                        ]);
+                        runBackground('button stop cleanup', async () => {
+                            await finalizePlayerUi(player, finalOptions);
+                            await bumpQueueVersion(player, 'button_stop');
+                            await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
+                        });
                     }
 
                     if (interaction.customId === 'queue_btn') {
