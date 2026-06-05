@@ -27,64 +27,17 @@ const MUSIC_EMOJIS = {
     },
 };
 
-function emojiStr(data) {
-    const emoji = parseEmojiData(data);
-    if (!emoji) return '';
-    if (!emoji.id) return emoji.name || '';
-    if (!emoji.name) return emoji.id;
-    return `<${emoji.animated ? 'a' : ''}:${emoji.name}:${emoji.id}>`;
+// ── Emoji ID map (original ID → uploaded application emoji ID) ─────────────
+// Set by syncMusicEmojis() at bot startup.  Maps the hard-coded IDs above to
+// the IDs of the application emojis that were actually uploaded to this bot,
+// allowing cachedEmoji() to find them in client.application.emojis.cache.
+let _emojiIdMap = {};
+
+function setEmojiMap(map) {
+    _emojiIdMap = (map && typeof map === 'object') ? map : {};
 }
 
-function cachedEmoji(data, client = null) {
-    const emoji = parseEmojiData(data);
-    if (!emoji?.id) return null;
-    return client?.emojis?.cache?.get?.(emoji.id)
-        || client?.application?.emojis?.cache?.get?.(emoji.id)
-        || null;
-}
-
-// Returns true if the emoji exists only as an application emoji (not in any guild).
-// Application emojis in reactions are not supported by third-party Discord clients
-// such as Unicord, so we fall back to unicode in those cases.
-function isApplicationOnlyEmoji(data, client = null) {
-    const emoji = parseEmojiData(data);
-    if (!emoji?.id) return false;
-    const inGuild = client?.emojis?.cache?.get?.(emoji.id);
-    if (inGuild) return false;
-    const inApp = client?.application?.emojis?.cache?.get?.(emoji.id);
-    return !!inApp;
-}
-
-function componentEmoji(data, client = null, fallback = null) {
-    const emoji = parseEmojiData(data);
-    if (!emoji) return fallback;
-    if (!emoji.id) return emoji.name || fallback;
-
-    const cached = cachedEmoji(data, client);
-    if (cached) {
-        return {
-            id: cached.id,
-            name: cached.name || emoji.name || 'emoji',
-            animated: cached.animated === true,
-        };
-    }
-
-    return {
-        id: emoji.id,
-        name: emoji.name || 'emoji',
-        animated: emoji.animated === true,
-    };
-}
-
-function messageEmoji(data, client = null, fallback = '') {
-    const emoji = parseEmojiData(data);
-    if (!emoji) return fallback;
-    if (!emoji.id) return emoji.name || fallback;
-
-    const cached = cachedEmoji(data, client);
-    if (!cached) return fallback;
-    return `<${cached.animated ? 'a' : ''}:${cached.name || emoji.name || 'emoji'}:${cached.id}>`;
-}
+// ── Core helpers ──────────────────────────────────────────────────────────────
 
 function parseEmojiData(data) {
     if (!data) return null;
@@ -107,14 +60,82 @@ function parseEmojiData(data) {
         const id = data.id ? String(data.id) : null;
         const name = data.name ? String(data.name) : null;
         if (!id && !name) return null;
-        return {
-            id,
-            name,
-            animated: data.animated === true,
-        };
+        return { id, name, animated: data.animated === true };
     }
 
     return null;
+}
+
+function emojiStr(data) {
+    const emoji = parseEmojiData(data);
+    if (!emoji) return '';
+    if (!emoji.id) return emoji.name || '';
+    if (!emoji.name) return emoji.id;
+    return `<${emoji.animated ? 'a' : ''}:${emoji.name}:${emoji.id}>`;
+}
+
+/**
+ * Returns the Discord emoji object from cache if the bot can access it.
+ * Checks (in order):
+ *   1. Guild emoji cache — original ID
+ *   2. Application emoji cache — original ID
+ *   3. Application emoji cache — mapped ID (after syncMusicEmojis upload)
+ */
+function cachedEmoji(data, client = null) {
+    const emoji = parseEmojiData(data);
+    if (!emoji?.id) return null;
+
+    // 1 & 2: try original ID in guild + app cache
+    const byOriginal = client?.emojis?.cache?.get?.(emoji.id)
+        || client?.application?.emojis?.cache?.get?.(emoji.id);
+    if (byOriginal) return byOriginal;
+
+    // 3: try mapped ID (emoji was re-uploaded to this bot's application)
+    const mappedId = _emojiIdMap[emoji.id];
+    if (mappedId && mappedId !== emoji.id) {
+        const byMapped = client?.emojis?.cache?.get?.(mappedId)
+            || client?.application?.emojis?.cache?.get?.(mappedId);
+        if (byMapped) return byMapped;
+    }
+
+    return null;
+}
+
+function isApplicationOnlyEmoji(data, client = null) {
+    const emoji = parseEmojiData(data);
+    if (!emoji?.id) return false;
+    const inGuild = client?.emojis?.cache?.get?.(emoji.id);
+    if (inGuild) return false;
+    const inApp = client?.application?.emojis?.cache?.get?.(emoji.id);
+    if (inApp) return true;
+    const mappedId = _emojiIdMap[emoji.id];
+    if (mappedId) {
+        return !!(client?.application?.emojis?.cache?.get?.(mappedId));
+    }
+    return false;
+}
+
+function componentEmoji(data, client = null, fallback = null) {
+    const emoji = parseEmojiData(data);
+    if (!emoji) return fallback;
+    if (!emoji.id) return emoji.name || fallback;
+
+    const cached = cachedEmoji(data, client);
+    if (cached) {
+        return { id: cached.id, name: cached.name || emoji.name || 'emoji', animated: cached.animated === true };
+    }
+
+    return { id: emoji.id, name: emoji.name || 'emoji', animated: emoji.animated === true };
+}
+
+function messageEmoji(data, client = null, fallback = '') {
+    const emoji = parseEmojiData(data);
+    if (!emoji) return fallback;
+    if (!emoji.id) return emoji.name || fallback;
+
+    const cached = cachedEmoji(data, client);
+    if (!cached) return fallback;
+    return `<${cached.animated ? 'a' : ''}:${cached.name || emoji.name || 'emoji'}:${cached.id}>`;
 }
 
 function emojiResolvable(data, client = null) {
@@ -128,11 +149,7 @@ function emojiResolvable(data, client = null) {
     const appEmoji = client?.application?.emojis?.cache?.get?.(emoji.id);
     if (appEmoji) return appEmoji;
 
-    return {
-        id: emoji.id,
-        name: emoji.name || 'emoji',
-        animated: emoji.animated === true,
-    };
+    return { id: emoji.id, name: emoji.name || 'emoji', animated: emoji.animated === true };
 }
 
 function reactionIdentifier(data) {
@@ -149,11 +166,9 @@ function customEmojiEntries() {
             Object.entries(value).forEach(([key, child]) => visit(prefix ? `${prefix}.${key}` : key, child));
             return;
         }
-
         const emoji = parseEmojiData(value);
         if (emoji?.id) entries.push({ key: prefix, emoji });
     };
-
     Object.entries(MUSIC_EMOJIS).forEach(([key, value]) => visit(key, value));
     return entries;
 }
@@ -164,20 +179,15 @@ function validateCustomEmojis(client = null) {
 
 // ── react() — universal emoji reaction ───────────────────────────────────────
 //
-// message.react() requires the bot to own the emoji (guild emoji in a shared
-// guild, or an application emoji).  If the emoji is not in any cache the bot
-// cannot access it for reactions, so we go straight to the unicode fallback
-// to avoid hitting Discord's rate-limit with doomed custom-emoji attempts.
-//
-// If the emoji IS in cache (accessible) we try it first, then fall back to
-// unicode if it still somehow fails.
+// Uses cachedEmoji() which now checks the emojiIdMap from syncMusicEmojis.
+// If the emoji is accessible (in cache after upload), tries it first.
+// Otherwise falls straight to the unicode fallback to avoid Discord rate-limit
+// errors from doomed custom-emoji react() attempts.
 //
 async function react(message, emojiData, fallback = null, client = null) {
     const resolvedClient = client || message?.client || null;
     const cached = cachedEmoji(emojiData, resolvedClient);
 
-    // Build candidate list: only include custom emoji if it is actually
-    // accessible (in cache).  Otherwise go straight to the unicode fallback.
     const candidates = cached
         ? [cached, fallback].filter(Boolean)
         : fallback
@@ -191,7 +201,6 @@ async function react(message, emojiData, fallback = null, client = null) {
             : `${candidate.animated ? 'a:' : ''}${candidate.name || ''}:${candidate.id || ''}`;
         if (seen.has(key)) continue;
         seen.add(key);
-
         try {
             return await message.react(candidate);
         } catch {}
@@ -201,12 +210,13 @@ async function react(message, emojiData, fallback = null, client = null) {
 }
 
 module.exports = MUSIC_EMOJIS;
-module.exports.emojiStr = emojiStr;
-module.exports.parseEmojiData = parseEmojiData;
-module.exports.emojiResolvable = emojiResolvable;
-module.exports.componentEmoji = componentEmoji;
-module.exports.messageEmoji = messageEmoji;
+module.exports.setEmojiMap      = setEmojiMap;
+module.exports.emojiStr         = emojiStr;
+module.exports.parseEmojiData   = parseEmojiData;
+module.exports.emojiResolvable  = emojiResolvable;
+module.exports.componentEmoji   = componentEmoji;
+module.exports.messageEmoji     = messageEmoji;
 module.exports.reactionIdentifier = reactionIdentifier;
 module.exports.customEmojiEntries = customEmojiEntries;
 module.exports.validateCustomEmojis = validateCustomEmojis;
-module.exports.react = react;
+module.exports.react            = react;

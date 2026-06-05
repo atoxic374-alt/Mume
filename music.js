@@ -32,6 +32,7 @@ const store = require('./utils/store');
 const likes = require('./utils/likes');
 const { getDisplay } = require('./utils/display');
 const MUSIC_EMOJIS = require('./utils/musicEmojis');
+const { syncMusicEmojis } = require('./utils/syncEmojis');
 const { getEmbedColor, refreshEmbedColor } = require('./utils/embedColor');
 const statusStore = require('./statusStore');
 const { tintAttachmentPayload, warmTintCache } = require('./utils/tintedThumbnail');
@@ -2324,7 +2325,10 @@ module.exports = {
 
         TrueMusic.once('clientReady', async () => {
             await refreshEmbedColor(TrueMusic).catch(() => {});
-            await TrueMusic.application?.emojis?.fetch?.().catch(() => {});
+            // Sync custom emojis to this bot's application so react() can use them
+            syncMusicEmojis(TrueMusic, MUSIC_EMOJIS)
+                .then(map => MUSIC_EMOJIS.setEmojiMap(map))
+                .catch(err => console.warn(`[EmojiSync] ${err?.message || err}`));
             warnUnavailableMusicEmojis(TrueMusic);
             warmTintCache(TINTED_ICON_FILES, [getEmbedColor(TrueMusic)]);
             try { TrueMusic.poru.init(TrueMusic); } catch (e) { console.error(`[Poru] فشل الاتصال بـ Lavalink: ${e.message}`); }
@@ -2566,8 +2570,7 @@ module.exports = {
                         const row1 = new ActionRowBuilder().addComponents(button1);
                         const helpEmbed = new EmbedBuilder()
                             .setColor(getEmbedColor(TrueMusic))
-
-                            .setThumbnail("https://cdn.discordapp.com/attachments/1091536665912299530/1264225405465002025/O.png?ex=669d1928&is=669bc7a8&hm=ee36f6e8facc4eb99721570bc7f32dff9551bc5bea89d7a027c09408cafba604&")
+                            .setThumbnail(message.author.displayAvatarURL({ dynamic: true, size: 256 }))
                             .setDescription([
                                 '***Music Commands :***',
                                 '',
@@ -2581,7 +2584,6 @@ module.exports = {
                                 '``queue`` : Show the server playlist',
                                 '``loop`` : Loop the current song',
                                 '``pause`` : Pause the music',
-                                '``resume`` : Resume the music',
                                 '``seek`` : Seek to a specific time',
                                 '``forward`` : Move forward in the current song',
                                 '``remove`` : Remove a song from the queue',
@@ -2589,9 +2591,9 @@ module.exports = {
                                 '',
                                 '***Owner Commands :***',
                                 '',
-                                '``join`` / ``come`` / ``setvc`` : Set bot voice channel enable 24/7',
-                                '``leave`` : Leave voice channel disable 24/7',
-                                '``setchat`` / ``chat`` / ``settc`` : Set commands chat',
+                                '``join`` : Set bot voice channel & enable 24/7',
+                                '``leave`` : Leave voice channel & disable 24/7',
+                                '``setchat`` : Set commands chat',
                                 '``unchat`` : Clear commands chat',
                                 '``setprefix`` : Change the bot prefix',
                                 '``unsetprefix`` : Remove the bot prefix',
@@ -2601,34 +2603,23 @@ module.exports = {
                                 '``streaming`` : Change the bot status',
                                 '``restart`` : Restart the bot',
                                 '``ping`` : Show bot response speed',
-                            ].join('\n'))
-
-
+                            ].join('\n'));
 
                         const additionalEmbed = new EmbedBuilder()
                             .setColor(getEmbedColor(TrueMusic))
-                            .setDescription(`
-                **Owner :** <@${botOwnerId}>
-                **Ownerid :** \`${botOwnerId}\``);
-
+                            .setDescription(`**Owner :** <@${botOwnerId}>\n**Owner ID :** \`${botOwnerId}\``);
 
                         message.author.send({
                             embeds: [helpEmbed, additionalEmbed],
                             components: [row1],
                         }).then(async () => {
-
                             const helpdma = new EmbedBuilder()
                                 .setColor(getEmbedColor(TrueMusic))
                                 .setDescription(`> **تم إرسال الاوامر في الخاص.**`)
-                                .setFooter({
-                                    text: 'Ens 𝐒𝐭𝐨𝐫𝐞',
-                                });
+                                .setFooter({ text: 'Ens 𝐒𝐭𝐨𝐫𝐞' });
                             message.reply({ embeds: [helpdma] }).catch(() => 0);
-
-
-
                         }).catch(() => {
-                            message.react("🔒").catch(() => 0);
+                            message.react('🔒').catch(() => 0);
                         });
                     }
 
