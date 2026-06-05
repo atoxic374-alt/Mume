@@ -27,6 +27,7 @@ const {
 const fs = require('fs');
 const { Poru } = require('poru');
 const { Agent: UndiciAgent, request: undiciRequest } = require('undici');
+const lavalinkKeepAlive = require('./utils/lavalinkKeepAlive');
 
 const { owners, TwitchUrl, statuses } = require(`${process.cwd()}/config`);
 const store = require('./utils/store');
@@ -1335,7 +1336,8 @@ function lavalinkRestAgent(origin) {
 // Monkey-patch Poru's REST client to replace globalThis.fetch (no connection pooling)
 // with undici (persistent keep-alive connections). Drops per-command latency from
 // 50-300ms (TCP handshake per call) to <5ms (reuses existing connection).
-function patchPoruNodeRest(node) {
+// onSessionLost: optional callback fired when Lavalink returns 404 "Session not found"
+function patchPoruNodeRest(node, onSessionLost = null) {
     const rest = node?.rest;
     if (!rest || rest._undiciPatched) return;
     rest._undiciPatched = true;
@@ -1352,6 +1354,18 @@ function patchPoruNodeRest(node) {
         bodyTimeout: 1000,
     }).then(r => r.body.dump().catch(() => {})).catch(() => {});
 
+    // Detects "Session not found" in a 404 response and fires onSessionLost
+    function _detectSessionLost(statusCode, text) {
+        if (statusCode !== 404 || !onSessionLost) return;
+        try {
+            const parsed = JSON.parse(text);
+            if (/session not found/i.test(parsed?.message || '')) {
+                console.warn(`[FastRest] Session not found detected — triggering node reconnect`);
+                setImmediate(onSessionLost);
+            }
+        } catch {}
+    }
+
     const fastPatch = async function(endpoint, body) {
         try {
             const response = await undiciRequest(rest.url + endpoint, {
@@ -1367,6 +1381,7 @@ function patchPoruNodeRest(node) {
                 bodyTimeout: 400,
             });
             const text = await response.body.text().catch(() => '{}');
+            _detectSessionLost(response.statusCode, text);
             try { return JSON.parse(text); } catch { return null; }
         } catch {
             return null;
@@ -1388,6 +1403,7 @@ function patchPoruNodeRest(node) {
                 bodyTimeout: 400,
             });
             const text = await response.body.text().catch(() => '{}');
+            _detectSessionLost(response.statusCode, text);
             try { return JSON.parse(text); } catch { return null; }
         } catch {
             return null;
@@ -2621,10 +2637,10 @@ module.exports = {
 
         TrueMusic.poru = new Poru(TrueMusic, hostConfig, {
             defaultPlatform: 'ytsearch',
-            reconnectTries: 20,
-            reconnectTimeout: 6000,
+            reconnectTries: 50,       // ↑ was 20 — أكثر محاولات إعادة اتصال
+            reconnectTimeout: 3000,   // ↓ was 6000ms — أسرع في إعادة الاتصال
             resumeKey: `ens-${token.slice(-10)}`,
-            resumeTimeout: 180,
+            resumeTimeout: 600,       // ↑ was 180 — 10 دقائق (سيُستبدل بـ PATCH صحيح من lavalinkKeepAlive)
             autoResume: true,
             bypassChecks: false,
         });
@@ -2870,7 +2886,12 @@ module.exports = {
         TrueMusic.poru.on('nodeConnect', (node) => {
             // Patch REST immediately so all commands (skip/stop/pause/volume)
             // use undici keep-alive instead of globalThis.fetch (new TCP per call)
-            patchPoruNodeRest(node);
+            // Pass session-lost callback so REST 404 triggers immediate reconnect
+            patchPoruNodeRest(node, () => requestPoruInit('Session not found (REST)', 5_000));
+
+            // Enable server-side resuming (الإصلاح الجذري: Poru يرسل payload خاطئ)
+            // + WS ping كل 25s (يمنع Railway من قطع الاتصال الخامل)
+            lavalinkKeepAlive.onNodeConnect(node, TrueMusic).catch(() => {});
 
             const name = node.options.name || node.options.host;
             const prev = statusStore.getNodes().get(name) || {};
@@ -2891,7 +2912,9 @@ module.exports = {
         });
 
         TrueMusic.poru.on('nodeReconnect', (node) => {
-            patchPoruNodeRest(node);
+            patchPoruNodeRest(node, () => requestPoruInit('Session not found (REST reconnect)', 5_000));
+            // أعد تفعيل resuming + WS ping بعد كل إعادة اتصال
+            lavalinkKeepAlive.onNodeConnect(node, TrueMusic).catch(() => {});
             const name = node.options.name || node.options.host;
             const prev = statusStore.getNodes().get(name) || {};
             const data = {
@@ -2904,6 +2927,8 @@ module.exports = {
         });
 
         TrueMusic.poru.on('nodeDisconnect', (node) => {
+            // أوقف WS ping — سيُستأنف عند nodeConnect/nodeReconnect
+            lavalinkKeepAlive.onNodeDisconnect(node);
             const name = node.options.name || node.options.host;
             const prev = statusStore.getNodes().get(name) || {};
             const data = { status: 'offline', reconnects: prev.reconnects ?? 0 };
@@ -2984,6 +3009,14 @@ module.exports = {
                     if (node.isConnected) scheduleNodeRecovery(node, 'shard_resume');
                 });
             }
+            // إجبار كل player على تجديد voice state (Discord لا يعيد VOICE_SERVER_UPDATE تلقائياً)
+            lavalinkKeepAlive.onShardReconnect(TrueMusic, TrueMusic.poru, 5000);
+        });
+
+        // ── Fix: أيضاً عند shardReconnecting (قبل اكتمال الاتصال) ───────────────
+        TrueMusic.on('shardReconnecting', () => {
+            // تأخير أطول لأن الـ shard لم يكتمل بعد
+            lavalinkKeepAlive.onShardReconnect(TrueMusic, TrueMusic.poru, 8000);
         });
 
         TrueMusic.once('clientReady', async () => {
@@ -2999,6 +3032,8 @@ module.exports = {
                 .catch(err => console.warn(`[EmojiSync] ${err?.message || err}`));
             warnUnavailableMusicEmojis(TrueMusic);
             warmTintCache(TINTED_ICON_FILES, [getEmbedColor(TrueMusic)]);
+            // حقن sessions محفوظة → يرسل Poru sessionId القديم عند الاتصال لمحاولة الـ resume
+            lavalinkKeepAlive.prepareNodes(TrueMusic.poru);
             try { TrueMusic.poru.init(TrueMusic); } catch (e) { console.error(`[Poru] فشل الاتصال بـ Lavalink: ${e.message}`); }
             collection.set(TrueMusic.user.id, TrueMusic);
 
