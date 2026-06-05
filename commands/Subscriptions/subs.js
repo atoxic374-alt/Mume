@@ -135,7 +135,7 @@ async function handleAddSub(interaction, client) {
 
   coll.on('collect', async i => {
     const cid = i.customId;
-    if (cid === `sa_cancel_${mid}`) { await i.update({ embeds: [new EmbedBuilder().setDescription('> ✖️ تم الإلغاء.').setColor('#e74c3c')], components: [] }); return coll.stop(); }
+    if (cid === `sa_cancel_${mid}`) { await i.update({ embeds: [new EmbedBuilder().setDescription('> ✖️ تم الإلغاء.').setColor(getEmbedColor(client))], components: [] }); return coll.stop(); }
     if (cid.startsWith(`sa_back_`)) { state = cid.split('_')[2]; return i.update(genContent()); }
 
     if (state === 'COUNT') {
@@ -184,7 +184,7 @@ async function handleAddSub(interaction, client) {
   coll.on('end', async (_, reason) => {
     if (reason !== 'FINISH') return;
     const bots = getBots();
-    if (bots.length < selectedCount) return prompt.edit({ embeds: [new EmbedBuilder().setDescription('> ❌ لا توجد بوتات كافية.').setColor('#e74c3c')], components: [] });
+    if (bots.length < selectedCount) return prompt.edit({ embeds: [new EmbedBuilder().setDescription('> ❌ لا توجد بوتات كافية.').setColor(getEmbedColor(client))], components: [] });
 
     const code = `#${generateCode(5)}`;
     const expirationTime = Date.now() + selectedDuration;
@@ -213,7 +213,7 @@ async function handleAddSub(interaction, client) {
       { name: '👤 المستخدم', value: `<@${userId}>`, inline: true }, { name: '🖥️ السيرفر', value: `\`${serverId}\``, inline: true },
       { name: '🤖 البوتات', value: `\`${selectedCount}\``, inline: true }, { name: '⏳ المدة', value: `\`${formatDuration(selectedDuration)}\``, inline: true },
       { name: '🔖 SuID', value: `\`${code}\``, inline: true }
-    ).setColor('#2ecc71').setTimestamp()], components: [] });
+    ).setColor(getEmbedColor(client)).setTimestamp()], components: [] });
   });
 }
 
@@ -243,7 +243,7 @@ async function handleRemoveSub(interaction, client) {
         { name: '👤 المستخدم', value: `<@${entry.user}>`, inline: true },
         { name: '🤖 البوتات', value: `\`${entry.botsCount}\``, inline: true },
         { name: '🖥️ السيرفر', value: `\`${entry.server}\``, inline: true }
-      ).setColor('#f1c40f');
+      ).setColor(getEmbedColor(client));
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`sr_confirm_${code}_${mid}`).setLabel('تأكيد الحذف').setStyle(ButtonStyle.Danger),
@@ -279,13 +279,13 @@ async function executeRemoval(code, interaction, client, prompt) {
 
     await prompt.edit({ content: `✅ تم حذف الاشتراك \`${code}\` بنجاح. سيتم تنظيف البوتات.`, embeds: [], components: [] });
 
-    client.users.fetch(sub.user).then(u => u.send({ embeds: [new EmbedBuilder().setTitle('⚠️ تم إنهاء اشتراكك').setDescription(`تم إزالة اشتراكك برقم \`${code}\`.`).setColor('#e74c3c').setTimestamp()] }).catch(() => {})).catch(() => {});
+    client.users.fetch(sub.user).then(u => u.send({ embeds: [new EmbedBuilder().setTitle('⚠️ تم إنهاء اشتراكك').setDescription(`تم إزالة اشتراكك برقم \`${code}\`.`).setColor(getEmbedColor(client)).setTimestamp()] }).catch(() => {})).catch(() => {});
 
     const logCh = client.channels.cache.get(logChannelId);
     if (logCh) logCh.send({ embeds: [new EmbedBuilder().setTitle('إزالة اشتراك 🔴').addFields(
       { name: '👤 المستخدم', value: `<@${sub.user}>`, inline: true }, { name: '🔖 SuID', value: `\`${code}\``, inline: true },
       { name: '🤖 البوتات', value: `\`${toRemove.length}\``, inline: true }, { name: '🛠️ بواسطة', value: `<@${interaction.user.id}>`, inline: true }
-    ).setColor('#e74c3c').setTimestamp()] });
+    ).setColor(getEmbedColor(client)).setTimestamp()] });
 
     for (const t of toRemove) {
       try {
@@ -379,7 +379,7 @@ async function executeAddTime(code, durationMs, durationStr, interaction, client
       { name: '🔖 SuID', value: `\`${code}\``, inline: true },
       { name: '➕ الوقت المضاف', value: `\`${durationStr}\``, inline: true },
       { name: '📅 الانتهاء الجديد', value: `<t:${Math.floor(entry.expirationTime / 1000)}:F>` }
-    ).setColor('#2ecc71')], components: [] });
+    ).setColor(getEmbedColor(client))], components: [] });
 
     const logCh = client.channels.cache.get(logChannelId);
     if (logCh) logCh.send({ embeds: [new EmbedBuilder().setTitle('تحديث وقت الاشتراك ⏳').addFields(
@@ -551,12 +551,12 @@ module.exports = {
 
     const channel = message.mentions.channels.first();
     if (!channel) {
-      return message.reply({ embeds: [new EmbedBuilder().setDescription('> يرجى منشن الروم.\n> مثال: `!subs #channel`').setColor('#e74c3c')] });
+      return message.reply({ embeds: [new EmbedBuilder().setDescription('> يرجى منشن الروم.\n> مثال: `!subs #channel`').setColor(getEmbedColor(client))] });
     }
 
     const attachment = message.attachments.first();
     if (!attachment) {
-      return message.reply({ embeds: [new EmbedBuilder().setDescription('> يرجى إرفاق صورة مع الأمر.').setColor('#e74c3c')] });
+      return message.reply({ embeds: [new EmbedBuilder().setDescription('> يرجى إرفاق صورة مع الأمر.').setColor(getEmbedColor(client))] });
     }
 
     const embed = new EmbedBuilder()
@@ -565,9 +565,9 @@ module.exports = {
 
     try {
       await channel.send({ embeds: [embed], components: buildPanelRows() });
-      await message.reply({ embeds: [new EmbedBuilder().setDescription(`> ✅ تم إرسال لوحة الاشتراكات إلى <#${channel.id}>.`).setColor('#2ecc71')] });
+      await message.reply({ embeds: [new EmbedBuilder().setDescription(`> ✅ تم إرسال لوحة الاشتراكات إلى <#${channel.id}>.`).setColor(getEmbedColor(client))] });
     } catch (e) {
-      message.reply({ embeds: [new EmbedBuilder().setDescription(`> ❌ فشل الإرسال: \`${e.message}\``).setColor('#e74c3c')] });
+      message.reply({ embeds: [new EmbedBuilder().setDescription(`> ❌ فشل الإرسال: \`${e.message}\``).setColor(getEmbedColor(client))] });
     }
   }
 };
