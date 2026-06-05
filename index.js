@@ -66,6 +66,12 @@ try {
 } catch (err) {
     console.log('[Automatic] failed to install handlers:', err?.message || err);
 }
+try {
+    const subs = require('./commands/Subscriptions/subs');
+    subs.installSubsPanelHandler?.(client);
+} catch (err) {
+    console.log('[Subs] failed to install panel handler:', err?.message || err);
+}
 require('./music.js');
 require('./manager.js');
 
