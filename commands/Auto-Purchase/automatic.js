@@ -1044,30 +1044,39 @@ async function sendPublicPanel(interaction) {
 async function handleAdminProfile(interaction) {
   if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
 
+  const cfg = readJson(path.join(process.cwd(), 'settings', 'config.json'), {});
+  const currentBotsname = Array.isArray(cfg.Botsname) ? cfg.Botsname[0] : (cfg.Botsname || 'غير محدد');
+  const currentStatus   = Array.isArray(cfg.statuses)  ? cfg.statuses[0]  : (cfg.statuses  || 'غير محدد');
+
   const profileEmbed = new EmbedBuilder()
     .setColor(getEmbedColor(interaction.client))
     .setTitle('Bot Profile')
     .setDescription([
-      '**Name :** *تغيير اسم البوت الرئيسي.*',
+      `**Name :** *اسم البوت الرئيسي الحالي — \`${interaction.client.user.username}\`*`,
+      '',
+      `**Bots Prefix :** *البادئة المستخدمة لأسماء البوتات الفرعية — \`${currentBotsname}\`*`,
+      '',
+      `**Streaming :** *نص حالة البوت التلقائية الحالي — \`${currentStatus}\`*`,
       '',
       '**Avatar :** *تغيير صورة البوت الرئيسي.*',
       '',
       '**Banner :** *تغيير بنر البوت الرئيسي.*',
-      '',
-      '**Streaming :** *تغيير حالة البوت التلقائية (Streaming).*',
     ].join('\n'))
     .setThumbnail(interaction.client.user.displayAvatarURL({ dynamic: true, size: 256 }))
     .setFooter({ text: `${interaction.client.user.username} | Bot Profile`, iconURL: interaction.client.user.displayAvatarURL({ dynamic: true }) });
 
-  const row = new ActionRowBuilder().addComponents(
+  const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('auto_profile_name').setLabel('Name').setEmoji('📝').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('auto_profile_botsname').setLabel('Bots Prefix').setEmoji('🏷️').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('auto_profile_streaming').setLabel('Streaming').setEmoji('🎙️').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('auto_profile_avatar').setLabel('Avatar').setEmoji('🖼️').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('auto_profile_banner').setLabel('Banner').setEmoji('🎨').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('auto_profile_streaming').setLabel('Streaming').setEmoji('🎙️').setStyle(ButtonStyle.Secondary),
+  );
+  const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('auto_profile_back').setLabel('Back').setEmoji('◀️').setStyle(ButtonStyle.Primary),
   );
 
-  return interaction.update({ embeds: [profileEmbed], components: [row] });
+  return interaction.update({ embeds: [profileEmbed], components: [row1, row2] });
 }
 
 async function handleProfileAction(interaction, action) {
@@ -1125,24 +1134,62 @@ async function handleProfileAction(interaction, action) {
   }
 
   if (action === 'streaming') {
-    const { TwitchUrl } = require(`${process.cwd()}/settings/config`);
+    const configPath = path.join(process.cwd(), 'settings', 'config.json');
+    const cfg = readJson(configPath, {});
+    const currentStatus = Array.isArray(cfg.statuses) ? cfg.statuses[0] : (cfg.statuses || '');
+    const twitchUrl = (Array.isArray(cfg.TwitchUrl) ? cfg.TwitchUrl[0] : cfg.TwitchUrl) || 'https://www.twitch.tv/tnbeh';
+
     const modal = new ModalBuilder().setCustomId('auto_profile_modal_streaming').setTitle('Set Streaming Status');
     modal.addComponents(new ActionRowBuilder().addComponents(
-      new TextInputBuilder().setCustomId('status').setLabel('Streaming Status Text').setPlaceholder('Name shown in streaming status').setStyle(TextInputStyle.Short).setRequired(true),
+      new TextInputBuilder()
+        .setCustomId('status')
+        .setLabel('Streaming Status Text')
+        .setPlaceholder('Name shown in streaming status')
+        .setValue(currentStatus)
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true),
     ));
     await interaction.showModal(modal);
     const submit = await interaction.awaitModalSubmit({ filter: i => i.customId === 'auto_profile_modal_streaming' && i.user.id === interaction.user.id, time: 60000 }).catch(() => null);
     if (!submit) return;
     const statusText = submit.fields.getTextInputValue('status').trim();
-    const twitchUrl = (Array.isArray(TwitchUrl) ? TwitchUrl[0] : TwitchUrl) || 'https://www.twitch.tv/tnbeh';
     try {
       client.user.setPresence({
         activities: [{ name: statusText, type: ActivityType.Streaming, url: twitchUrl }],
         status: 'online',
       });
-      return submit.reply({ content: `**Streaming :** *تم تحديث حالة البوت إلى Streaming: \`${statusText}\`*`, ephemeral: true });
+      writeJson(configPath, { ...cfg, statuses: [statusText] });
+      return submit.reply({ content: `**Streaming :** *تم تحديث حالة البوت إلى \`${statusText}\` وحُفظت بشكل دائم.*`, ephemeral: true });
     } catch (err) {
       return submit.reply({ content: `**Streaming :** *فشل تحديث الحالة: ${err?.message || 'Unknown error'}*`, ephemeral: true });
+    }
+  }
+
+  if (action === 'botsname') {
+    const configPath = path.join(process.cwd(), 'settings', 'config.json');
+    const cfg = readJson(configPath, {});
+    const currentBotsname = Array.isArray(cfg.Botsname) ? cfg.Botsname[0] : (cfg.Botsname || '');
+
+    const modal = new ModalBuilder().setCustomId('auto_profile_modal_botsname').setTitle('Set Bots Prefix');
+    modal.addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('botsname')
+        .setLabel('Bots Name Prefix')
+        .setPlaceholder('اسم البادئة (مثال: music)')
+        .setValue(currentBotsname)
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(20),
+    ));
+    await interaction.showModal(modal);
+    const submit = await interaction.awaitModalSubmit({ filter: i => i.customId === 'auto_profile_modal_botsname' && i.user.id === interaction.user.id, time: 60000 }).catch(() => null);
+    if (!submit) return;
+    const newBotsname = submit.fields.getTextInputValue('botsname').trim();
+    try {
+      writeJson(configPath, { ...cfg, Botsname: [newBotsname] });
+      return submit.reply({ content: `**Bots Prefix :** *تم تحديث البادئة إلى \`${newBotsname}\` — ستُستخدم هذه البادئة عند إعادة تسمية البوتات الفرعية.*`, ephemeral: true });
+    } catch (err) {
+      return submit.reply({ content: `**Bots Prefix :** *فشل الحفظ: ${err?.message || 'Unknown error'}*`, ephemeral: true });
     }
   }
 }
@@ -1162,6 +1209,7 @@ async function handleInteraction(interaction) {
       return interaction.update({ ...autoImagePayload(buildOwnerEmbed(interaction.client, interaction.user)), components: ownerRows() });
     }
     if (id === 'auto_profile_name') return handleProfileAction(interaction, 'name');
+    if (id === 'auto_profile_botsname') return handleProfileAction(interaction, 'botsname');
     if (id === 'auto_profile_avatar') return handleProfileAction(interaction, 'avatar');
     if (id === 'auto_profile_banner') return handleProfileAction(interaction, 'banner');
     if (id === 'auto_profile_streaming') return handleProfileAction(interaction, 'streaming');
