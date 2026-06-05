@@ -60,7 +60,6 @@ require('./music.js');
 require('./manager.js');
 
 
-
     client.on('error', error => console.log(error))
       .on('warn', info => console.log(info))
       .on('disconnecting', () => console.log("Bot is disconnecting...", "warn"))
@@ -78,7 +77,61 @@ require('./manager.js');
         console.log(err.stack ? err.stack : err);
       });
 
+// ── Keep-Alive: zombie-connection detection & auto-reconnect ─────────────────
+// Tracks the last time any Discord gateway event was received.
+// If no event arrives for ZOMBIE_THRESHOLD_MS, the WebSocket is considered
+// dead and a forced reconnect is triggered.
+let lastGatewayEventAt = Date.now();
+const ZOMBIE_THRESHOLD_MS = 4 * 60 * 1000; // 4 minutes without any event = zombie
+
+// Update the timestamp on ANY raw packet received from the gateway
+client.on('raw', () => {
+    lastGatewayEventAt = Date.now();
+});
+
+// Also update on high-level events as a secondary signal
+client.on('messageCreate', () => { lastGatewayEventAt = Date.now(); });
+client.on('interactionCreate', () => { lastGatewayEventAt = Date.now(); });
+client.on('voiceStateUpdate', () => { lastGatewayEventAt = Date.now(); });
+
+let isReconnecting = false;
+
+async function zombieCheck() {
+    if (!client.readyAt) return; // not logged in yet
+    if (isReconnecting) return;
+
+    const elapsed = Date.now() - lastGatewayEventAt;
+    if (elapsed < ZOMBIE_THRESHOLD_MS) return;
+
+    isReconnecting = true;
+    console.log(`[KeepAlive] No gateway events for ${Math.floor(elapsed / 1000)}s — forcing reconnect`);
+
+    try {
+        // Try soft WS reconnect first (all shards)
+        if (client.ws?.shards?.size > 0) {
+            client.ws.shards.forEach(shard => {
+                try { shard.destroy({ recover: true }); } catch {}
+            });
+        } else {
+            // Fallback: full destroy + re-login
+            await client.destroy().catch(() => {});
+            await new Promise(r => setTimeout(r, 3000));
+            await client.login(Token).catch(e => console.log('[KeepAlive] Re-login failed:', e?.message));
+        }
+        lastGatewayEventAt = Date.now();
+    } catch (e) {
+        console.log('[KeepAlive] Reconnect error:', e?.message);
+    } finally {
+        isReconnecting = false;
+    }
+}
+
+// Check every 2 minutes
+setInterval(zombieCheck, 2 * 60 * 1000);
+// ─────────────────────────────────────────────────────────────────────────────
+
 client.once('clientReady', () => {
+    lastGatewayEventAt = Date.now(); // reset on ready
     refreshEmbedColor(client).catch(() => {});
     const { checkAndReplaceTokens } = require('./tokenHealthChecker');
     setTimeout(() => checkAndReplaceTokens(client), 15000);

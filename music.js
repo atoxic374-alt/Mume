@@ -2039,7 +2039,11 @@ module.exports = {
         // Passing every raw packet (heartbeat ACKs, GUILD_CREATE, MESSAGE_CREATE…)
         // to packetUpdate() is wasted CPU — Poru only acts on VOICE_STATE_UPDATE
         // and VOICE_SERVER_UPDATE. With 100+ bots this saves ~95% of raw-handler calls.
+        //
+        // Also track last gateway event time for zombie-connection detection.
+        let lastMusicEventAt = Date.now();
         TrueMusic.on('raw', (packet) => {
+            lastMusicEventAt = Date.now();
             if (packet.t !== 'VOICE_STATE_UPDATE' && packet.t !== 'VOICE_SERVER_UPDATE') return;
             try {
                 TrueMusic.poru.packetUpdate(packet);
@@ -2471,6 +2475,26 @@ module.exports = {
                     });
                 }
 
+
+                // ── Zombie-connection detection for music sub-bots ────────────────
+                // If no raw gateway event has arrived in 4 minutes, the WebSocket
+                // is likely in a zombie state. Force a shard reconnect so the bot
+                // recovers without needing a full restart.
+                const MUSIC_ZOMBIE_THRESHOLD_MS = 4 * 60 * 1000;
+                const musicElapsed = Date.now() - lastMusicEventAt;
+                if (musicElapsed > MUSIC_ZOMBIE_THRESHOLD_MS) {
+                    console.log(`[KeepAlive-music] ${TrueMusic.user?.username || token.slice(-6)}: no events for ${Math.floor(musicElapsed / 1000)}s — reconnecting shards`);
+                    lastMusicEventAt = Date.now(); // reset before reconnect to avoid spam
+                    try {
+                        if (TrueMusic.ws?.shards?.size > 0) {
+                            TrueMusic.ws.shards.forEach(shard => {
+                                try { shard.destroy({ recover: true }); } catch {}
+                            });
+                        }
+                    } catch {}
+                }
+                // ─────────────────────────────────────────────────────────────────
+
             }, 15_000); // ── Optimization: was 5s → 15s (3× fewer fires, same responsiveness for music)
         });
 
@@ -2838,13 +2862,13 @@ module.exports = {
       }
       // ─────────────────────────────────────────────────────────────────────────
 
-	      if (!naturalEnd && reason !== 'stopped' && reason !== 'replaced') {
-	          console.warn(`[TrackEnd] non-natural end for ${trackIdentity(track) || 'unknown'}: ${reason}`);
-	      }
+              if (!naturalEnd && reason !== 'stopped' && reason !== 'replaced') {
+                  console.warn(`[TrackEnd] non-natural end for ${trackIdentity(track) || 'unknown'}: ${reason}`);
+              }
 
-	      if (naturalEnd) {
-	          disableIdlePlaybackModesIfAlone(TrueMusic, player, 'track_end_alone');
-	      }
+              if (naturalEnd) {
+                  disableIdlePlaybackModesIfAlone(TrueMusic, player, 'track_end_alone');
+              }
 
       // Guard: if the new track already started and its panel is live, skip UI finalization
       // to avoid disabling the new panel by mistake (race condition with trackStart).
@@ -2858,9 +2882,9 @@ module.exports = {
       await bumpQueueVersion(player, `track_end:${reason}`);
             });
 
-	            TrueMusic.poru.on("queueEnd", async (player) => {
-	              disableIdlePlaybackModesIfAlone(TrueMusic, player, 'queue_end_alone');
-	              await finalizePlayerUi(player, { complete: player?.data?.lastTrackEndNatural === true });
+                    TrueMusic.poru.on("queueEnd", async (player) => {
+                      disableIdlePlaybackModesIfAlone(TrueMusic, player, 'queue_end_alone');
+                      await finalizePlayerUi(player, { complete: player?.data?.lastTrackEndNatural === true });
               await bumpQueueVersion(player, 'queue_end');
               const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
               await updatePlaybackVoiceStatus(TrueMusic, tokenObj2, player, null);
@@ -2961,18 +2985,18 @@ module.exports = {
         return selected;
     }
 
-	            // ── trackStart: always publish the normal now-playing panel ──────────
-	            TrueMusic.poru.on('trackStart', async (player, track) => {
-	        ensurePlayerData(player);
-	        const identity = trackIdentity(track);
-	        const startLock = player.data.nowPlayingSendLock;
-	        if (identity && startLock?.identity === identity && Date.now() - Number(startLock.at || 0) < 15_000) {
-	            if (process.env.DEBUG_NP) console.warn(`[NowPlaying] early duplicate trackStart suppressed for ${identity}`);
-	            return;
-	        }
-	        if (identity) player.data.nowPlayingSendLock = { identity, at: Date.now(), starting: true };
-	        await bumpQueueVersion(player, 'track_start');
-	        clearStopped();
+                    // ── trackStart: always publish the normal now-playing panel ──────────
+                    TrueMusic.poru.on('trackStart', async (player, track) => {
+                ensurePlayerData(player);
+                const identity = trackIdentity(track);
+                const startLock = player.data.nowPlayingSendLock;
+                if (identity && startLock?.identity === identity && Date.now() - Number(startLock.at || 0) < 15_000) {
+                    if (process.env.DEBUG_NP) console.warn(`[NowPlaying] early duplicate trackStart suppressed for ${identity}`);
+                    return;
+                }
+                if (identity) player.data.nowPlayingSendLock = { identity, at: Date.now(), starting: true };
+                await bumpQueueVersion(player, 'track_start');
+                clearStopped();
 
         // ── Recovery cleanup ──────────────────────────────────────────────────
         // If trackEnd(replaced) was suppressed by the recovery guard, _recovering
@@ -2981,63 +3005,63 @@ module.exports = {
         player.data._recovering = false;
         player.data._recoveryTrackId = null;
         player.data._recoveryAt = null;
-	        // ─────────────────────────────────────────────────────────────────────
+                // ─────────────────────────────────────────────────────────────────────
 
-	        const stuckRecoveryIdentity = player.data.stuckRecoveryIdentity;
-	        const stuckResumePosition = Math.max(0, Number(player.data.stuckResumePosition || 0));
-	        const shouldResumeStuckTrack = stuckRecoveryIdentity && stuckRecoveryIdentity === identity;
-	        const applyStuckRecoveryResume = () => {
-	            delete player.data.stuckRecoveryIdentity;
-	            delete player.data.stuckRecoveryAt;
-	            delete player.data.stuckResumePosition;
-	            if (stuckResumePosition > 0) {
-	                setTimeout(() => {
-	                    const stillSameTrack = player.currentTrack && trackIdentity(player.currentTrack) === identity;
-	                    if (!stillSameTrack) return;
-	                    const seek = typeof player.seekTo === 'function' ? player.seekTo.bind(player) : player.seek?.bind(player);
-	                    if (seek) Promise.resolve(seek(stuckResumePosition)).catch(() => {});
-	                }, 1200);
-	            }
-	        };
-	        const previousContext = player.data.nowPlayingContext;
-	        const previousIdentity = player.data.nowPlayingTrackIdentity || trackIdentity(previousContext?.track);
-	        if (player.data.nowPlayingMessage && previousIdentity) {
-	            if (identity && previousIdentity === identity) {
-	                if (wasRecovering || shouldResumeStuckTrack) {
-	                    if (process.env.DEBUG_NP) console.warn(`[NowPlaying] recovered duplicate trackStart for ${identity}`);
-	                } else {
-	                    warnPlayerOnce(
-	                        player,
-	                        `duplicate-panel:${identity}`,
-	                        `[NowPlaying] duplicate trackStart suppressed for ${identity}`,
-	                        10_000,
-	                    );
-	                }
-	                // If this is a recovery restart, reset timing so progress bar stays accurate
-	                if (wasRecovering || shouldResumeStuckTrack) {
-	                    player.data.lastTrack = track;
-	                    player.data.lastProgressAt = Date.now();
-	                    player.data.trackStartedAt = Date.now();
-	                    player.data.lastPosition = shouldResumeStuckTrack ? stuckResumePosition : 0;
-	                    player.data.recoveryAttempts = 0;
-	                    if (shouldResumeStuckTrack) applyStuckRecoveryResume();
-	                }
-	                return;
-	            }
+                const stuckRecoveryIdentity = player.data.stuckRecoveryIdentity;
+                const stuckResumePosition = Math.max(0, Number(player.data.stuckResumePosition || 0));
+                const shouldResumeStuckTrack = stuckRecoveryIdentity && stuckRecoveryIdentity === identity;
+                const applyStuckRecoveryResume = () => {
+                    delete player.data.stuckRecoveryIdentity;
+                    delete player.data.stuckRecoveryAt;
+                    delete player.data.stuckResumePosition;
+                    if (stuckResumePosition > 0) {
+                        setTimeout(() => {
+                            const stillSameTrack = player.currentTrack && trackIdentity(player.currentTrack) === identity;
+                            if (!stillSameTrack) return;
+                            const seek = typeof player.seekTo === 'function' ? player.seekTo.bind(player) : player.seek?.bind(player);
+                            if (seek) Promise.resolve(seek(stuckResumePosition)).catch(() => {});
+                        }, 1200);
+                    }
+                };
+                const previousContext = player.data.nowPlayingContext;
+                const previousIdentity = player.data.nowPlayingTrackIdentity || trackIdentity(previousContext?.track);
+                if (player.data.nowPlayingMessage && previousIdentity) {
+                    if (identity && previousIdentity === identity) {
+                        if (wasRecovering || shouldResumeStuckTrack) {
+                            if (process.env.DEBUG_NP) console.warn(`[NowPlaying] recovered duplicate trackStart for ${identity}`);
+                        } else {
+                            warnPlayerOnce(
+                                player,
+                                `duplicate-panel:${identity}`,
+                                `[NowPlaying] duplicate trackStart suppressed for ${identity}`,
+                                10_000,
+                            );
+                        }
+                        // If this is a recovery restart, reset timing so progress bar stays accurate
+                        if (wasRecovering || shouldResumeStuckTrack) {
+                            player.data.lastTrack = track;
+                            player.data.lastProgressAt = Date.now();
+                            player.data.trackStartedAt = Date.now();
+                            player.data.lastPosition = shouldResumeStuckTrack ? stuckResumePosition : 0;
+                            player.data.recoveryAttempts = 0;
+                            if (shouldResumeStuckTrack) applyStuckRecoveryResume();
+                        }
+                        return;
+                    }
             // Normal when skipping — demote to debug to avoid log noise
             if (process.env.DEBUG_NP) console.warn(`[NowPlaying] finalizing stale panel before new track: ${previousIdentity} -> ${identity || 'unknown'}`);
             await finalizePlayerUi(player, { complete: false, track: previousContext?.track });
             ensurePlayerData(player);
         }
-	                player.data.lastTrack = track;
-	        rememberAutoPlayHistory(player, track);
+                        player.data.lastTrack = track;
+                rememberAutoPlayHistory(player, track);
         player.data.trackStartedAt = Date.now();
         player.data.lastProgressAt = Date.now();
         player.data.lastPosition = 0;
         player.data.recoveryAttempts = 0;
-	        if (shouldResumeStuckTrack) {
-	            applyStuckRecoveryResume();
-	        }
+                if (shouldResumeStuckTrack) {
+                    applyStuckRecoveryResume();
+                }
 
                 const requester = track.info?.requester;
                 const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
@@ -3267,10 +3291,10 @@ module.exports = {
                                         return runMyLikesCommand(myLikesArgs);
                                     }
 
-	                                    let memberVoice = message.member?.voice?.channel;
-	                            if (!memberVoice) return;
+                                            let memberVoice = message.member?.voice?.channel;
+                                    if (!memberVoice) return;
 
-	            let clientVoice = message.guild.members?.me?.voice?.channel;
+                    let clientVoice = message.guild.members?.me?.voice?.channel;
 
             const prefix = tokenObj.prefix || "";
 
@@ -3297,17 +3321,17 @@ module.exports = {
                 remove: [`remove`, `Remove`, `rm`, `حذف`],
                 autoplay: [`autoplay`, `Autoplay`, `Ap`, `ap`],
                 search: [`search`, `ys`, `بحث`],
-	                queue: [`queue`, `قائمة`, `اغاني`, `q`, `qu`, `Q`, `Qu`, `Queue`],
+                        queue: [`queue`, `قائمة`, `اغاني`, `q`, `qu`, `Q`, `Qu`, `Queue`],
 
-	            };
+                    };
 
-	            const isPlayCommand = cmdsArray.play.includes(command);
-	            const canWakeForPlay = isPlayCommand
-	                && !clientVoice
-	                && (!tokenObj.channel || tokenObj.channel === memberVoice.id);
-	            if ((!clientVoice || memberVoice.id !== clientVoice.id) && !canWakeForPlay) return;
+                    const isPlayCommand = cmdsArray.play.includes(command);
+                    const canWakeForPlay = isPlayCommand
+                        && !clientVoice
+                        && (!tokenObj.channel || tokenObj.channel === memberVoice.id);
+                    if ((!clientVoice || memberVoice.id !== clientVoice.id) && !canWakeForPlay) return;
 
-	            if (isPlayCommand) {
+                    if (isPlayCommand) {
                 const song = args.join(' ');
                         if (!song) {
                             return message.channel.send(musicPayload(tokenObj, {
@@ -3324,40 +3348,40 @@ module.exports = {
                             return message.reply(deafenedPlaybackPayload(tokenObj));
                         }
 
-	                                let player = TrueMusic.poru.players.get(message.guild.id);
-	                        if (player) {
-	                            ensurePlayerData(player);
-	                            rememberTextChannel(player, message.channel.id);
-	                            if (!player.isConnected || player.voiceChannel !== message.member.voice.channel.id) {
-	                                try {
-	                                    player.setVoiceChannel(message.member.voice.channel.id, { deaf: true, mute: false });
-	                                } catch (err) {
-	                                    if (!(err instanceof ReferenceError)) throw err;
-	                                }
-	                            }
-	                        }
-	                        message.channel.sendTyping().catch(() => {});
+                                        let player = TrueMusic.poru.players.get(message.guild.id);
+                                if (player) {
+                                    ensurePlayerData(player);
+                                    rememberTextChannel(player, message.channel.id);
+                                    if (!player.isConnected || player.voiceChannel !== message.member.voice.channel.id) {
+                                        try {
+                                            player.setVoiceChannel(message.member.voice.channel.id, { deaf: true, mute: false });
+                                        } catch (err) {
+                                            if (!(err instanceof ReferenceError)) throw err;
+                                        }
+                                    }
+                                }
+                                message.channel.sendTyping().catch(() => {});
 
-	                        if (!player) {
-	                            const lockKey = message.guild.id;
-	                            if (!playConnectionLocks.has(lockKey)) {
-	                                const task = TrueMusic.poru.createConnection({
-	                                    guildId: message.guild.id,
-	                                    voiceChannel: message.member.voice.channel.id,
-	                                    textChannel: message.channel.id,
-	                                    deaf: true,
-	                                    autoPlay: false,
-	                                    group: tokenObj.token,
-	                                }).finally(() => {
-	                                    setTimeout(() => playConnectionLocks.delete(lockKey), 1500);
-	                                });
-	                                playConnectionLocks.set(lockKey, task);
-	                            }
-	                            player = await playConnectionLocks.get(lockKey);
-	                            ensurePlayerData(player);
-	                            rememberTextChannel(player, message.channel.id);
-	                            setAutoPlayState(player, false);
-	                        }
+                                if (!player) {
+                                    const lockKey = message.guild.id;
+                                    if (!playConnectionLocks.has(lockKey)) {
+                                        const task = TrueMusic.poru.createConnection({
+                                            guildId: message.guild.id,
+                                            voiceChannel: message.member.voice.channel.id,
+                                            textChannel: message.channel.id,
+                                            deaf: true,
+                                            autoPlay: false,
+                                            group: tokenObj.token,
+                                        }).finally(() => {
+                                            setTimeout(() => playConnectionLocks.delete(lockKey), 1500);
+                                        });
+                                        playConnectionLocks.set(lockKey, task);
+                                    }
+                                    player = await playConnectionLocks.get(lockKey);
+                                    ensurePlayerData(player);
+                                    rememberTextChannel(player, message.channel.id);
+                                    setAutoPlayState(player, false);
+                                }
 
                         try {
                                     const searchSource = displaySettings(tokenObj).platform;

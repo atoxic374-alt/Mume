@@ -43,6 +43,18 @@ function cachedEmoji(data, client = null) {
         || null;
 }
 
+// Returns true if the emoji exists only as an application emoji (not in any guild).
+// Application emojis in reactions are not supported by third-party Discord clients
+// such as Unicord, so we fall back to unicode in those cases.
+function isApplicationOnlyEmoji(data, client = null) {
+    const emoji = parseEmojiData(data);
+    if (!emoji?.id) return false;
+    const inGuild = client?.emojis?.cache?.get?.(emoji.id);
+    if (inGuild) return false;
+    const inApp = client?.application?.emojis?.cache?.get?.(emoji.id);
+    return !!inApp;
+}
+
 function componentEmoji(data, client = null, fallback = null) {
     const emoji = parseEmojiData(data);
     if (!emoji) return fallback;
@@ -150,14 +162,40 @@ function validateCustomEmojis(client = null) {
     return customEmojiEntries().filter(entry => !cachedEmoji(entry.emoji, client));
 }
 
+// ── react() — universal emoji reaction with Unicord compatibility ─────────────
+//
+// Unicord (and other third-party Discord clients) do NOT render application
+// emojis (emojis owned by the bot application, not a guild) in reactions.
+// When the emoji is application-only we place the unicode fallback FIRST so
+// every client sees a working reaction.  Guild emojis keep the custom-first
+// order for regular Discord users.
+//
 async function react(message, emojiData, fallback = null, client = null) {
     const resolvedClient = client || message?.client || null;
-    const candidates = [
-        cachedEmoji(emojiData, resolvedClient),
-        reactionIdentifier(emojiData),
-        emojiStr(emojiData),
-        fallback,
-    ].filter(Boolean);
+
+    // Determine if this emoji is only an application emoji (no guild copy).
+    // For application-only emojis, prefer the unicode fallback first so
+    // third-party clients like Unicord see the reaction correctly.
+    const appOnly = isApplicationOnlyEmoji(emojiData, resolvedClient);
+
+    let candidates;
+    if (appOnly && fallback) {
+        // Unicord-safe order: unicode first, then custom emoji as secondary
+        candidates = [
+            fallback,
+            cachedEmoji(emojiData, resolvedClient),
+            reactionIdentifier(emojiData),
+            emojiStr(emojiData),
+        ].filter(Boolean);
+    } else {
+        // Normal order: custom emoji first, unicode fallback last
+        candidates = [
+            cachedEmoji(emojiData, resolvedClient),
+            reactionIdentifier(emojiData),
+            emojiStr(emojiData),
+            fallback,
+        ].filter(Boolean);
+    }
 
     const seen = new Set();
     for (const candidate of candidates) {
