@@ -2650,21 +2650,22 @@ module.exports = {
         });
 
         // ✅ Required for Lavalink/Poru voice handshake
-        // ── Optimization: filter to only the 2 packet types Poru needs ──────────
-        // Passing every raw packet (heartbeat ACKs, GUILD_CREATE, MESSAGE_CREATE…)
-        // to packetUpdate() is wasted CPU — Poru only acts on VOICE_STATE_UPDATE
-        // and VOICE_SERVER_UPDATE. With 100+ bots this saves ~95% of raw-handler calls.
+        // ── Voice packet fast-path ────────────────────────────────────────────────
+        // Discord's 'raw' event bypasses all high-level handlers and command
+        // processing. VOICE_STATE_UPDATE and VOICE_SERVER_UPDATE are forwarded
+        // directly to Poru via packetUpdate() — the correct Poru v5 API for raw
+        // Discord gateway packets (equivalent to sendRawData in other clients).
         //
-        // Also track last gateway event time for zombie-connection detection.
+        // All other packet types (heartbeat ACKs, GUILD_CREATE, MESSAGE_CREATE…)
+        // are dropped immediately — Poru only acts on the 2 voice types above.
+        // With 100+ bots this eliminates ~95% of raw-handler overhead.
         let lastMusicEventAt = Date.now();
         TrueMusic.on('raw', (packet) => {
-            lastMusicEventAt = Date.now();
-            if (packet.t !== 'VOICE_STATE_UPDATE' && packet.t !== 'VOICE_SERVER_UPDATE') return;
-            try {
-                TrueMusic.poru.packetUpdate(packet);
-            } catch {
-                // ignore
+            // Voice packets forwarded first — zero logic before this call
+            if (packet.t === 'VOICE_STATE_UPDATE' || packet.t === 'VOICE_SERVER_UPDATE') {
+                try { TrueMusic.poru.packetUpdate(packet); } catch {}
             }
+            lastMusicEventAt = Date.now();
         });
 
         const voiceEnsureLocks = new Map();
@@ -2939,7 +2940,33 @@ module.exports = {
             const prev = statusStore.getNodes().get(name) || {};
             const data = { status: 'offline', reconnects: prev.reconnects ?? 0 };
             statusStore.setNode(name, data);
-            console.log(`\x1b[33m[Poru] Node reconnecting: ${name}\x1b[0m`);
+            console.log(`\x1b[33m[Poru] Node disconnected: ${name} — waiting for reconnect\x1b[0m`);
+
+            // ── Ghost-player prevention ───────────────────────────────────────────
+            // When a node goes offline, Poru players on it keep isPlaying=true
+            // but Lavalink has no session — they become "ghost players": visible
+            // in Discord voice but silent and unresponsive to REST calls.
+            //
+            // Fix: immediately freeze them here. scheduleNodeRecovery() (triggered
+            // by nodeConnect/nodeReconnect) will restart them once the node is back.
+            let ghostCount = 0;
+            TrueMusic.poru.players.forEach(player => {
+                if (player.node !== node) return;
+                ensurePlayerData(player);
+                if (player.isPlaying || player.isPaused) {
+                    // Preserve currentTrack so scheduleNodeRecovery can restart it.
+                    // Only clear the playback state flags.
+                    player.isPlaying = false;
+                    player.isPaused  = false;
+                    ghostCount++;
+                }
+                // Mark for voice-session re-establishment when the node comes back.
+                markPlayerNeedsVoiceRefresh(player, 'node_disconnect');
+            });
+            if (ghostCount > 0) {
+                console.log(`\x1b[33m[Poru] Froze ${ghostCount} ghost player(s) on ${name} — will revive on reconnect\x1b[0m`);
+            }
+            // ─────────────────────────────────────────────────────────────────────
         });
 
         TrueMusic.poru.on('nodeError', (node, err) => {
