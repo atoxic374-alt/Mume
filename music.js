@@ -3330,25 +3330,36 @@ module.exports = {
                             }
                             return tokenBot;
                         });
+                        store.set('tokens', data);
 
+                        // Connect to voice immediately before any slow name change
+                        try {
+                            const guild = message.guild;
+                            const existingPlayer = TrueMusic.poru?.players?.get(guild.id);
+                            if (existingPlayer) {
+                                if (!existingPlayer.isConnected || existingPlayer.voiceChannel !== channel.id) {
+                                    existingPlayer.setVoiceChannel(channel.id, { deaf: true, mute: false });
+                                }
+                            } else if (TrueMusic.poru) {
+                                await TrueMusic.poru.createConnection({
+                                    guildId: guild.id,
+                                    voiceChannel: channel.id,
+                                    textChannel: message.channel.id,
+                                    deaf: true,
+                                    group: token,
+                                });
+                            }
+                        } catch {}
+
+                        reactCustom(message, MUSIC_EMOJIS.settings, '✅');
+
+                        // Rename async (rate-limited by Discord, don't block the command)
                         const cooldownTime = 5000;
                         const lastChangeTime = TrueMusic.user.lastChangeTime || 0;
-                        const currentTime = Date.now();
-                        if (currentTime - lastChangeTime < cooldownTime) {
-                            return message.react('⏳');
-                        }
-
-                        try {
-                            await TrueMusic.user.setUsername(channel.name);
-                            TrueMusic.user.lastChangeTime = Date.now();
-                            store.set('tokens', data);
-                            reactCustom(message, MUSIC_EMOJIS.settings, '✅');
-                        } catch (error) {
-                            if (error.code === 50035) {
-                                return message.reply('> **Please try to change the name later.**');
-                            } else {
-                                console.error(error);
-                            }
+                        if (Date.now() - lastChangeTime >= cooldownTime) {
+                            TrueMusic.user.setUsername(channel.name).then(() => {
+                                TrueMusic.user.lastChangeTime = Date.now();
+                            }).catch(() => {});
                         }
 
                     } else if (args[0] == 'join' || args[0] == 'come' || args[0] == 'setvc' || args[0] == 'ادخل' || args[0] == 'تعال') {
@@ -3362,10 +3373,37 @@ module.exports = {
                             }
                             return tokenBot;
                         });
-
                         store.set('tokens', data);
 
+                        // Connect to voice immediately
+                        try {
+                            const guild = message.guild;
+                            const existingPlayer = TrueMusic.poru?.players?.get(guild.id);
+                            if (existingPlayer) {
+                                if (!existingPlayer.isConnected || existingPlayer.voiceChannel !== channel.id) {
+                                    existingPlayer.setVoiceChannel(channel.id, { deaf: true, mute: false });
+                                }
+                            } else if (TrueMusic.poru) {
+                                await TrueMusic.poru.createConnection({
+                                    guildId: guild.id,
+                                    voiceChannel: channel.id,
+                                    textChannel: message.channel.id,
+                                    deaf: true,
+                                    group: token,
+                                });
+                            }
+                        } catch {}
+
                         reactCustom(message, MUSIC_EMOJIS.settings, '✅');
+                    } else if (args[0] == 'setbanner' || args[0] == 'sb' || args[0] == 'بنر') {
+                        const imageUrl = message.attachments.first()?.url || args[1];
+                        if (!imageUrl) return reactCustom(message, MUSIC_EMOJIS.dislike, '❌');
+                        try {
+                            await TrueMusic.user.setBanner(imageUrl);
+                            reactCustom(message, MUSIC_EMOJIS.settings, '✅');
+                        } catch {
+                            reactCustom(message, MUSIC_EMOJIS.dislike, '❌');
+                        }
                     }
 
                     else if (args[0] == 'setchat' || args[0] == 'chat' || args[0] == 'settc' || args[0] == 'اوامر') {
@@ -3415,14 +3453,15 @@ module.exports = {
                         message.reply(`> **ϟ Pong! My ping is \`${ping}ms.\`**`);
 
                     } else if (args[0] == 'setstreaming' || args[0] == 'streaming' || args[0] == 'ste' || args[0] == 'ستريمنج') {
-                        let status = message.content.split(" ")[2];
+                        let status = args.slice(1).join(' ').trim();
                         if (!status) return reactCustom(message, MUSIC_EMOJIS.dislike, '❌');
+                        const twitchUrlCfg = Array.isArray(TwitchUrl) ? TwitchUrl[0] : TwitchUrl;
                         TrueMusic.user.setPresence({
                             activities: [
                                 {
                                     name: status,
-                                    type: 'STREAMING',
-                                    url: "https://twitch.tv/" + status,
+                                    type: ActivityType.Streaming,
+                                    url: twitchUrlCfg || 'https://www.twitch.tv/tnbeh',
                                 },
                             ],
                             status: 'online',
@@ -3942,6 +3981,14 @@ module.exports = {
 
                             const subBotCommand = parseSubBotCommand();
                             if (subBotCommand && ['set', 'settings', 'اعدادات', 'إعدادات'].includes(subBotCommand.name)) {
+                                // Only ONE bot per subscription per message should handle settings.
+                                // Use the message ID as a lock key stored in a module-level set.
+                                if (!global._settingsHandledMsgIds) global._settingsHandledMsgIds = new Map();
+                                const lockKey = `${message.id}:${tokenObj.code || token}`;
+                                if (global._settingsHandledMsgIds.has(lockKey)) return;
+                                global._settingsHandledMsgIds.set(lockKey, Date.now());
+                                // Clean up after 10 seconds
+                                setTimeout(() => global._settingsHandledMsgIds?.delete(lockKey), 10000);
                                 const settingsCommand = require('./commands/Subscriptions/settings');
                                 return settingsCommand.execute(TrueMusic, message, subBotCommand.args);
                             }

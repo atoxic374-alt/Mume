@@ -3,6 +3,7 @@ const path = require('path');
 const ms = require('ms');
 const {
   ActionRowBuilder,
+  ActivityType,
   ButtonBuilder,
   ButtonStyle,
   Client,
@@ -206,6 +207,13 @@ function ownerRows() {
         .setCustomId('auto_admin_refresh')
         .setLabel('Refresh')
         .setEmoji('🔄')
+        .setStyle(ButtonStyle.Secondary),
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('auto_admin_profile')
+        .setLabel('Bot Profile')
+        .setEmoji('🤖')
         .setStyle(ButtonStyle.Secondary),
     ),
   ];
@@ -1033,6 +1041,112 @@ async function sendPublicPanel(interaction) {
   return interaction.reply({ content: '**Customer Panel :** *تم إرسال لوحة العملاء وتحديث رابط الأوتوماتك.*', ephemeral: true });
 }
 
+async function handleAdminProfile(interaction) {
+  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+
+  const profileEmbed = new EmbedBuilder()
+    .setColor(getEmbedColor(interaction.client))
+    .setTitle('Bot Profile')
+    .setDescription([
+      '**Name :** *تغيير اسم البوت الرئيسي.*',
+      '',
+      '**Avatar :** *تغيير صورة البوت الرئيسي.*',
+      '',
+      '**Banner :** *تغيير بنر البوت الرئيسي.*',
+      '',
+      '**Streaming :** *تغيير حالة البوت التلقائية (Streaming).*',
+    ].join('\n'))
+    .setThumbnail(interaction.client.user.displayAvatarURL({ dynamic: true, size: 256 }))
+    .setFooter({ text: `${interaction.client.user.username} | Bot Profile`, iconURL: interaction.client.user.displayAvatarURL({ dynamic: true }) });
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('auto_profile_name').setLabel('Name').setEmoji('📝').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('auto_profile_avatar').setLabel('Avatar').setEmoji('🖼️').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('auto_profile_banner').setLabel('Banner').setEmoji('🎨').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('auto_profile_streaming').setLabel('Streaming').setEmoji('🎙️').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('auto_profile_back').setLabel('Back').setEmoji('◀️').setStyle(ButtonStyle.Primary),
+  );
+
+  return interaction.update({ embeds: [profileEmbed], components: [row] });
+}
+
+async function handleProfileAction(interaction, action) {
+  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+  const client = interaction.client;
+
+  if (action === 'name') {
+    const modal = new ModalBuilder().setCustomId('auto_profile_modal_name').setTitle('Set Bot Name');
+    modal.addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId('name').setLabel('New Bot Name').setPlaceholder('Max 32 characters').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(32),
+    ));
+    await interaction.showModal(modal);
+    const submit = await interaction.awaitModalSubmit({ filter: i => i.customId === 'auto_profile_modal_name' && i.user.id === interaction.user.id, time: 60000 }).catch(() => null);
+    if (!submit) return;
+    try {
+      await client.user.setUsername(submit.fields.getTextInputValue('name').trim().slice(0, 32));
+      return submit.reply({ content: `**Name :** *تم تحديث اسم البوت إلى \`${client.user.username}\` بنجاح.*`, ephemeral: true });
+    } catch (err) {
+      return submit.reply({ content: `**Name :** *فشل تغيير الاسم: ${err?.message || 'Unknown error'}*`, ephemeral: true });
+    }
+  }
+
+  if (action === 'avatar') {
+    const modal = new ModalBuilder().setCustomId('auto_profile_modal_avatar').setTitle('Set Bot Avatar');
+    modal.addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId('url').setLabel('Avatar Image URL').setPlaceholder('https://...').setStyle(TextInputStyle.Short).setRequired(true),
+    ));
+    await interaction.showModal(modal);
+    const submit = await interaction.awaitModalSubmit({ filter: i => i.customId === 'auto_profile_modal_avatar' && i.user.id === interaction.user.id, time: 60000 }).catch(() => null);
+    if (!submit) return;
+    try {
+      await client.user.setAvatar(submit.fields.getTextInputValue('url').trim());
+      const { refreshEmbedColor } = require('../../utils/embedColor');
+      refreshEmbedColor(client).catch(() => {});
+      return submit.reply({ content: '**Avatar :** *تم تحديث صورة البوت بنجاح.*', ephemeral: true });
+    } catch (err) {
+      return submit.reply({ content: `**Avatar :** *فشل تغيير الصورة: ${err?.message || 'Unknown error'}*`, ephemeral: true });
+    }
+  }
+
+  if (action === 'banner') {
+    const modal = new ModalBuilder().setCustomId('auto_profile_modal_banner').setTitle('Set Bot Banner');
+    modal.addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId('url').setLabel('Banner Image URL').setPlaceholder('https://...').setStyle(TextInputStyle.Short).setRequired(true),
+    ));
+    await interaction.showModal(modal);
+    const submit = await interaction.awaitModalSubmit({ filter: i => i.customId === 'auto_profile_modal_banner' && i.user.id === interaction.user.id, time: 60000 }).catch(() => null);
+    if (!submit) return;
+    try {
+      await client.user.setBanner(submit.fields.getTextInputValue('url').trim());
+      return submit.reply({ content: '**Banner :** *تم تحديث بنر البوت بنجاح.*', ephemeral: true });
+    } catch (err) {
+      return submit.reply({ content: `**Banner :** *فشل تغيير البنر: ${err?.message || 'Unknown error'}*`, ephemeral: true });
+    }
+  }
+
+  if (action === 'streaming') {
+    const { TwitchUrl } = require(`${process.cwd()}/settings/config`);
+    const modal = new ModalBuilder().setCustomId('auto_profile_modal_streaming').setTitle('Set Streaming Status');
+    modal.addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId('status').setLabel('Streaming Status Text').setPlaceholder('Name shown in streaming status').setStyle(TextInputStyle.Short).setRequired(true),
+    ));
+    await interaction.showModal(modal);
+    const submit = await interaction.awaitModalSubmit({ filter: i => i.customId === 'auto_profile_modal_streaming' && i.user.id === interaction.user.id, time: 60000 }).catch(() => null);
+    if (!submit) return;
+    const statusText = submit.fields.getTextInputValue('status').trim();
+    const twitchUrl = (Array.isArray(TwitchUrl) ? TwitchUrl[0] : TwitchUrl) || 'https://www.twitch.tv/tnbeh';
+    try {
+      client.user.setPresence({
+        activities: [{ name: statusText, type: ActivityType.Streaming, url: twitchUrl }],
+        status: 'online',
+      });
+      return submit.reply({ content: `**Streaming :** *تم تحديث حالة البوت إلى Streaming: \`${statusText}\`*`, ephemeral: true });
+    } catch (err) {
+      return submit.reply({ content: `**Streaming :** *فشل تحديث الحالة: ${err?.message || 'Unknown error'}*`, ephemeral: true });
+    }
+  }
+}
+
 async function handleInteraction(interaction) {
   const id = interaction.customId || '';
   if (!id.startsWith('auto_')) return;
@@ -1042,6 +1156,15 @@ async function handleInteraction(interaction) {
     if (id === 'auto_admin_target') return handleAdminTarget(interaction);
     if (id === 'auto_admin_pricing') return handleAdminPricing(interaction);
     if (id === 'auto_admin_send') return sendPublicPanel(interaction);
+    if (id === 'auto_admin_profile') return handleAdminProfile(interaction);
+    if (id === 'auto_profile_back') {
+      if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+      return interaction.update({ ...autoImagePayload(buildOwnerEmbed(interaction.client, interaction.user)), components: ownerRows() });
+    }
+    if (id === 'auto_profile_name') return handleProfileAction(interaction, 'name');
+    if (id === 'auto_profile_avatar') return handleProfileAction(interaction, 'avatar');
+    if (id === 'auto_profile_banner') return handleProfileAction(interaction, 'banner');
+    if (id === 'auto_profile_streaming') return handleProfileAction(interaction, 'streaming');
     if (id === 'auto_admin_refresh') {
       if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
       return interaction.update({ ...autoImagePayload(buildOwnerEmbed(interaction.client, interaction.user)), components: ownerRows() });

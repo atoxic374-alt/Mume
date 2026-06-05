@@ -1208,13 +1208,29 @@ module.exports = {
 
                 if (currentPanel === 'SELECT') {
                     content = '**Select Subscription**\nاختر الاشتراك الذي تريد التحكم به:';
+                    const emojiData = store.get('emojis') || { emojis: [] };
+                    const muEmojis = emojiData.emojis || [];
                     const selectMenu = new StringSelectMenuBuilder()
                         .setCustomId(`stg_${mid}_select_sub`)
                         .setPlaceholder('Select subscription')
-                        .addOptions(uniqueCodes.map(code => ({
-                            label: `Subscription ${code}`,
-                            value: code
-                        })));
+                        .addOptions(uniqueCodes.map((code, index) => {
+                            const isPrimary = primaryOwnerIdFor(code) === userId;
+                            const timeData = store.get('time') || [];
+                            const subInfo = timeData.find(t => t.code === code);
+                            const botsCount = subInfo?.botsCount || (store.get('tokens') || []).filter(t => t.code === code).length;
+                            const opt = {
+                                label: isPrimary || isAdmin
+                                    ? `Music x${botsCount} (${code})`
+                                    : `Admin sub ${code}`,
+                                description: isPrimary || isAdmin
+                                    ? `Subscription ${code}`
+                                    : `Subscription ${code} — Admin Access`,
+                                value: code,
+                            };
+                            const emoji = muEmojis[index];
+                            if (emoji) opt.emoji = emoji;
+                            return opt;
+                        }));
                     components.push(new ActionRowBuilder().addComponents(selectMenu));
                 } 
                 else if (currentPanel === 'MAIN') {
