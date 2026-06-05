@@ -3774,7 +3774,7 @@ module.exports = {
                                 setAutoPlayState(player, false);
                                 clearStoppedPlaybackCaches(player);
                                 clearProgressInterval(player, 'message stop');
-                                firePlayerAction('message stop audio', () => stopPlayerAudio(player, { wait: false }));
+                                await stopPlayerAudio(player, { wait: false }).catch(err => console.warn('[message stop audio]', err?.message || err));
                                 reactCustom(message, MUSIC_EMOJIS.stop, '🔴');
                                 runBackground('stop cleanup', async () => {
                                     await finalizePlayerUi(player, finalOptions);
@@ -3857,10 +3857,10 @@ module.exports = {
                 if (!memberVoice || !clientVoice || memberVoice.id !== clientVoice.id) return;
 
                 if (player.isPaused) {
-                    firePlayerAction('message resume', () => player.pause(false));
+                    await player.pause(false).catch(err => console.warn('[message resume]', err?.message || err));
                     reactCustom(message, MUSIC_EMOJIS.skip, '▶️');
                 } else {
-                    firePlayerAction('message pause', () => player.pause(true));
+                    await player.pause(true).catch(err => console.warn('[message pause]', err?.message || err));
                     reactCustom(message, MUSIC_EMOJIS.pause, '⏸️');
                 }
             }
@@ -3999,7 +3999,7 @@ module.exports = {
 
                         if (player.queue.length === 0 && player.data?.autoPlay) {
                             const skippedTrack = currentTrack;
-                            firePlayerAction('message skip autoplay', () => player.skip());
+                            await player.skip().catch(err => console.warn('[message skip autoplay]', err?.message || err));
                             return message.reply(musicPayload(tokenObj, {
                                 title: 'Skipped',
                                 description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
@@ -4014,7 +4014,7 @@ module.exports = {
                             setAutoPlayState(player, false);
                             clearStoppedPlaybackCaches(player);
                             clearProgressInterval(player, 'message skip end');
-                            firePlayerAction('message skip end audio', () => stopPlayerAudio(player, { wait: false }));
+                            await stopPlayerAudio(player, { wait: false }).catch(err => console.warn('[message skip end audio]', err?.message || err));
                             runBackground('skip end cleanup', async () => {
                                 await finalizePlayerUi(player, finalOptions);
                                 await bumpQueueVersion(player, 'skip_end');
@@ -4028,7 +4028,7 @@ module.exports = {
                     }));
                         } else {
                             const skippedTrack = currentTrack;
-                            firePlayerAction('message skip', () => player.skip());
+                            await player.skip().catch(err => console.warn('[message skip]', err?.message || err));
                             runBackground('skip cleanup', () => bumpQueueVersion(player, 'skip'));
 
                     return message.reply(musicPayload(tokenObj, {
@@ -4081,7 +4081,7 @@ module.exports = {
                     }));
                 }
 
-                firePlayerAction('message volume', () => player.setVolume(volume));
+                await player.setVolume(volume).catch(err => console.warn('[message volume]', err?.message || err));
 
                 return message.reply(musicPayload(tokenObj, {
                     title: 'Volume',
@@ -4140,7 +4140,7 @@ module.exports = {
                 }
 
                 const seekTime = Math.min(seconds * 1000, player.currentTrack.info.length);
-                firePlayerAction('message seek', () => player.seekTo(seekTime));
+                await player.seekTo(seekTime).catch(err => console.warn('[message seek]', err?.message || err));
 
                 reactCustom(message, MUSIC_EMOJIS.skip, '✅');
             }
@@ -4192,7 +4192,7 @@ module.exports = {
 
                 const currentPosition = Number(player.position || 0);
                 const newPosition = Math.min(currentPosition + seconds * 1000, player.currentTrack.info.length - 1000);
-                firePlayerAction('message forward', () => player.seekTo(newPosition));
+                await player.seekTo(newPosition).catch(err => console.warn('[message forward]', err?.message || err));
                 reactCustom(message, MUSIC_EMOJIS.skip, '⏩');
             }
 
@@ -4726,10 +4726,10 @@ module.exports = {
 
                     if (interaction.customId === 'pause') {
                         if (player.isPaused) {
-                            firePlayerAction('button resume', () => player.pause(false));
+                            await player.pause(false).catch(err => console.warn('[button resume]', err?.message || err));
                             responseMessage = '**Done resume the music.**';
                         } else {
-                            firePlayerAction('button pause', () => player.pause(true));
+                            await player.pause(true).catch(err => console.warn('[button pause]', err?.message || err));
                             responseMessage = '**Done pause the music.**';
                         }
                         runBackground('pause panel edit', () => editPanel(!!ui.liked));
@@ -4737,13 +4737,13 @@ module.exports = {
 
                     if (interaction.customId === 'volume_down') {
                         const newVolume = Math.max(player.volume - 10, 0);
-                        firePlayerAction('button volume down', () => player.setVolume(newVolume));
+                        await player.setVolume(newVolume).catch(err => console.warn('[button volume down]', err?.message || err));
                         responseMessage = `**Volume is now __${newVolume}%__.**`;
                     }
 
                     if (interaction.customId === 'volume_up') {
                         const newVolume = Math.min(player.volume + 10, 130);
-                        firePlayerAction('button volume up', () => player.setVolume(newVolume));
+                        await player.setVolume(newVolume).catch(err => console.warn('[button volume up]', err?.message || err));
                         responseMessage = `**Volume is now __${newVolume}%__.**`;
                     }
 
@@ -4752,7 +4752,7 @@ module.exports = {
                                 if (!currentTrack) {
                                     responseMessage = '*لا توجد أغنية للتخطي*.';
                                 } else if (player.queue.length === 0 && player.data?.autoPlay) {
-                                    firePlayerAction('button skip autoplay', () => player.skip());
+                                    await player.skip().catch(err => console.warn('[button skip autoplay]', err?.message || err));
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                 } else if (player.queue.length === 0) {
                                     const finalOptions = finalUiOptionsFor(player, currentTrack);
@@ -4760,7 +4760,7 @@ module.exports = {
                                     setAutoPlayState(player, false);
                                     clearStoppedPlaybackCaches(player);
                                     clearProgressInterval(player, 'button skip end');
-                                    firePlayerAction('button skip end audio', () => stopPlayerAudio(player, { wait: false }));
+                                    await stopPlayerAudio(player, { wait: false }).catch(err => console.warn('[button skip end audio]', err?.message || err));
                                     runBackground('button skip end cleanup', async () => {
                                         await finalizePlayerUi(player, finalOptions);
                                         await bumpQueueVersion(player, 'button_skip_end');
@@ -4768,7 +4768,7 @@ module.exports = {
                                     });
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                 } else {
-                                    firePlayerAction('button skip', () => player.skip());
+                                    await player.skip().catch(err => console.warn('[button skip]', err?.message || err));
                                     runBackground('button skip cleanup', () => bumpQueueVersion(player, 'button_skip'));
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                 }
@@ -4782,11 +4782,11 @@ module.exports = {
                             const prevTrack = player.queue.previous;
                             player.queue.unshift(player.currentTrack);
                             player.queue.unshift(prevTrack);
-                            firePlayerAction('button prev skip', () => player.skip());
+                            await player.skip().catch(err => console.warn('[button prev skip]', err?.message || err));
                             runBackground('button prev cleanup', () => bumpQueueVersion(player, 'button_prev'));
                             responseMessage = `⏮ رجعنا للأغنية السابقة.`;
                         } else {
-                            firePlayerAction('button prev seek', () => player.seek(0));
+                            await player.seek(0).catch(err => console.warn('[button prev seek]', err?.message || err));
                             runBackground('prev panel edit', () => editPanel(!!ui.liked));
                             responseMessage = `⏮ تم إعادة الأغنية من البداية.`;
                         }
@@ -4801,7 +4801,7 @@ module.exports = {
                         setAutoPlayState(player, false);
                         clearStoppedPlaybackCaches(player);
                         clearProgressInterval(player, 'button stop');
-                        firePlayerAction('button stop audio', () => stopPlayerAudio(player, { wait: false }));
+                        await stopPlayerAudio(player, { wait: false }).catch(err => console.warn('[button stop audio]', err?.message || err));
                         runBackground('button stop cleanup', async () => {
                             await finalizePlayerUi(player, finalOptions);
                             await bumpQueueVersion(player, 'button_stop');
