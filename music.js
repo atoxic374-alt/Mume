@@ -2745,7 +2745,9 @@ module.exports = {
                     rememberTextChannel(player, textChannelId);
 
                     if (!player.node?.isConnected && !player.currentTrack && !player.isPlaying) {
-                        const freshNode = TrueMusic.poru.leastUsedNodes?.[0];
+                        // Fix #7: اختر الـ node الأخف تحميلاً بدل أول node في القائمة
+                        const freshNode = lavalinkKeepAlive.getBestNode(TrueMusic.poru)
+                            || TrueMusic.poru.leastUsedNodes?.[0];
                         if (freshNode) {
                             player.node = freshNode;
                             markPlayerNeedsVoiceRefresh(player, `${reason}:node_reassigned`);
@@ -3133,6 +3135,7 @@ module.exports = {
 
                 if (!tokenObj) {
                     clearInterval(playbackWatchdog);
+                    lavalinkKeepAlive.destroyKeepAlive(TrueMusic.poru); // Fix #8: تنظيف intervals قبل destroy
                     await TrueMusic.destroy().catch(() => 0);
                     runningBots.delete(token);
                     return clearInterval(int);
@@ -3140,6 +3143,7 @@ module.exports = {
 
                 if (tokenObj.awaitingReplacement || tokenObj.expireDate <= Date.now()) {
                     clearInterval(playbackWatchdog);
+                    lavalinkKeepAlive.destroyKeepAlive(TrueMusic.poru); // Fix #8: تنظيف intervals قبل destroy
                     await TrueMusic.destroy().catch(() => 0);
                     runningBots.delete(token);
                     return clearInterval(int);
@@ -3680,8 +3684,39 @@ module.exports = {
         player.data.lastPosition = position;
     });
 
+    // ── trackStuck: Poru v5 يُطلقه كـ event مستقل (منفصل عن trackError) ─────────
+    TrueMusic.poru.on('trackStuck', async (player, track, data) => {
+        ensurePlayerData(player);
+        const stuckTrack = track || player.currentTrack || player.data.lastTrack;
+        const identity   = trackIdentity(stuckTrack);
+        const lastRecoveryAt  = Number(player.data.stuckRecoveryAt || 0);
+        const sameRecentTrack = player.data.stuckRecoveryIdentity === identity
+            && Date.now() - lastRecoveryAt < 30_000;
+
+        if (stuckTrack && identity && !sameRecentTrack && typeof player.queue?.unshift === 'function') {
+            // أعد تشغيل الأغنية من حيث توقفت
+            player.queue.unshift(stuckTrack);
+            player.data.stuckRecoveryIdentity = identity;
+            player.data.stuckRecoveryAt       = Date.now();
+            player.data.stuckResumePosition   = Math.max(0,
+                Number(player.position || player.data.lastPosition || 0) - 2000);
+            if (process.env.DEBUG_RECOVERY)
+                console.warn(`[TrackStuck] requeued stuck track at ${player.data.stuckResumePosition}ms`);
+            // تخطّ الأغنية الحالية المعلّقة → ستبدأ الأغنية المُعادة فوراً
+            try { await player.stop(); } catch {}
+            return;
+        }
+
+        // تعذّرت الاسترداد (نفس الأغنية عالقة مرتين في 30s) → تخطّى وتابع
+        console.warn(`[TrackStuck] skip stuck track: ${identity || 'unknown'} (no recovery)`);
+        await finalizePlayerUi(player);
+        await bumpQueueVersion(player, 'track_stuck');
+        setTimeout(() => recoverPlayerPlayback(player, 'track_stuck').catch(() => {}), 1500);
+    });
+
     TrueMusic.poru.on('trackError', async (player, track, data) => {
         if (data?.type === 'TrackStuckEvent') {
+            // Poru v5 قد يُرسل TrackStuckEvent هنا أيضاً — عالجه بنفس منطق trackStuck
             ensurePlayerData(player);
             const stuckTrack = track || player.currentTrack || player.data.lastTrack;
             const identity = trackIdentity(stuckTrack);
@@ -3692,7 +3727,8 @@ module.exports = {
                 player.data.stuckRecoveryIdentity = identity;
                 player.data.stuckRecoveryAt = Date.now();
                 player.data.stuckResumePosition = Math.max(0, Number(player.position || player.data.lastPosition || 0) - 2000);
-                if (process.env.DEBUG_RECOVERY) console.warn(`[TrackStuck] requeued stuck track for recovery at ${player.data.stuckResumePosition}ms`);
+                if (process.env.DEBUG_RECOVERY) console.warn(`[TrackStuck/trackError] requeued stuck track at ${player.data.stuckResumePosition}ms`);
+                try { await player.stop(); } catch {}
                 return;
             }
         }
