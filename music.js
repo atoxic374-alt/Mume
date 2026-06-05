@@ -5207,10 +5207,13 @@ module.exports = {
                                 }
 
                         if (interaction.customId === 'np_filter') {
-                            await interaction.deferUpdate().catch(() => {});
                             const filterName = interaction.values[0];
                             try {
-                                        const applied = await applyFilter(player, filterName);
+                                        // deferUpdate + Lavalink filter at the same instant — both independent
+                                        const [, applied] = await Promise.all([
+                                            interaction.deferUpdate().catch(() => {}),
+                                            applyFilter(player, filterName),
+                                        ]);
                                                 ui.selectedFilter = applied;
                                                 ui.selectedArtistIndex = null;
                                                 player.data.ui = ui;
