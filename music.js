@@ -267,10 +267,6 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
                 .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.loop))
                 .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
-                .setCustomId('queue_btn')
-                .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.queue))
-                .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
                 .setCustomId('volume_up')
                 .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.volumeUp))
                 .setStyle(ButtonStyle.Secondary),
@@ -471,7 +467,7 @@ function isHttpUrl(value) {
     return /^https?:\/\//i.test(String(value || '').trim());
 }
 
-function trackArtworkUrl(track, client) {
+function trackArtworkUrl(track, client, requester = null) {
     const info = track?.info || {};
     const candidates = [
         info.artworkUrl,
@@ -488,7 +484,10 @@ function trackArtworkUrl(track, client) {
 
     const found = candidates.find(isHttpUrl);
     if (found) return found;
-    return client.user?.displayAvatarURL?.({ extension: 'png', size: 256 }) || null;
+    return requester?.displayAvatarURL?.({ extension: 'png', size: 256 })
+        || requester?.user?.displayAvatarURL?.({ extension: 'png', size: 256 })
+        || client.user?.displayAvatarURL?.({ extension: 'png', size: 256 })
+        || null;
 }
 
 function buildTextProgressBar(position, duration, length = 20) {
@@ -650,7 +649,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     );
     const loopMode = player.loop === 'TRACK' ? 'ON' : 'OFF';
     const volume = player.volume || 100;
-    const artworkUrl = trackArtworkUrl(track, TrueMusic);
+    const artworkUrl = trackArtworkUrl(track, TrueMusic, requester);
     const compactPlayLayout = options.compactPlayLayout === true;
     const embedColor = getEmbedColor(TrueMusic);
     const accentColor = normalizeColorNumber(embedColor);
@@ -1772,6 +1771,7 @@ function autoPlayHistorySet(player) {
 function clearAutoPlaySessionData(player) {
     if (!player?.data) return;
     delete player.data.autoPlayHistory;
+    delete player.data.autoPlaySeedArtist;
 }
 
 function clearStoppedPlaybackCaches(player) {
@@ -3065,7 +3065,12 @@ module.exports = {
                 return;
             }
         }
-        console.warn(`[TrackError] ${data?.type || 'unknown'} ${data?.reason || data?.exception?.message || ''}`.trim());
+        // Suppress errors silently for SoundCloud autoplay tracks (no sound is acceptable)
+        const isSoundCloudAutoPlay = String(track?.info?.sourceName || '').toLowerCase().includes('soundcloud')
+            && track?.info?.autoPlay === true;
+        if (!isSoundCloudAutoPlay) {
+            console.warn(`[TrackError] ${data?.type || 'unknown'} ${data?.reason || data?.exception?.message || ''}`.trim());
+        }
         await finalizePlayerUi(player);
         await bumpQueueVersion(player, 'track_error');
         setTimeout(() => recoverPlayerPlayback(player, 'track_error').catch(() => {}), 2500);
@@ -3094,7 +3099,9 @@ module.exports = {
       }
       // ─────────────────────────────────────────────────────────────────────────
 
-              if (!naturalEnd && reason !== 'stopped' && reason !== 'replaced') {
+              const isSoundCloudAutoPlayTrack = String(track?.info?.sourceName || '').toLowerCase().includes('soundcloud')
+                  && track?.info?.autoPlay === true;
+              if (!naturalEnd && reason !== 'stopped' && reason !== 'replaced' && !isSoundCloudAutoPlayTrack) {
                   console.warn(`[TrackEnd] non-natural end for ${trackIdentity(track) || 'unknown'}: ${reason}`);
               }
 
@@ -3137,7 +3144,16 @@ module.exports = {
         return;
       }
 
-      const artistQuery = artistQueryForTrack(currentTrack);
+      // Use the seed artist saved when autoplay first started to prevent artist drift
+      let artistQuery;
+      if (player.data.autoPlaySeedArtist) {
+          artistQuery = player.data.autoPlaySeedArtist;
+      } else {
+          artistQuery = artistQueryForTrack(currentTrack);
+          if (artistQuery?.primary) {
+              player.data.autoPlaySeedArtist = artistQuery;
+          }
+      }
       const artistName = artistQuery?.primary;
       if (!artistName) {
         await finalizePlayerUi(player);
