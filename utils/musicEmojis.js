@@ -200,8 +200,9 @@ async function react(message, emojiData, fallback = null, client = null) {
     if (emoji?.id) {
         const name = emoji.name || 'emoji';
 
-        // 1. Try original ID — works when bot is in the emoji's guild.
-        //    Also works for application emojis since Discord 2024 update.
+        // Try original ID — works when bot is in the emoji's guild.
+        // No cache needed: Discord validates access server-side via the API.
+        // Failed IDs are remembered so subsequent calls skip the API call entirely.
         if (!_reactionFailedIds.has(emoji.id)) {
             try {
                 return await message.react(`${name}:${emoji.id}`);
@@ -209,20 +210,9 @@ async function react(message, emojiData, fallback = null, client = null) {
                 _reactionFailedIds.add(emoji.id);
             }
         }
-
-        // 2. Try the mapped/uploaded ID (syncMusicEmojis application emoji)
-        //    Only if different from original and not already known to fail.
-        const mappedId = _emojiIdMap[emoji.id];
-        if (mappedId && mappedId !== emoji.id && !_reactionFailedIds.has(mappedId)) {
-            try {
-                return await message.react(`${name}:${mappedId}`);
-            } catch {
-                _reactionFailedIds.add(mappedId);
-            }
-        }
     }
 
-    // 3. Unicode fallback — always fast, no API ambiguity.
+    // Unicode fallback — always fast, no API ambiguity.
     if (fallback) {
         try { return await message.react(fallback); } catch {}
     }
