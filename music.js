@@ -2170,14 +2170,25 @@ module.exports = {
         }
 
         function scheduleNodeRecovery(node, reason = 'node_reconnect') {
-            // Wait 8s (was 6s) to allow the node session to fully establish
-            // before attempting to restart player tracks. Also check node is
-            // still connected and player isn't paused before recovering.
+            // Wait 8s to allow the node session to fully establish before
+            // attempting to restart player tracks.
             setTimeout(() => {
                 if (!node.isConnected) return; // node went offline again — skip
                 TrueMusic.poru.players.forEach(player => {
                     if (player.node !== node) return;
                     if (player.isPaused) return;
+
+                    if (!player.currentTrack) {
+                        // Idle player: its Lavalink session no longer exists after
+                        // a reconnect. Destroy it now so the next play command
+                        // creates a fresh player instead of sending commands to
+                        // a ghost session that hangs.
+                        if (process.env.DEBUG_RECOVERY)
+                            console.log(`[IdleCleanup] destroying stale idle player after ${reason} for guild ${player.guildId}`);
+                        try { player.destroy(); } catch {}
+                        return;
+                    }
+
                     recoverPlayerPlayback(player, reason).catch(() => {});
                 });
             }, 8000);
@@ -2475,6 +2486,32 @@ module.exports = {
                     });
                 }
 
+
+                // ── Idle player cleanup ──────────────────────────────────────────
+                // A Poru player that has no current track for >30 min has almost
+                // certainly lost its Lavalink session (session timeout is 3 min by
+                // default). Destroying it now ensures the next play command creates
+                // a fresh, healthy player instead of hanging on a ghost session.
+                const IDLE_PLAYER_TTL_MS = 30 * 60 * 1000;
+                if (wdNodesOnline) {
+                    TrueMusic.poru.players.forEach(player => {
+                        ensurePlayerData(player);
+                        if (player.currentTrack || player.isPlaying) {
+                            player.data.lastIdleAt = null; // reset when active
+                            return;
+                        }
+                        if (!player.data.lastIdleAt) {
+                            player.data.lastIdleAt = wdNow;
+                            return;
+                        }
+                        if (wdNow - player.data.lastIdleAt > IDLE_PLAYER_TTL_MS) {
+                            if (process.env.DEBUG_RECOVERY)
+                                console.log(`[IdleCleanup] destroying stale idle player for guild ${player.guildId} (idle ${Math.floor((wdNow - player.data.lastIdleAt) / 60000)}min)`);
+                            try { player.destroy(); } catch {}
+                        }
+                    });
+                }
+                // ─────────────────────────────────────────────────────────────────
 
                 // ── Zombie-connection detection for music sub-bots ────────────────
                 // If no raw gateway event has arrived in 4 minutes, the WebSocket
