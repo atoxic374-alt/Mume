@@ -513,7 +513,12 @@ function escapeMarkdownLinkText(value, maxLength = 100) {
 
 function autoPlayNowPlayingLine(info, client = null) {
     if (info?.autoPlay !== true) return '';
-    const emoji = MUSIC_EMOJIS.messageEmoji?.(MUSIC_EMOJIS.smartSearch, client, '') || '';
+    const source = String(info?.sourceName || '').toLowerCase();
+    const emojiKey = platformEmojiKey(source);
+    const platformData = MUSIC_EMOJIS.platforms[emojiKey];
+    const emoji = platformData
+        ? (MUSIC_EMOJIS.messageEmoji?.(platformData, client, '') || '')
+        : (MUSIC_EMOJIS.messageEmoji?.(MUSIC_EMOJIS.smartSearch, client, '') || '');
     const artist = cleanInlineText(info.autoPlayArtist, '', 48);
     return `${emoji ? `${emoji} ` : ''}Auto Play${artist ? ` : ${artist}` : ''}`;
 }
@@ -2268,9 +2273,13 @@ function rememberAutoPlayHistory(player, track) {
     if (!player || !track) return;
     const key = autoPlayDuplicateKey(track);
     if (!key) return;
+    const fingerprints = [...trackTitleFingerprints(track)].filter(k => k && k.length >= 3);
+    const allKeys = [...new Set([key, ...fingerprints])];
     const data = ensurePlayerData(player);
     const history = Array.isArray(data.autoPlayHistory) ? data.autoPlayHistory : [];
-    data.autoPlayHistory = [key, ...history.filter(item => item && item !== key)].slice(0, AUTOPLAY_HISTORY_MAX);
+    const existingSet = new Set(history);
+    const toAdd = allKeys.filter(k => !existingSet.has(k));
+    data.autoPlayHistory = [...toAdd, ...history].slice(0, AUTOPLAY_HISTORY_MAX * 7);
 }
 
 function autoPlayHistorySet(player) {
@@ -2369,7 +2378,11 @@ function filterArtistTracks(tracks, currentTrack, limit, artistName = '', option
     const history = options.historySet instanceof Set ? options.historySet : null;
     const withoutSameSong = pool.filter(t => !isNearSameTrackTitle(t, currentTrack) && !leaksCurrentTitleSignal(t, currentTrack));
     const withoutHistory = history
-        ? withoutSameSong.filter(t => !history.has(autoPlayDuplicateKey(t)))
+        ? withoutSameSong.filter(t => {
+            if (history.has(autoPlayDuplicateKey(t))) return false;
+            const fps = trackTitleFingerprints(t);
+            return ![...fps].some(fp => history.has(fp));
+        })
         : withoutSameSong;
 
     return shuffleTracks(withoutHistory).slice(0, limit);
