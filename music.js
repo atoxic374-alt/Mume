@@ -4187,12 +4187,12 @@ module.exports = {
                     clearProgressInterval(player);
                     return;
                 }
-                        // ── A: cached tokenObj + liked — refresh every 60s ────────────
+                        // ── A: cached tokenObj + liked — refresh every 30s ────────────
                         const _now3 = Date.now();
                         const _pc = player.data._progressCache || {};
                         let tokenObj3 = _pc.tokenObj;
                         let alreadyLiked3 = typeof _pc.liked === 'boolean' ? _pc.liked : false;
-                        if (!tokenObj3 || _now3 - (_pc.refreshedAt || 0) >= 60_000) {
+                        if (!tokenObj3 || _now3 - (_pc.refreshedAt || 0) >= 30_000) {
                             tokenObj3 = (store.get('tokens') || []).find(t => t.token === token);
                             alreadyLiked3 = await likes.isLiked(
                                 player.currentTrack?.info?.requester?.id || '',
