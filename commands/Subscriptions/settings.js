@@ -1349,12 +1349,12 @@ module.exports = {
                             .setCustomId(`stg_${mid}_main_menu`)
                             .setPlaceholder('Select section')
                             .addOptions([
-                                { label: 'Appearance', value: 'APPEARANCE', description: 'تغيير الصورة، البنر، والحالة لكل البوتات' },
-                                { label: 'Rooms', value: 'ROOMS', description: 'الغرف، التوزيع الذكي، الروابط، وشات الأوامر' },
-                                { label: 'Display', value: 'DISPLAY', description: 'تفعيل أو تعطيل الأزرار والإيمبد' },
-                                { label: 'Platform', value: 'PLATFORM', description: 'اختيار منصة البحث والتشغيل' },
+                                { label: 'Appearance', value: 'APPEARANCE', description: 'تغيير الصورة، البنر، والحالة لكل البوتات', emoji: { id: '1512475944839942176' } },
+                                { label: 'Rooms', value: 'ROOMS', description: 'الغرف، التوزيع الذكي، الروابط، وشات الأوامر', emoji: { id: '1485476329171320855' } },
+                                { label: 'Display', value: 'DISPLAY', description: 'تفعيل أو تعطيل الأزرار والإيمبد', emoji: { id: '1512475951844294867' } },
+                                { label: 'Platform', value: 'PLATFORM', description: 'اختيار منصة البحث والتشغيل', emoji: { id: '1512475949331906682' } },
                                 ...(canManageSubscriptionOwners(selectedCode)
-                                    ? [{ label: 'Owners', value: 'OWNERS', description: 'إضافة وإزالة أونرز يتحكمون ببوتات الاشتراك' }]
+                                    ? [{ label: 'Owners', value: 'OWNERS', description: 'إضافة وإزالة أونرز يتحكمون ببوتات الاشتراك', emoji: { id: '1484364982094266428' } }]
                                     : []),
                             ])
                     );
@@ -1475,73 +1475,49 @@ module.exports = {
                                     const display = getDisplay(selectedCode);
                                     const embed = new EmbedBuilder()
                                         .setTitle(`Room Settings — ${selectedCode}`)
-                                        .setDescription('راقب البوتات، وزّعها، وحدد شات استقبال الأوامر.')
-                                        .addFields(
-                                            {
-                                                name: 'Command Chat',
-                                                value: [
-                                                    `**Channel :** ${chat.label}`,
-                                                    `**Info :** *${chat.details}*`,
-                                                ].join('\n'),
-                                                inline: true,
-                                            },
-                                            {
-                                                name: 'Back to Voice',
-                                                value: [
-                                                    `**Status :** ${backVoice.label}`,
-                                                    `**Info :** *${backVoice.details}*`,
-                                                ].join('\n'),
-                                                inline: true,
-                                            },
-                                            {
-                                                name: 'Voice Status',
-                                                value: [
-                                                    `**Status :** *\`${display.voiceStatus ? 'ON' : 'OFF'}\`*  ${display.voiceStatusEmoji || '🎵'}`,
-                                                    `**Info :** *عند تشغيل أغنية يتم تحديث Status الروم باسم مختصر للأغنية.*`,
-                                                ].join('\n'),
-                                                inline: false,
-                                            },
-                                            {
-                                                name: 'Button Guide',
-                                                value: [
-                                                    '**Voice Status :** *يعرض مكان كل بوت — داخل روم، خامل، خارج السيرفر، أو غير متصل.*',
-                                                    '**Smart Distribution :** *يوزع البوتات على نطاق رومات تختاره ويحافظ على ترتيبها.*',
-                                                    '**Move Idle :** *يدخل البوتات الخاملة فقط إلى روم أو عدة رومات تحددها.*',
-                                                    '**Back to Voice :** *يرجع البوت تلقائياً للروم المحدد إذا خرج أو انتقل.*',
-                                                    '**Status :** *يفعّل أو يعطل كتابة اسم الأغنية المختصر على Status الروم.*',
-                                                    '**Command Chat :** *يحدد الشات الذي يستقبل أوامر التشغيل.*',
-                                                    '**All Links / Outside Server :** *يعرض روابط دعوة البوتات حسب حالتها.*',
-                                                ].join('\n'),
-                                                inline: false,
-                                            },
-                                        )
+                                        .setDescription([
+                                            '**1. Command Chat**',
+                                            `   *Channel :*  ${chat.label}`,
+                                            `   *Info :*  *${chat.details}*`,
+                                            '',
+                                            '**2. Back to Voice**',
+                                            `   *Status :*  ${backVoice.label}`,
+                                            `   *Info :*  *${backVoice.details}*`,
+                                            '',
+                                            '**3. Voice Status**',
+                                            `   *Status :*  \`${display.voiceStatus ? 'ON' : 'OFF'}\`  ${display.voiceStatusEmoji || '🎵'}`,
+                                            `   *Info :*  *عند تشغيل أغنية يتم تحديث Status الروم باسم مختصر للأغنية.*`,
+                                            '',
+                                            '**4. Options Guide**',
+                                            `   **Voice Status —** *عرض مكان كل بوت داخل روم أو خارجه.*`,
+                                            `   **Smart Distribution —** *توزيع البوتات على نطاق رومات تختاره.*`,
+                                            `   **Move Idle —** *تحريك البوتات الخاملة إلى روم أو أكثر.*`,
+                                            `   **Status Emoji —** *تغيير الإيموجي الذي يظهر قبل اسم الأغنية.*`,
+                                            `   **All Links / Outside Server —** *عرض روابط دعوة البوتات.*`,
+                                        ].join('\n'))
                                         .setColor(getEmbedColor(client));
                                     embeds.push(embed);
 
-                                    const row1 = new ActionRowBuilder().addComponents(
-                                        new ButtonBuilder().setCustomId(`stg_${mid}_voice_status`).setLabel('Voice Status').setStyle(ButtonStyle.Secondary),
-                                        new ButtonBuilder().setCustomId(`stg_${mid}_distribute`).setLabel('Smart Distribution').setStyle(ButtonStyle.Secondary),
-                                        new ButtonBuilder().setCustomId(`stg_${mid}_moveidle`).setLabel('Move Idle').setStyle(ButtonStyle.Secondary),
-                                        new ButtonBuilder()
-                                            .setCustomId(`stg_${mid}_toggle_back_voice`)
-                                            .setLabel(`Back to Voice: ${backVoice.enabled ? 'ON' : 'OFF'}`)
-                                            .setStyle(backVoice.enabled ? ButtonStyle.Success : ButtonStyle.Danger),
-                                        new ButtonBuilder()
-                                            .setCustomId(`stg_${mid}_toggle_voice_status`)
-                                            .setLabel(`Status: ${display.voiceStatus ? 'ON' : 'OFF'}`)
-                                            .setStyle(display.voiceStatus ? ButtonStyle.Success : ButtonStyle.Danger)
-                                    );
-                                    const row2 = new ActionRowBuilder().addComponents(
-                                        new ButtonBuilder().setCustomId(`stg_${mid}_panel_chat`).setLabel('Command Chat').setStyle(ButtonStyle.Secondary),
-                                        new ButtonBuilder().setCustomId(`stg_${mid}_voice_status_emoji`).setLabel('Status Emoji').setStyle(ButtonStyle.Secondary),
-                                        new ButtonBuilder().setCustomId(`stg_${mid}_links_all`).setLabel('All Links').setStyle(ButtonStyle.Secondary),
-                                        new ButtonBuilder().setCustomId(`stg_${mid}_links_out`).setLabel('Outside Server').setStyle(ButtonStyle.Secondary)
-                                    );
-                                    const row3 = new ActionRowBuilder().addComponents(
-                                        new ButtonBuilder().setCustomId(`stg_${mid}_pin_room`).setLabel('Pin Room').setStyle(ButtonStyle.Primary),
+                                    const roomsMenu = new StringSelectMenuBuilder()
+                                        .setCustomId(`stg_${mid}_rooms_menu`)
+                                        .setPlaceholder('Select option')
+                                        .addOptions([
+                                            { label: 'Voice Status', value: 'voice_status', description: 'عرض مكان كل بوت في الرومات', emoji: { id: '1485476329171320855' } },
+                                            { label: 'Smart Distribution', value: 'distribute', description: 'توزيع البوتات على نطاق رومات', emoji: { id: '1485476329171320855' } },
+                                            { label: 'Move Idle', value: 'moveidle', description: 'تحريك البوتات الخاملة إلى روم', emoji: { id: '1485476329171320855' } },
+                                            { label: `Back to Voice : ${backVoice.enabled ? 'ON' : 'OFF'}`, value: 'toggle_back_voice', description: 'تفعيل أو تعطيل الرجوع التلقائي للروم', emoji: { id: '1485476329171320855' } },
+                                            { label: `Voice Status : ${display.voiceStatus ? 'ON' : 'OFF'}`, value: 'toggle_voice_status', description: 'تفعيل أو تعطيل كتابة اسم الأغنية على Status', emoji: { id: '1485476329171320855' } },
+                                            { label: 'Command Chat', value: 'panel_chat', description: 'تحديد الشات الذي يستقبل الأوامر', emoji: { id: '1485476329171320855' } },
+                                            { label: 'Status Emoji', value: 'voice_status_emoji', description: 'تغيير إيموجي Status الروم', emoji: { id: '1485476329171320855' } },
+                                            { label: 'Pin Room', value: 'pin_room', description: 'تثبيت كل البوتات في روم واحد', emoji: { id: '1485476329171320855' } },
+                                            { label: 'All Links', value: 'links_all', description: 'روابط دعوة كل البوتات', emoji: { id: '1485476329171320855' } },
+                                            { label: 'Outside Server', value: 'links_out', description: 'روابط البوتات الموجودة خارج السيرفر', emoji: { id: '1485476329171320855' } },
+                                        ]);
+                                    const roomsRow1 = new ActionRowBuilder().addComponents(roomsMenu);
+                                    const roomsRow2 = new ActionRowBuilder().addComponents(
                                         new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
-                            );
-                            components.push(row1, row2, row3);
+                                    );
+                                    components.push(roomsRow1, roomsRow2);
                         }
                         else if (currentPanel === 'CHAT') {
                             const chat = chatSummary();
