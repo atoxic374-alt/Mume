@@ -136,13 +136,13 @@ module.exports = {
 
                 function getBotVoiceInfo(t) {
                     const bot = runningBots.get(t.token);
-                    if (!bot) return { bot: null, statusText: '🚫 غير متصل', inRoom: false, inServer: false };
+                    if (!bot) return { bot: null, statusText: 'غير متصل', inRoom: false, inServer: false };
                     const guild = bot.guilds.cache.get(t.Server);
-                    if (!guild) return { bot, statusText: '🌐 خارج السيرفر', inRoom: false, inServer: false };
+                    if (!guild) return { bot, statusText: 'خارج السيرفر', inRoom: false, inServer: false };
                     const vc = guild.members.me?.voice?.channel;
             return {
                 bot,
-                statusText: vc ? `🔊 <#${vc.id}>` : '💤 بدون روم',
+                statusText: vc ? `<#${vc.id}>` : 'بدون روم',
                 inRoom: !!vc,
                 channelId: vc?.id || null,
                 channelName: vc?.name || null,
@@ -1270,12 +1270,12 @@ module.exports = {
 
                     const embedFields = [
                         {
-                            name: '👑  Owner',
+                            name: 'Owner',
                             value: primaryOwnerId ? `*<@${primaryOwnerId}>*` : '*`غير معروف`*',
                             inline: true
                         },
                         {
-                            name: '🤖  Bots',
+                            name: 'Bots',
                             value: [
                                 `**نشط :** *\`${subTokens.length}\`*`,
                                 waitingCount ? `**انتظار :** *\`${waitingCount}\`*` : null,
@@ -1283,19 +1283,19 @@ module.exports = {
                             inline: true
                         },
                         {
-                            name: '🖥️  Server',
+                            name: 'Server',
                             value: `**ID :** *\`${subTokens[0]?.Server || allSubTokens[0]?.Server || 'غير محدد'}\`*`,
                             inline: true
                         },
                         {
-                            name: '⏰  Expiry',
+                            name: 'Expiry',
                             value: subInfo?.expirationTime
                                 ? `**الوقت :** *<t:${Math.floor(subInfo.expirationTime / 1000)}:R>*`
                                 : '**الوقت :** *`غير معروف`*',
                             inline: true
                         },
                         {
-                            name: '👥  Owners',
+                            name: 'Owners',
                             value: subOwnerIds.length
                                 ? subOwnerIds.map(id => `*<@${id}>*`).join('\n')
                                 : '*`لا يوجد`*',
@@ -1303,7 +1303,7 @@ module.exports = {
                         },
                         // Tokens (stock) — primary owner / admin only
                         ...(isPrimaryOrAdmin ? [{
-                            name: '📦  Stock',
+                            name: 'Stock',
                             value: [
                                 `**متاح :** *\`${tokenStock}\`*`,
                                 `**مفعّل :** *\`${tokenActive}\`*`,
@@ -1312,7 +1312,7 @@ module.exports = {
                             inline: true
                         }] : []),
                         {
-                            name: '🎛️  Display',
+                            name: 'Display',
                             value: [
                                 `**الأزرار :** *${display.buttons ? '`ON`' : '`OFF`'}*`,
                                 `**الإيمبد :** *${display.embeds ? '`ON`' : '`OFF`'}*`,
@@ -1321,12 +1321,12 @@ module.exports = {
                             inline: true
                         },
                         {
-                            name: '🎵  Platform',
+                            name: 'Platform',
                             value: `**المصدر :** *\`${display.platform}\`*`,
                             inline: true
                         },
                         {
-                            name: '🔁  Back to Voice',
+                            name: 'Back to Voice',
                             value: [
                                 `**الحالة :** ${backVoice.label}`,
                                 `**تفاصيل :** *${backVoice.details}*`,
@@ -1334,7 +1334,7 @@ module.exports = {
                             inline: true
                         },
                         {
-                            name: '💬  Command Chat',
+                            name: 'Command Chat',
                             value: [
                                 `**الشات :** ${chat.label}`,
                                 `**تفاصيل :** *${chat.details}*`,
@@ -1342,7 +1342,7 @@ module.exports = {
                             inline: false
                         },
                         {
-                            name: '🔊  Voice Status',
+                            name: 'Voice Status',
                             value: [
                                 `**في روم :** *\`${voiceStats.inRoom}\`*`,
                                 `**خامل :** *\`${voiceStats.idle}\`*`,
@@ -1395,19 +1395,19 @@ module.exports = {
                         .setTitle(`Subscribe Owners — ${selectedCode}`)
                         .addFields(
                             {
-                                name: '👑  Subscription Owner',
+                                name: 'Subscription Owner',
                                 value: primaryOwnerId ? `*<@${primaryOwnerId}>*` : '*`غير معروف`*',
                                 inline: true,
                             },
                             {
-                                name: '👥  Current Owners',
+                                name: 'Current Owners',
                                 value: subOwnerIds.length
                                     ? subOwnerIds.map((id, i) => `**${i + 1} :** *<@${id}>*`).join('\n')
                                     : '*`لا يوجد`*',
                                 inline: false,
                             },
                             {
-                                name: '📋  Permissions',
+                                name: 'Permissions',
                                 value: [
                                     '**يقدرون :** *استخدام Settings وأوامر التحكم مثل join / setup / settc.*',
                                     '**لا يقدرون :** *نقل الملكية أو نقل الاشتراك — تبقى للمالك الأصلي فقط.*',
@@ -1495,7 +1495,7 @@ module.exports = {
                                         .setDescription('راقب البوتات، وزّعها، وحدد شات استقبال الأوامر.')
                                         .addFields(
                                             {
-                                                name: '💬  Command Chat',
+                                                name: 'Command Chat',
                                                 value: [
                                                     `**Channel :** ${chat.label}`,
                                                     `**Info :** *${chat.details}*`,
@@ -1503,7 +1503,7 @@ module.exports = {
                                                 inline: true,
                                             },
                                             {
-                                                name: '🔁  Back to Voice',
+                                                name: 'Back to Voice',
                                                 value: [
                                                     `**Status :** ${backVoice.label}`,
                                                     `**Info :** *${backVoice.details}*`,
@@ -1511,7 +1511,7 @@ module.exports = {
                                                 inline: true,
                                             },
                                             {
-                                                name: '🎙️  Voice Status',
+                                                name: 'Voice Status',
                                                 value: [
                                                     `**Status :** *\`${display.voiceStatus ? 'ON' : 'OFF'}\`*  ${display.voiceStatusEmoji || '🎵'}`,
                                                     `**Info :** *عند تشغيل أغنية يتم تحديث Status الروم باسم مختصر للأغنية.*`,
@@ -1519,7 +1519,7 @@ module.exports = {
                                                 inline: false,
                                             },
                                             {
-                                                name: '📖  Button Guide',
+                                                name: 'Button Guide',
                                                 value: [
                                                     '**Voice Status :** *يعرض مكان كل بوت — داخل روم، خامل، خارج السيرفر، أو غير متصل.*',
                                                     '**Smart Distribution :** *يوزع البوتات على نطاق رومات تختاره ويحافظ على ترتيبها.*',
@@ -1566,7 +1566,7 @@ module.exports = {
                                 .setTitle(`Command Chat — ${selectedCode}`)
                                 .addFields(
                                     {
-                                        name: '💬  Current Chat',
+                                        name: 'Current Chat',
                                         value: [
                                             `**Channel :** ${chat.label}`,
                                             `**Info :** *${chat.details}*`,
@@ -1574,7 +1574,7 @@ module.exports = {
                                         inline: false,
                                     },
                                     {
-                                        name: '📋  How It Works',
+                                        name: 'How It Works',
                                         value: '**Info :** *عند تحديد شات استقبال، أوامر كل البوتات تعمل فقط في شات الاستقبال أو شات الفويس الخاص بكل بوت.*',
                                         inline: false,
                                     },
@@ -2054,7 +2054,7 @@ module.exports = {
                     .setTitle(`Voice Status — ${selectedCode}`)
                     .setDescription(
                         `> البوتات **${start + 1}–${end}** من أصل **${subTokens.length}**\n` +
-                        `> 🔊 بروم  |  💤 بدون روم  |  🌐 خارج سيرفر  |  🚫 غير متصل\n` +
+                        `> بروم  |  بدون روم  |  خارج سيرفر  |  غير متصل\n` +
                         `\u200b\n` +
                         lines.join('\n')
                     )

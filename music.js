@@ -798,7 +798,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
         };
     }
 
-    const meta = `🔁 ${loopMode}  🔊 ${volume}%  👤 ${requesterName}`;
+    const meta = `${loopMode}  ${volume}%  ${requesterName}`;
     const barLine = buildInlineProgressBar(currentTime, totalTime, 22, meta);
 
     const container = new ContainerBuilder()
@@ -5268,6 +5268,7 @@ module.exports = {
 
                                 try {
                                     allSearchTracks = await resolveSearchTracks(selectedSource);
+                                    if (completed) return;
                                     currentTracks = allSearchTracks.slice(searchOffset, searchOffset + 10);
 
                                     if (currentTracks.length === 0) {
