@@ -153,7 +153,8 @@ const TINTED_ICON_FILES = [
     './assets/image/icons/LoopON.png',
     './assets/image/icons/LoopOFF.png',
     './assets/image/icons/Error.png',
-    './assets/image/icons/AutoPlay.png',
+    './assets/image/icons/AutoPlayON.png',
+    './assets/image/icons/AutoPlayOFF.png',
     './assets/image/icons/AddSong.png',
 ];
 
@@ -5046,8 +5047,8 @@ module.exports = {
                     ? `\n> تم استخدام أول كلمتين فقط: **${searchQuery}**`
                     : '';
                 const smartSearchThumbnail = {
-                    thumbnail: 'attachment://AutoPlay.png',
-                    files: ['./assets/image/icons/AutoPlay.png'],
+                    thumbnail: 'attachment://AutoPlayON.png',
+                    files: ['./assets/image/icons/AutoPlayON.png'],
                 };
                 const searchExpiredThumbnail = {
                     thumbnail: TrueMusic.user?.displayAvatarURL?.({ extension: 'png', size: 128 }) || null,
@@ -5404,11 +5405,12 @@ module.exports = {
 
 
 
+                const autoPlayImg = player.data.autoPlay ? 'AutoPlayON.png' : 'AutoPlayOFF.png';
                 return message.reply(musicPayload(tokenObj, {
                     title: 'Autoplay',
                     description: `**Autoplay is now ${player.data.autoPlay ? 'ON' : 'OFF'}**.\nBy **${message.author.displayName}**`,
-                    thumbnail: 'attachment://AutoPlay.png',
-                    files: ['./assets/image/icons/AutoPlay.png'],
+                    thumbnail: `attachment://${autoPlayImg}`,
+                    files: [`./assets/image/icons/${autoPlayImg}`],
                 }));
             }
 
