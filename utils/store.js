@@ -16,9 +16,10 @@ const OBJ_KEYS = ['display', 'database'];
 
 class Store {
   constructor() {
-    this._mem   = {};   // key → parsed value
-    this._dirty = new Set();
-    this._timers = {};
+    this._mem      = {};   // key → parsed value
+    this._dirty    = new Set();
+    this._timers   = {};
+    this._flushing = new Set(); // ── #10: concurrent-write guard ──
     // Warm up all caches on startup
     for (const [key, file] of Object.entries(FILES)) {
       try {
@@ -47,7 +48,10 @@ class Store {
     this._mem[key] = value;
     this._dirty.add(key);
     clearTimeout(this._timers[key]);
-    this._timers[key] = setTimeout(() => this._flush(key), 500);
+    // ── #10: debounce triggers async flush ───────────────────────────────────
+    this._timers[key] = setTimeout(() => this._flushAsync(key).catch(e =>
+      console.error('[Store] deferred flush error:', key, e.message)
+    ), 500);
   }
 
   // Atomic: fn receives current value, returns new value
@@ -61,7 +65,6 @@ class Store {
   // دالات نودز لافالينك المفقودة (تمت إضافتها لتعمل مع music.js)
   // =============================================================
   getNodes() {
-    // نُرجع بيانات host كـ Map لتتوافق مع دالة .get(name) المستدعاة في الكراش
     return new Map(Object.entries(this.get('host') || {}));
   }
 
@@ -72,6 +75,27 @@ class Store {
   }
   // =============================================================
 
+  // ── #10: async flush — non-blocking write via fs.promises ───────────────────
+  async _flushAsync(key) {
+    if (!this._dirty.has(key)) return;
+    const file = FILES[key];
+    if (!file) return;
+    // Prevent two concurrent writes to the same file
+    if (this._flushing.has(key)) return;
+    this._flushing.add(key);
+    const tmp = file + '.tmp';
+    try {
+      await fs.promises.writeFile(tmp, JSON.stringify(this._mem[key], null, 2));
+      await fs.promises.rename(tmp, file);
+      this._dirty.delete(key);
+    } catch (e) {
+      console.error('[Store] flush error:', key, e.message);
+    } finally {
+      this._flushing.delete(key);
+    }
+  }
+
+  // Sync flush kept for SIGTERM / process-exit path only
   _flush(key) {
     if (!this._dirty.has(key)) return;
     const file = FILES[key];
@@ -82,15 +106,20 @@ class Store {
       fs.renameSync(tmp, file);
       this._dirty.delete(key);
     } catch (e) {
-      console.error('[Store] flush error:', key, e.message);
+      console.error('[Store] sync flush error:', key, e.message);
     }
   }
 
   _flushAll() {
-    for (const key of this._dirty) this._flush(key);
+    for (const key of [...this._dirty]) {
+      this._flushAsync(key).catch(e => console.error('[Store] flushAll error:', key, e.message));
+    }
   }
 
-  flushSync() { this._flushAll(); }
+  // Used only on SIGTERM — keeps sync writes for safe exit
+  flushSync() {
+    for (const key of this._dirty) this._flush(key);
+  }
 }
 
 module.exports = new Store();

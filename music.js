@@ -2623,6 +2623,10 @@ module.exports = {
         }
         let hostConfig = store.get('host');
         if (process.env.LAVALINK_HOST) {
+            // ── #9: Warn if default Lavalink password is used ────────────────
+            if (!process.env.LAVALINK_PASS) {
+                console.warn('[Security] LAVALINK_PASS env var is not set — using default password. Set it in your environment secrets.');
+            }
             hostConfig = [{
                 name: 'main',
                 host: process.env.LAVALINK_HOST,
@@ -2768,7 +2772,9 @@ module.exports = {
                 created.data.voiceEnsureReason = reason;
                 return created;
             })().finally(() => {
-                setTimeout(() => voiceEnsureLocks.delete(lockKey), 1500);
+                // ── #7: Release lock immediately when operation completes,
+                // not after an arbitrary fixed timeout ─────────────────────
+                voiceEnsureLocks.delete(lockKey);
             });
 
             voiceEnsureLocks.set(lockKey, task);

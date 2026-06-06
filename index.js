@@ -212,20 +212,30 @@ client.once('clientReady', () => {
           : null);
     
       const logChannel = client.channels.cache.find(channel => channel.id === logChannelId);
-    
+
+      // ── #8: Pre-fetch all unique user IDs in parallel before the loop ────────
+      const now = Date.now();
+      const relevantIds = [...new Set(logsArray
+        .filter(l => !l.pausedAt && (
+          l.expirationTime - now <= 0 ||
+          (l.expirationTime - now <= 3 * 24 * 60 * 60 * 1000 && !l.threeDayNoticeSentAt)
+        ))
+        .map(l => l.user)
+        .filter(id => id && !client.users.cache.has(id))
+      )];
+      if (relevantIds.length) {
+        await Promise.allSettled(relevantIds.map(id => client.users.fetch(id).catch(() => null)));
+      }
+      // ─────────────────────────────────────────────────────────────────────────
+
       for (let index = logsArray.length - 1; index >= 0; index--) {
         const log = logsArray[index];
         if (log.pausedAt) continue;
         const remainingTime = log.expirationTime - Date.now();
-        let fetchedUser = null;
-        const getUser = async () => {
-          if (fetchedUser) return fetchedUser;
-          fetchedUser = client.users.cache.get(log.user) || await client.users.fetch(log.user).catch(() => null);
-          return fetchedUser;
-        };
+        const getUser = () => client.users.cache.get(log.user) || null;
 
         if (remainingTime > 0 && remainingTime <= 3 * 24 * 60 * 60 * 1000 && !log.threeDayNoticeSentAt) {
-          const user = await getUser();
+          const user = getUser();
           if (user) {
             const noticeEmbed = new EmbedBuilder()
               .setTitle('Subscription Expiry Notice')
@@ -254,7 +264,7 @@ client.once('clientReady', () => {
           }
         }
         if (remainingTime <= 0) {
-          const user = await getUser();
+          const user = getUser();
           
           if (user) {
             const userembed = new EmbedBuilder()
