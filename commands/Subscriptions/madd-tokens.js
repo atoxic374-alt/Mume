@@ -42,19 +42,21 @@ module.exports = {
     const validTokens = [];
 
     for (const tokenValue of tokenValues) {
+      const maskedToken = `...${String(tokenValue).slice(-6)}`;
       try {
         await clientCheck.login(tokenValue);
         validTokens.push(tokenValue);
       } catch (error) {
         if (error.message === 'TOKEN_INVALID') {
-          console.error(`❌ Not work! > ${tokenValue}`);
-          message.reply(`\`❌ Not work! > ${tokenValue}\``);
+          console.error(`❌ Not work! > ${maskedToken}`);
+          message.reply(`\`❌ Not work! > ${maskedToken}\``);
         } else {
-          console.error(`❌> ${tokenValue}`, error.message);
-          message.reply(`\`**❌ Not work!** ${tokenValue}\``);
+          console.error(`❌> ${maskedToken}`, error.message);
+          message.reply(`\`❌ Not work! > ${maskedToken}\``);
         }
       }
     }
+    try { await clientCheck.destroy(); } catch {}
 
     if (validTokens.length > 0) {
       let bots = [...(store.get('bots') || [])];

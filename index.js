@@ -79,9 +79,7 @@ require('./manager.js');
     client.on('error', error => console.log(error))
       .on('warn', info => console.log(info))
       .on('disconnecting', () => console.log("Bot is disconnecting...", "warn"))
-      .on('reconnecting', () => console.log("Bot reconnecting...", "log"))
-      .on('error', e => console.log(e, "error"))
-      .on('warn', info => console.log(info, "warn"));
+      .on('reconnecting', () => console.log("Bot reconnecting...", "log"));
 
     process.on('unhandledRejection', reason => {
       console.log(reason.stack ? reason.stack : reason);
@@ -191,17 +189,22 @@ client.once('clientReady', () => {
     setInterval(() => checkSubscriptions().catch(error => console.error('[subscriptions]', error)), 30000);
     });
     
+    let _cachedAutoSettings = null;
+    let _cachedAutoSettingsAt = 0;
+    function readAutomaticSettings() {
+      try {
+        const now = Date.now();
+        if (_cachedAutoSettings && now - _cachedAutoSettingsAt < 5 * 60 * 1000) return _cachedAutoSettings;
+        const file = './settings/automatic.json';
+        if (!fs.existsSync(file)) { _cachedAutoSettings = {}; _cachedAutoSettingsAt = now; return {}; }
+        _cachedAutoSettings = JSON.parse(fs.readFileSync(file, 'utf8')) || {};
+        _cachedAutoSettingsAt = now;
+        return _cachedAutoSettings;
+      } catch { return _cachedAutoSettings || {}; }
+    }
+
     async function checkSubscriptions() {
       const logsArray = store.get('time') || [];
-      const readAutomaticSettings = () => {
-        try {
-          const file = './settings/automatic.json';
-          if (!fs.existsSync(file)) return {};
-          return JSON.parse(fs.readFileSync(file, 'utf8')) || {};
-        } catch {
-          return {};
-        }
-      };
       const automaticSettings = readAutomaticSettings();
       const automaticLink = automaticSettings.panelUrl
         || (automaticSettings.panelGuildId && automaticSettings.panelChannelId && automaticSettings.panelMessageId

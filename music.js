@@ -48,9 +48,10 @@ const tempData = new Collection();
 tempData.set("bots", []);
 const collection = new Collection();
 
-// ── B: resolveTrack cache (1-hour TTL keyed by track URL/identifier) ─────────
+// ── B: resolveTrack cache (1-hour TTL, max 500 entries) ──────────────────────
 const _resolveTrackCache = new Map();
 const RESOLVE_TRACK_TTL = 60 * 60 * 1000;
+const RESOLVE_TRACK_MAX = 500;
 async function resolveTrackCached(player, track) {
     const key = track?.info?.uri || track?.info?.identifier || track?.track;
     if (!key) return player.resolveTrack(track);
@@ -60,7 +61,13 @@ async function resolveTrackCached(player, track) {
         return cached.result;
     }
     const result = await player.resolveTrack(track);
-    if (result?.track) _resolveTrackCache.set(key, { result, at: Date.now() });
+    if (result?.track) {
+        if (_resolveTrackCache.size >= RESOLVE_TRACK_MAX) {
+            // Evict oldest entry (Map preserves insertion order)
+            _resolveTrackCache.delete(_resolveTrackCache.keys().next().value);
+        }
+        _resolveTrackCache.set(key, { result, at: Date.now() });
+    }
     return result;
 }
 // ─────────────────────────────────────────────────────────────────────────────
