@@ -70,6 +70,21 @@ async function resolveTrackCached(player, track) {
     }
     return result;
 }
+// ── Periodic TTL eviction: every 30 min remove entries older than 1 hour ─────
+// Without this, expired entries linger in RAM until the 500-slot cap forces
+// LRU eviction — even if nothing ever reads them again.
+setInterval(() => {
+    const now = Date.now();
+    let evicted = 0;
+    for (const [key, entry] of _resolveTrackCache) {
+        if (now - entry.at >= RESOLVE_TRACK_TTL) {
+            _resolveTrackCache.delete(key);
+            evicted++;
+        }
+    }
+    if (evicted > 0 && process.env.DEBUG_PREFETCH)
+        console.log(`[ResolveCache] periodic eviction: removed ${evicted} stale entries, ${_resolveTrackCache.size} remain`);
+}, 30 * 60 * 1000).unref();
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── G: Memory watchdog — warn every 5 min if heap > 300 MB ───────────────────
