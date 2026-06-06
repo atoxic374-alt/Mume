@@ -917,7 +917,7 @@ module.exports = {
                             .setCustomId(`stg_dist_${mid}_mode`)
                             .setPlaceholder('Select naming mode')
                             .addOptions([
-                                { label: 'Room Names', value: 'names', description: 'يسمي كل بوت باسم الروم (اختياري: مع أرقام)' },
+                                { label: 'Room Names', value: 'names', description: 'يسمي كل بوت باسم الروم (اختياري : مع أرقام)' },
                                 { label: 'Numbered Names', value: 'numbers', description: 'اسم مخصص + رقم: Ahmed1, Ahmed2 أو أرقام فقط: 1, 2, 3' },
                                 { label: 'No Rename', value: 'none', description: 'توزيع البوتات بدون تغيير أسمائها' },
                             ]);
