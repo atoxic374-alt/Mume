@@ -148,6 +148,7 @@ const TINTED_ICON_FILES = [
     './assets/image/icons/seek.png',
     './assets/image/icons/Volumeup.png',
     './assets/image/icons/Volumedowwn.png',
+    './assets/image/icons/VolumeInfo.png',
     './assets/image/icons/Skip.png',
     './assets/image/icons/NowPlaying.png',
     './assets/image/icons/LoopON.png',
@@ -4868,8 +4869,8 @@ module.exports = {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'Volume',
                         description: `**Current volume is \`${currentVolume}%\`.**`,
-                        thumbnail: 'attachment://Volumeup.png',
-                        files: ['./assets/image/icons/Volumeup.png'],
+                        thumbnail: 'attachment://VolumeInfo.png',
+                        files: ['./assets/image/icons/VolumeInfo.png'],
                     }));
                 }
 
