@@ -2835,7 +2835,9 @@ module.exports = {
                 setAutoPlayState(created, false);
                 return created;
             })().finally(() => {
-                setTimeout(() => playConnectionLocks.delete(lockKey), 1500);
+                // ── Same fix as voiceEnsureLocks: release lock when the
+                // operation finishes, not after a fixed 1500ms timeout ────────
+                playConnectionLocks.delete(lockKey);
             });
 
             playConnectionLocks.set(lockKey, task);

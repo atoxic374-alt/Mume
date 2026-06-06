@@ -17,7 +17,9 @@ async function tryStart(botData) {
   starting++;
   try {
     await runsys(botData.token, botData.Server);
-  } catch {}
+  } catch (err) {
+    console.error('[Manager] runsys failed for bot:', err?.message || err);
+  }
   starting--;
   // drain queue
   if (startQueue.length > 0) {
@@ -62,7 +64,9 @@ async function unloadIdleBots() {
     if (inVC) continue; // in VC → keep alive
 
     // truly idle and not in VC → destroy
-    try { await botClient.destroy(); } catch {}
+    try { await botClient.destroy(); } catch (err) {
+      console.warn('[Manager] destroy failed for idle bot:', err?.message || err);
+    }
     runningBots.delete(token);
     botLastActivity?.delete(token);
   }
