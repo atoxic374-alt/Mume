@@ -167,7 +167,7 @@ module.exports = {
                 function chatSummary(selectedTokens = getSelectedTokens()) {
                     if (selectedTokens.length === 0) {
                         return {
-                            label: '`غير محدد`',
+                            label: '`Not Set`',
                             details: 'لا توجد بوتات نشطة حالياً داخل هذا الاشتراك.',
                         };
                     }
@@ -175,7 +175,7 @@ module.exports = {
                     const unique = [...new Set(configured)];
                     if (unique.length === 0) {
                         return {
-                            label: '`غير محدد`',
+                            label: '`Not Set`',
                             details: 'الأوامر تعمل في كل الشاتات المسموحة حالياً.',
                         };
                     }
@@ -186,7 +186,7 @@ module.exports = {
                         };
                     }
                     return {
-                        label: '`إعدادات مختلفة`',
+                        label: '`Mixed Settings`',
                         details: `يوجد **${unique.length}** شات مختلف داخل نفس الاشتراك.`,
                     };
                 }
@@ -214,7 +214,7 @@ module.exports = {
 
                     const modal = new ModalBuilder()
                         .setCustomId(`stg_mod_${mid}_moveidle`)
-                        .setTitle(`إدخال ${idleBots.length} بوت خامل`);
+                        .setTitle(`Move ${idleBots.length} Idle Bots`);
                     modal.addComponents(
                         new ActionRowBuilder().addComponents(
                             new TextInputBuilder()
@@ -955,8 +955,8 @@ module.exports = {
                                 ].join('\n')
                             )],
                             components: [new ActionRowBuilder().addComponents(
-                                new ButtonBuilder().setCustomId(`stg_dist_${mid}_names_withnum`).setLabel('مع أرقام').setStyle(ButtonStyle.Primary),
-                                new ButtonBuilder().setCustomId(`stg_dist_${mid}_names_nonum`).setLabel('بدون أرقام').setStyle(ButtonStyle.Secondary),
+                                new ButtonBuilder().setCustomId(`stg_dist_${mid}_names_withnum`).setLabel('With Numbers').setStyle(ButtonStyle.Primary),
+                                new ButtonBuilder().setCustomId(`stg_dist_${mid}_names_nonum`).setLabel('Without Numbers').setStyle(ButtonStyle.Secondary),
                                 new ButtonBuilder().setCustomId(`stg_dist_${mid}_last_back`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
                             )],
                         });
@@ -965,12 +965,12 @@ module.exports = {
                     const showNumbersModal = async (i) => {
                         const modal = new ModalBuilder()
                             .setCustomId(`stg_mod_${mid}_dist_prefix`)
-                            .setTitle('Numbered Names — اسم البوتات');
+                            .setTitle('Numbered Names — Bot Names');
                         modal.addComponents(new ActionRowBuilder().addComponents(
                             new TextInputBuilder()
                                 .setCustomId('prefix')
-                                .setLabel('الاسم المشترك (أو اكتب 0 لأرقام فقط)')
-                                .setPlaceholder('Ahmed → Ahmed1, Ahmed2 ... أو اكتب 0 للترقيم فقط (1, 2, 3)')
+                                .setLabel('Shared Name (or 0 for numbers only)')
+                                .setPlaceholder('Ahmed → Ahmed1, Ahmed2 ... or 0 for numbers only (1, 2, 3)')
                                 .setRequired(true)
                                 .setStyle(TextInputStyle.Short)
                                 .setMaxLength(28)
@@ -1212,7 +1212,7 @@ module.exports = {
                     const muEmojis = emojiData.emojis || [];
                     const selectMenu = new StringSelectMenuBuilder()
                         .setCustomId(`stg_${mid}_select_sub`)
-                        .setPlaceholder('اختر اشتراك')
+                        .setPlaceholder('Select subscription')
                         .addOptions(uniqueCodes.map((code, index) => {
                             const isPrimary = primaryOwnerIdFor(code) === userId;
                             const timeData = store.get('time') || [];
@@ -1265,17 +1265,17 @@ module.exports = {
                     const tokenTotal = tokenStock + tokenActive;
 
                     const panelTitle = isPrimaryOrAdmin
-                        ? `إعدادات الاشتراك — ${selectedCode}`
-                        : `إعدادات الاشتراك — ${selectedCode} *(مشرف)*`;
+                        ? `Subscription Settings — ${selectedCode}`
+                        : `Subscription Settings — ${selectedCode} *(Admin)*`;
 
                     const embedFields = [
                         {
-                            name: '👑  المالك',
+                            name: '👑  Owner',
                             value: primaryOwnerId ? `*<@${primaryOwnerId}>*` : '*`غير معروف`*',
                             inline: true
                         },
                         {
-                            name: '🤖  البوتات',
+                            name: '🤖  Bots',
                             value: [
                                 `**نشط :** *\`${subTokens.length}\`*`,
                                 waitingCount ? `**انتظار :** *\`${waitingCount}\`*` : null,
@@ -1283,19 +1283,19 @@ module.exports = {
                             inline: true
                         },
                         {
-                            name: '🖥️  السيرفر',
+                            name: '🖥️  Server',
                             value: `**ID :** *\`${subTokens[0]?.Server || allSubTokens[0]?.Server || 'غير محدد'}\`*`,
                             inline: true
                         },
                         {
-                            name: '⏰  الانتهاء',
+                            name: '⏰  Expiry',
                             value: subInfo?.expirationTime
                                 ? `**الوقت :** *<t:${Math.floor(subInfo.expirationTime / 1000)}:R>*`
                                 : '**الوقت :** *`غير معروف`*',
                             inline: true
                         },
                         {
-                            name: '👥  الأونرز',
+                            name: '👥  Owners',
                             value: subOwnerIds.length
                                 ? subOwnerIds.map(id => `*<@${id}>*`).join('\n')
                                 : '*`لا يوجد`*',
@@ -1303,7 +1303,7 @@ module.exports = {
                         },
                         // Tokens (stock) — primary owner / admin only
                         ...(isPrimaryOrAdmin ? [{
-                            name: '📦  المخزون',
+                            name: '📦  Stock',
                             value: [
                                 `**متاح :** *\`${tokenStock}\`*`,
                                 `**مفعّل :** *\`${tokenActive}\`*`,
@@ -1312,7 +1312,7 @@ module.exports = {
                             inline: true
                         }] : []),
                         {
-                            name: '🎛️  العرض',
+                            name: '🎛️  Display',
                             value: [
                                 `**الأزرار :** *${display.buttons ? '`ON`' : '`OFF`'}*`,
                                 `**الإيمبد :** *${display.embeds ? '`ON`' : '`OFF`'}*`,
@@ -1321,12 +1321,12 @@ module.exports = {
                             inline: true
                         },
                         {
-                            name: '🎵  المنصة',
+                            name: '🎵  Platform',
                             value: `**المصدر :** *\`${display.platform}\`*`,
                             inline: true
                         },
                         {
-                            name: '🔁  العودة للروم',
+                            name: '🔁  Back to Voice',
                             value: [
                                 `**الحالة :** ${backVoice.label}`,
                                 `**تفاصيل :** *${backVoice.details}*`,
@@ -1334,7 +1334,7 @@ module.exports = {
                             inline: true
                         },
                         {
-                            name: '💬  شات الأوامر',
+                            name: '💬  Command Chat',
                             value: [
                                 `**الشات :** ${chat.label}`,
                                 `**تفاصيل :** *${chat.details}*`,
@@ -1342,7 +1342,7 @@ module.exports = {
                             inline: false
                         },
                         {
-                            name: '🔊  حالة الصوت',
+                            name: '🔊  Voice Status',
                             value: [
                                 `**في روم :** *\`${voiceStats.inRoom}\`*`,
                                 `**خامل :** *\`${voiceStats.idle}\`*`,
@@ -1364,22 +1364,22 @@ module.exports = {
                     const row1 = new ActionRowBuilder().addComponents(
                         new StringSelectMenuBuilder()
                             .setCustomId(`stg_${mid}_main_menu`)
-                            .setPlaceholder('اختر القسم')
+                            .setPlaceholder('Select section')
                             .addOptions([
-                                { label: 'المظهر', value: 'APPEARANCE', description: 'تغيير الصورة، البنر، والحالة لكل البوتات' },
-                                { label: 'الغرف', value: 'ROOMS', description: 'الغرف، التوزيع الذكي، الروابط، وشات الأوامر' },
-                                { label: 'العرض', value: 'DISPLAY', description: 'تفعيل أو تعطيل الأزرار والإيمبد' },
-                                { label: 'المنصة', value: 'PLATFORM', description: 'اختيار منصة البحث والتشغيل' },
+                                { label: 'Appearance', value: 'APPEARANCE', description: 'تغيير الصورة، البنر، والحالة لكل البوتات' },
+                                { label: 'Rooms', value: 'ROOMS', description: 'الغرف، التوزيع الذكي، الروابط، وشات الأوامر' },
+                                { label: 'Display', value: 'DISPLAY', description: 'تفعيل أو تعطيل الأزرار والإيمبد' },
+                                { label: 'Platform', value: 'PLATFORM', description: 'اختيار منصة البحث والتشغيل' },
                                 ...(canManageSubscriptionOwners(selectedCode)
-                                    ? [{ label: 'الأونرز', value: 'OWNERS', description: 'إضافة وإزالة أونرز يتحكمون ببوتات الاشتراك' }]
+                                    ? [{ label: 'Owners', value: 'OWNERS', description: 'إضافة وإزالة أونرز يتحكمون ببوتات الاشتراك' }]
                                     : []),
                             ])
                     );
                     const row2 = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`stg_${mid}_close`).setLabel('إغلاق').setStyle(ButtonStyle.Danger)
+                        new ButtonBuilder().setCustomId(`stg_${mid}_close`).setLabel('Close').setStyle(ButtonStyle.Danger)
                     );
                     if (uniqueCodes.length > 1) {
-                        row2.addComponents(new ButtonBuilder().setCustomId(`stg_${mid}_back_to_select`).setLabel('تغيير الاشتراك').setStyle(ButtonStyle.Secondary));
+                        row2.addComponents(new ButtonBuilder().setCustomId(`stg_${mid}_back_to_select`).setLabel('Change Subscription').setStyle(ButtonStyle.Secondary));
                     }
                     components.push(row1, row2);
                 }
@@ -1395,19 +1395,19 @@ module.exports = {
                         .setTitle(`Subscribe Owners — ${selectedCode}`)
                         .addFields(
                             {
-                                name: '👑  مالك الاشتراك',
+                                name: '👑  Subscription Owner',
                                 value: primaryOwnerId ? `*<@${primaryOwnerId}>*` : '*`غير معروف`*',
                                 inline: true,
                             },
                             {
-                                name: '👥  الأونرز الحاليين',
+                                name: '👥  Current Owners',
                                 value: subOwnerIds.length
                                     ? subOwnerIds.map((id, i) => `**${i + 1} :** *<@${id}>*`).join('\n')
                                     : '*`لا يوجد`*',
                                 inline: false,
                             },
                             {
-                                name: '📋  الصلاحيات',
+                                name: '📋  Permissions',
                                 value: [
                                     '**يقدرون :** *استخدام Settings وأوامر التحكم مثل join / setup / settc.*',
                                     '**لا يقدرون :** *نقل الملكية أو نقل الاشتراك — تبقى للمالك الأصلي فقط.*',
@@ -1519,7 +1519,7 @@ module.exports = {
                                                 inline: false,
                                             },
                                             {
-                                                name: '📖  ماذا تفعل الأزرار؟',
+                                                name: '📖  Button Guide',
                                                 value: [
                                                     '**Voice Status :** *يعرض مكان كل بوت — داخل روم، خامل، خارج السيرفر، أو غير متصل.*',
                                                     '**Smart Distribution :** *يوزع البوتات على نطاق رومات تختاره ويحافظ على ترتيبها.*',
@@ -1566,7 +1566,7 @@ module.exports = {
                                 .setTitle(`Command Chat — ${selectedCode}`)
                                 .addFields(
                                     {
-                                        name: '💬  الشات الحالي',
+                                        name: '💬  Current Chat',
                                         value: [
                                             `**Channel :** ${chat.label}`,
                                             `**Info :** *${chat.details}*`,
@@ -1574,7 +1574,7 @@ module.exports = {
                                         inline: false,
                                     },
                                     {
-                                        name: '📋  كيف يعمل؟',
+                                        name: '📋  How It Works',
                                         value: '**Info :** *عند تحديد شات استقبال، أوامر كل البوتات تعمل فقط في شات الاستقبال أو شات الفويس الخاص بكل بوت.*',
                                         inline: false,
                                     },
@@ -2059,7 +2059,7 @@ module.exports = {
                         lines.join('\n')
                     )
                     .setColor(getEmbedColor(client))
-                    .setFooter({ text: `صفحة ${page + 1} / ${Math.ceil(subTokens.length / 10)}` });
+                    .setFooter({ text: `Page ${page + 1} / ${Math.ceil(subTokens.length / 10)}` });
 
                 const row1 = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId(`stg_vs_${mid}_prev`).setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
