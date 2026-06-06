@@ -1257,13 +1257,6 @@ module.exports = {
                     // Is the current user the primary owner or a bot admin?
                     const isPrimaryOrAdmin = isAdmin || (primaryOwnerId && primaryOwnerId === userId);
 
-                    // Stock is only visible to primary owner / bot admins — not to sub-admins
-                    const stockTokens = isPrimaryOrAdmin ? (store.get('bots') || []) : [];
-                    const allActiveTokens = isPrimaryOrAdmin ? (store.get('tokens') || []) : [];
-                    const tokenStock = stockTokens.length;
-                    const tokenActive = allActiveTokens.length;
-                    const tokenTotal = tokenStock + tokenActive;
-
                     const panelTitle = isPrimaryOrAdmin
                         ? `Subscription Settings — ${selectedCode}`
                         : `Subscription Settings — ${selectedCode} *(Admin)*`;
@@ -1301,16 +1294,6 @@ module.exports = {
                                 : '*`لا يوجد`*',
                             inline: true
                         },
-                        // Tokens (stock) — primary owner / admin only
-                        ...(isPrimaryOrAdmin ? [{
-                            name: 'Stock',
-                            value: [
-                                `**متاح :** *\`${tokenStock}\`*`,
-                                `**مفعّل :** *\`${tokenActive}\`*`,
-                                `**المجموع :** *\`${tokenTotal}\`*`,
-                            ].join('\n'),
-                            inline: true
-                        }] : []),
                         {
                             name: 'Display',
                             value: [
