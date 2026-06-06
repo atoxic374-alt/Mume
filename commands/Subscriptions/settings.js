@@ -1402,8 +1402,8 @@ module.exports = {
                     embeds.push(embed);
 
                     components.push(new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`stg_${mid}_owner_add`).setLabel('Add Owner').setStyle(ButtonStyle.Success),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_owner_remove`).setLabel('Remove Owner').setStyle(ButtonStyle.Danger).setDisabled(subOwnerIds.length === 0),
+                        new ButtonBuilder().setCustomId(`stg_${mid}_owner_add`).setLabel('Add Owner').setEmoji({ id: '1484364982094266428' }).setStyle(ButtonStyle.Success),
+                        new ButtonBuilder().setCustomId(`stg_${mid}_owner_remove`).setLabel('Remove Owner').setEmoji({ id: '1484364982094266428' }).setStyle(ButtonStyle.Danger).setDisabled(subOwnerIds.length === 0),
                         new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary),
                     ));
                 }
@@ -1415,9 +1415,9 @@ module.exports = {
                     embeds.push(embed);
 
                     const row = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`stg_${mid}_set_avatar`).setLabel('Avatar').setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_set_banner`).setLabel('Banner').setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_set_status`).setLabel('Status').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`stg_${mid}_set_avatar`).setLabel('Avatar').setEmoji({ id: '1512475944839942176' }).setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`stg_${mid}_set_banner`).setLabel('Banner').setEmoji({ id: '1512475944839942176' }).setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`stg_${mid}_set_status`).setLabel('Status').setEmoji({ id: '1512475944839942176' }).setStyle(ButtonStyle.Secondary),
                         new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
                     );
                     components.push(row);
@@ -1434,10 +1434,12 @@ module.exports = {
                                 new ButtonBuilder()
                                     .setCustomId(`stg_${mid}_toggle_buttons`)
                                     .setLabel(`Buttons: ${display.buttons ? 'ON' : 'OFF'}`)
+                                    .setEmoji({ id: '1512475951844294867' })
                                     .setStyle(display.buttons ? ButtonStyle.Success : ButtonStyle.Danger),
                                 new ButtonBuilder()
                                     .setCustomId(`stg_${mid}_toggle_embeds`)
                                     .setLabel(`Embeds: ${display.embeds ? 'ON' : 'OFF'}`)
+                                    .setEmoji({ id: '1512475951844294867' })
                                     .setStyle(display.embeds ? ButtonStyle.Success : ButtonStyle.Danger),
                         new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
                     );
@@ -1709,6 +1711,58 @@ module.exports = {
                         .setStyle(TextInputStyle.Short)
                 ));
                 await i.showModal(modal);
+                return;
+            }
+
+            if (i.customId === `stg_${mid}_rooms_menu`) {
+                const val = i.values[0];
+                if (val === 'voice_status') return handleVoiceStatus(i);
+                if (val === 'distribute') return startSmartDistribution(i);
+                if (val === 'moveidle') return showMoveIdleModal(i);
+                if (val === 'pin_room') return startPinRoom(i);
+                if (val === 'panel_chat') { currentPanel = 'CHAT'; return updatePanel(i); }
+                if (val === 'links_all') return showLinksPanel(i, getSelectedTokens(), selectedCode, 'all', 'rooms');
+                if (val === 'links_out') return showLinksPanel(i, getSelectedTokens(), selectedCode, 'outside', 'rooms');
+                if (val === 'toggle_back_voice') {
+                    tokens = store.get('tokens') || [];
+                    const sel = tokens.filter(t => t.code === selectedCode);
+                    const enabled = sel.some(t => t.backToVoice !== 'off');
+                    sel.forEach(t => { t.backToVoice = enabled ? 'off' : 'on'; });
+                    store.set('tokens', tokens);
+                    return updatePanel(i);
+                }
+                if (val === 'toggle_voice_status') {
+                    const cur = getDisplay(selectedCode);
+                    const newVal = !cur.voiceStatus;
+                    setDisplay(selectedCode, { voiceStatus: newVal });
+                    tokens = store.get('tokens') || [];
+                    const sel = tokens.filter(t => t.code === selectedCode);
+                    sel.forEach(t => { t.voiceStatus = newVal ? 'on' : 'off'; });
+                    store.set('tokens', tokens);
+                    if (!newVal) {
+                        await runLimited(sel, SETTINGS_PROCESS_CONCURRENCY, async t => {
+                            const bot = runningBots.get(t.token);
+                            const channelId = bot?.guilds.cache.get(t.Server)?.members.me?.voice?.channelId;
+                            if (bot?.rest && channelId) {
+                                await bot.rest.put(`/channels/${channelId}/voice-status`, { body: { status: null } }).catch(() => {});
+                            }
+                        });
+                    }
+                    return updatePanel(i);
+                }
+                if (val === 'voice_status_emoji') {
+                    const modal = new ModalBuilder().setCustomId(`stg_mod_${mid}_voice_status_emoji`).setTitle('Voice Status Emoji');
+                    modal.addComponents(new ActionRowBuilder().addComponents(
+                        new TextInputBuilder()
+                            .setCustomId('emoji')
+                            .setLabel('Emoji before track name')
+                            .setPlaceholder('🎵 or <:music:123456789012345678>')
+                            .setRequired(true)
+                            .setStyle(TextInputStyle.Short)
+                    ));
+                    await i.showModal(modal);
+                    return;
+                }
                 return;
             }
 
