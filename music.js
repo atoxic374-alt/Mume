@@ -48,6 +48,32 @@ const tempData = new Collection();
 tempData.set("bots", []);
 const collection = new Collection();
 
+// ── B: resolveTrack cache (1-hour TTL keyed by track URL/identifier) ─────────
+const _resolveTrackCache = new Map();
+const RESOLVE_TRACK_TTL = 60 * 60 * 1000;
+async function resolveTrackCached(player, track) {
+    const key = track?.info?.uri || track?.info?.identifier || track?.track;
+    if (!key) return player.resolveTrack(track);
+    const cached = _resolveTrackCache.get(key);
+    if (cached && Date.now() - cached.at < RESOLVE_TRACK_TTL) {
+        if (process.env.DEBUG_PREFETCH) console.log(`[ResolveCache] hit: ${track.info?.title}`);
+        return cached.result;
+    }
+    const result = await player.resolveTrack(track);
+    if (result?.track) _resolveTrackCache.set(key, { result, at: Date.now() });
+    return result;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── G: Memory watchdog — warn every 5 min if heap > 300 MB ───────────────────
+setInterval(() => {
+    const heapMB = process.memoryUsage().heapUsed / 1024 / 1024;
+    if (heapMB > 300) {
+        console.warn(`[MemWatchdog] heap usage: ${heapMB.toFixed(1)} MB — possible memory leak`);
+    }
+}, 5 * 60 * 1000).unref();
+// ─────────────────────────────────────────────────────────────────────────────
+
 const FILTER_NAMES = {
     clear: 'None',
     bassboost: 'Bass Boost',
@@ -2639,6 +2665,15 @@ module.exports = {
 
         runningBots.set(token, TrueMusic);
 
+        // ── E: per-instance error handlers — catch unhandled rejections from this bot ──
+        TrueMusic.on('error', (err) => {
+            console.error(`[SubBot:${String(token).slice(-6)}] client error:`, err?.message || err);
+        });
+        TrueMusic.on('warn', (info) => {
+            console.warn(`[SubBot:${String(token).slice(-6)}] warn:`, info);
+        });
+        // ─────────────────────────────────────────────────────────────────────────────
+
         TrueMusic.poru = new Poru(TrueMusic, hostConfig, {
             defaultPlatform: 'ytsearch',
             reconnectTries: 50,       // ↑ was 20 — أكثر محاولات إعادة اتصال
@@ -4043,7 +4078,7 @@ module.exports = {
                     if (!player.currentTrack || trackIdentity(player.currentTrack) !== identity) return;
                     runBackground('prefetch-next-track', async () => {
                         try {
-                            const resolved = await player.resolveTrack(nextTrack);
+                            const resolved = await resolveTrackCached(player, nextTrack);
                             // Verify the track is still at the front of the queue
                             if (resolved?.track && player.queue[0] === nextTrack) {
                                 player.queue[0].track = resolved.track;
@@ -4152,17 +4187,26 @@ module.exports = {
                     clearProgressInterval(player);
                     return;
                 }
-                const tokenObj3 = (store.get('tokens') || []).find(t => t.token === token);
+                        // ── A: cached tokenObj + liked — refresh every 60s ────────────
+                        const _now3 = Date.now();
+                        const _pc = player.data._progressCache || {};
+                        let tokenObj3 = _pc.tokenObj;
+                        let alreadyLiked3 = typeof _pc.liked === 'boolean' ? _pc.liked : false;
+                        if (!tokenObj3 || _now3 - (_pc.refreshedAt || 0) >= 60_000) {
+                            tokenObj3 = (store.get('tokens') || []).find(t => t.token === token);
+                            alreadyLiked3 = await likes.isLiked(
+                                player.currentTrack?.info?.requester?.id || '',
+                                player.currentTrack || track,
+                            ).catch(() => alreadyLiked3);
+                            player.data._progressCache = { tokenObj: tokenObj3, liked: alreadyLiked3, refreshedAt: _now3 };
+                        }
+                        // ─────────────────────────────────────────────────────────────
                 if (!tokenObj3) {
                     warnPlayerOnce(player, `missing-token:${token}`, `[ProgressUpdate] token config missing for ${token}`);
                     clearProgressInterval(player);
                     return;
                 }
                         const ui3 = player.data.ui || {};
-                        const alreadyLiked3 = await likes.isLiked(
-                            player.currentTrack?.info?.requester?.id || '',
-                            player.currentTrack || track,
-                        ).catch(() => false);
                         ui3.liked = alreadyLiked3;
                         player.data.ui = ui3;
                         const payload3 = buildNowPlayingV2Payload(TrueMusic, tokenObj3, player, { author: player.currentTrack?.info?.requester }, {
@@ -5421,23 +5465,30 @@ module.exports = {
 
                         if (interaction.customId === 'np_filter') {
                             const filterName = interaction.values[0];
-                            try {
-                                        // deferUpdate + Lavalink filter at the same instant — both independent
-                                        const [, applied] = await Promise.all([
-                                            interaction.deferUpdate().catch(() => {}),
-                                            applyFilter(player, filterName),
-                                        ]);
-                                                ui.selectedFilter = applied;
-                                                ui.selectedArtistIndex = null;
-                                                player.data.ui = ui;
-                                const label = FILTER_NAMES[applied] || applied;
-                                const response = applied === 'clear' ? '**Filter stopped.**' : `**Done applied : ${label}.**`;
-                                runBackground('filter panel edit', () => editPanel(!!ui.liked));
-                                return replyEphemeral(response);
-                            } catch (err) {
-                                console.error('[Filters] failed:', err?.message || err);
-                                return replyEphemeral('Failed to apply.');
+                            // ── C: debounce — only apply filter 300ms after last click ──
+                            await interaction.deferUpdate().catch(() => {});
+                            if (player.data._filterDebounceTimer) {
+                                clearTimeout(player.data._filterDebounceTimer);
+                                player.data._filterDebounceTimer = null;
                             }
+                            player.data._filterDebounceTimer = setTimeout(async () => {
+                                player.data._filterDebounceTimer = null;
+                                try {
+                                    const applied = await applyFilter(player, filterName);
+                                    ui.selectedFilter = applied;
+                                    ui.selectedArtistIndex = null;
+                                    player.data.ui = ui;
+                                    const label = FILTER_NAMES[applied] || applied;
+                                    const response = applied === 'clear' ? '**Filter stopped.**' : `**Done applied : ${label}.**`;
+                                    runBackground('filter panel edit', () => editPanel(!!ui.liked));
+                                    replyEphemeral(response);
+                                } catch (err) {
+                                    console.error('[Filters] failed:', err?.message || err);
+                                    replyEphemeral('Failed to apply.');
+                                }
+                            }, 300);
+                            // ─────────────────────────────────────────────────────────
+                            return;
                         }
                     }
 

@@ -93,6 +93,42 @@ require('./manager.js');
         console.log(err.stack ? err.stack : err);
       });
 
+// ── F: Graceful shutdown — handle SIGTERM cleanly ────────────────────────────
+process.on('SIGTERM', async () => {
+    console.log('[Shutdown] SIGTERM received — starting graceful shutdown');
+    try {
+        const { runningBots: subBots } = require('./music');
+        const shutdownTasks = [];
+        for (const [, bot] of subBots) {
+            shutdownTasks.push((async () => {
+                try {
+                    if (bot.poru?.players) {
+                        for (const [, player] of bot.poru.players) {
+                            try {
+                                const msg = player.data?.nowPlayingMessage;
+                                if (msg && typeof msg.edit === 'function') {
+                                    await msg.edit({ components: [] }).catch(() => {});
+                                }
+                                if (player.data?.progressInterval) {
+                                    clearInterval(player.data.progressInterval);
+                                    player.data.progressInterval = null;
+                                }
+                            } catch {}
+                        }
+                    }
+                    await bot.destroy().catch(() => {});
+                } catch {}
+            })());
+        }
+        await Promise.allSettled(shutdownTasks);
+        console.log('[Shutdown] All bots destroyed cleanly');
+    } catch (e) {
+        console.error('[Shutdown] error during graceful shutdown:', e?.message || e);
+    }
+    process.exit(0);
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
 // ── Keep-Alive: zombie-connection detection & auto-reconnect ─────────────────
 // Tracks the last time any Discord gateway event was received.
 // If no event arrives for ZOMBIE_THRESHOLD_MS, the WebSocket is considered
