@@ -13,6 +13,7 @@ const { EmbedBuilder, Client, GatewayIntentBits, ActionRowBuilder, StringSelectM
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
 const { getEmbedColor } = require('../../utils/embedColor');
+const { buildSubscriptionRemovedDm } = require('../../utils/subscriptionDm');
 
 module.exports = {
   name: 'musicremovesub',
@@ -121,7 +122,11 @@ async function executeRemoval(code, message, client) {
 
     // DM Owner
     client.users.fetch(userId).then(u => {
-      u.send({ embeds: [new EmbedBuilder().setTitle('⚠️ تم إنهاء اشتراكك').setDescription(`تم إزالة اشتراكك برقم \`${code}\`.`).setColor(getEmbedColor(client)).setTimestamp()] }).catch(() => {});
+      u.send({ embeds: [buildSubscriptionRemovedDm(client, {
+        code,
+        botCount: sub.botsCount || tokensToRemove.length,
+        serverId: sub.server,
+      })] }).catch(() => {});
     }).catch(() => {});
 
     // Log

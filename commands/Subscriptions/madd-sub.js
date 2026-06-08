@@ -12,6 +12,7 @@ const ms = require('ms');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
 const { getEmbedColor } = require('../../utils/embedColor');
+const { buildSubscriptionActivatedDm } = require('../../utils/subscriptionDm');
 
 module.exports = {
   name: 'musicaddsub',
@@ -234,8 +235,13 @@ module.exports = {
 
       // DM
       mention.send({
-        content: '```الشراء ناجح. اشتراكك مفعل الآن.```',
-        embeds: [new EmbedBuilder().setTitle('🎵 تم تفعيل اشتراكك!').addFields({ name: '🤖 البوتات', value: `\`${selectedCount}\` بوت`, inline: true }, { name: '⏳ المدة', value: `\`${formattedDuration}\``, inline: true }, { name: '🔖 رقم الاشتراك', value: `\`SuID #${randomCode}\``, inline: true }).setColor(getEmbedColor(client)).setFooter({ text: `${message.guild.name} | Timer`, iconURL: message.guild.iconURL({ dynamic: true }) })]
+        embeds: [buildSubscriptionActivatedDm(client, {
+          code: `#${randomCode}`,
+          botCount: selectedCount,
+          duration: formattedDuration,
+          serverId,
+          expiresAt: expirationTime,
+        })]
       }).catch(() => {});
 
       // Log

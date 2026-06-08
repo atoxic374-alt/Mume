@@ -28,6 +28,7 @@ const fs = require('fs');
 const { Poru } = require('poru');
 const { Agent: UndiciAgent, request: undiciRequest } = require('undici');
 const lavalinkKeepAlive = require('./utils/lavalinkKeepAlive');
+const lavalinkConsole = require('./utils/lavalinkConsole');
 
 const { owners, TwitchUrl, statuses } = require(`${process.cwd()}/config`);
 const store = require('./utils/store');
@@ -1392,87 +1393,6 @@ function lavalinkRestAgent(origin) {
     return agent;
 }
 
-// Monkey-patch Poru's REST client to replace globalThis.fetch (no connection pooling)
-// with undici (persistent keep-alive connections). Drops per-command latency from
-// 50-300ms (TCP handshake per call) to <5ms (reuses existing connection).
-// onSessionLost: optional callback fired when Lavalink returns 404 "Session not found"
-function patchPoruNodeRest(node, onSessionLost = null) {
-    const rest = node?.rest;
-    if (!rest || rest._undiciPatched) return;
-    rest._undiciPatched = true;
-
-    const origin = rest.url; // e.g. "http://127.0.0.1:2333"
-    const agent = lavalinkRestAgent(origin);
-    if (!agent) return;
-
-    // Warm up the connection immediately so first command has no cold-start delay
-    undiciRequest(origin + '/', {
-        method: 'GET',
-        dispatcher: agent,
-        headersTimeout: 1000,
-        bodyTimeout: 1000,
-    }).then(r => r.body.dump().catch(() => {})).catch(() => {});
-
-    // Detects "Session not found" in a 404 response and fires onSessionLost
-    function _detectSessionLost(statusCode, text) {
-        if (statusCode !== 404 || !onSessionLost) return;
-        try {
-            const parsed = JSON.parse(text);
-            if (/session not found/i.test(parsed?.message || '')) {
-                console.warn(`[FastRest] Session not found detected — triggering node reconnect`);
-                setImmediate(onSessionLost);
-            }
-        } catch {}
-    }
-
-    const fastPatch = async function(endpoint, body) {
-        try {
-            const response = await undiciRequest(rest.url + endpoint, {
-                method: 'PATCH',
-                dispatcher: agent,
-                headers: {
-                    'content-type': 'application/json',
-                    authorization: rest.password,
-                    ...(rest.isNodeLink ? { 'accept-encoding': 'br, gzip, deflate' } : {}),
-                },
-                body: body !== undefined ? JSON.stringify(body) : undefined,
-                headersTimeout: 400,
-                bodyTimeout: 400,
-            });
-            const text = await response.body.text().catch(() => '{}');
-            _detectSessionLost(response.statusCode, text);
-            try { return JSON.parse(text); } catch { return null; }
-        } catch {
-            return null;
-        }
-    };
-
-    const fastPost = async function(endpoint, body) {
-        try {
-            const response = await undiciRequest(rest.url + endpoint, {
-                method: 'POST',
-                dispatcher: agent,
-                headers: {
-                    'content-type': 'application/json',
-                    authorization: rest.password,
-                    ...(rest.isNodeLink ? { 'accept-encoding': 'br, gzip, deflate' } : {}),
-                },
-                body: body !== undefined ? JSON.stringify(body) : undefined,
-                headersTimeout: 400,
-                bodyTimeout: 400,
-            });
-            const text = await response.body.text().catch(() => '{}');
-            _detectSessionLost(response.statusCode, text);
-            try { return JSON.parse(text); } catch { return null; }
-        } catch {
-            return null;
-        }
-    };
-
-    rest.patch = fastPatch;
-    rest.post = fastPost;
-}
-
 async function readUndiciBody(body) {
     if (!body) return '';
     if (typeof body.text === 'function') return body.text().catch(() => '');
@@ -1679,6 +1599,50 @@ function hasConnectedPoruNode(poru) {
     return [...(poru?.nodes?.values?.() || [])].some(node => node?.isConnected);
 }
 
+function restorePoruNodes(poru, client, reason = 'restore') {
+    if (!poru) return false;
+    if (!poru.userId && client?.user?.id) poru.userId = client.user.id;
+
+    lavalinkKeepAlive.prepareNodes(poru);
+
+    const nodes = [...(poru.nodes?.values?.() || [])];
+    if (nodes.length > 0) {
+        nodes.forEach(node => {
+            try {
+                node.attempt = 0;
+                clearTimeout(node.reconnectAttempt);
+                node.reconnectAttempt = null;
+                const wsState = node.ws?.readyState;
+                if (!node.isConnected && wsState !== 0 && wsState !== 1) {
+                    node.connect?.().catch(() => {});
+                }
+            } catch {}
+        });
+        return true;
+    }
+
+    if (!Array.isArray(poru._nodes) || poru._nodes.length === 0) return false;
+
+    if (!poru.isActivated) {
+        poru.init().catch?.(() => {});
+        return true;
+    }
+
+    poru._nodes.forEach(nodeOptions => {
+        if (!nodeOptions?.name || poru.nodes?.has?.(nodeOptions.name)) return;
+        Promise.resolve(poru.addNode(nodeOptions)).catch(err => {
+            lavalinkConsole.updateBot(client, {
+                state: 'restore_failed',
+                event: 'restore_node_failed',
+                node: nodeOptions.name,
+                note: `${reason}: ${err?.message || err}`,
+            });
+        });
+    });
+
+    return true;
+}
+
 function wait(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -1704,7 +1668,7 @@ async function resolveWithNodeRetry(client, options, retries = 1) {
 
     for (let attempt = 0; attempt <= retries; attempt++) {
         if (!hasConnectedPoruNode(poru)) {
-            try { poru.init(client); } catch {}
+            restorePoruNodes(poru, client, 'resolve retry');
             if (attempt < retries) await wait(1200);
         }
 
@@ -1719,7 +1683,7 @@ async function resolveWithNodeRetry(client, options, retries = 1) {
             const noNodes = /no nodes are available/i.test(message);
             const retryable = noNodes || /timed out|timeout|econnreset|etimedout/i.test(message);
             if (!retryable || attempt >= retries) throw err;
-            try { poru.init(client); } catch {}
+            restorePoruNodes(poru, client, 'resolve failure');
             await wait(1200);
         }
     }
@@ -2705,6 +2669,12 @@ module.exports = {
 
 
         runningBots.set(token, TrueMusic);
+        lavalinkConsole.updateBot(TrueMusic, {
+            token,
+            state: 'starting',
+            event: 'client_create',
+            note: 'Discord login pending',
+        });
 
         // ── E: per-instance error handlers — catch unhandled rejections from this bot ──
         TrueMusic.on('error', (err) => {
@@ -2717,30 +2687,17 @@ module.exports = {
 
         TrueMusic.poru = new Poru(TrueMusic, hostConfig, {
             defaultPlatform: 'ytsearch',
-            reconnectTries: 50,       // ↑ was 20 — أكثر محاولات إعادة اتصال
-            reconnectTimeout: 3000,   // ↓ was 6000ms — أسرع في إعادة الاتصال
-            resumeKey: `ens-${token.slice(-10)}`,
-            resumeTimeout: 600,       // ↑ was 180 — 10 دقائق (سيُستبدل بـ PATCH صحيح من lavalinkKeepAlive)
-            autoResume: true,
+            reconnectTries: 80,
+            reconnectTimeout: 5000,
+            resumeTimeout: Number(process.env.LAVALINK_RESUME_TIMEOUT_SEC || 600),
+            autoResume: false,
             bypassChecks: false,
         });
 
-        // ✅ Required for Lavalink/Poru voice handshake
-        // ── Voice packet fast-path ────────────────────────────────────────────────
-        // Discord's 'raw' event bypasses all high-level handlers and command
-        // processing. VOICE_STATE_UPDATE and VOICE_SERVER_UPDATE are forwarded
-        // directly to Poru via packetUpdate() — the correct Poru v5 API for raw
-        // Discord gateway packets (equivalent to sendRawData in other clients).
-        //
-        // All other packet types (heartbeat ACKs, GUILD_CREATE, MESSAGE_CREATE…)
-        // are dropped immediately — Poru only acts on the 2 voice types above.
-        // With 100+ bots this eliminates ~95% of raw-handler overhead.
+        // Poru registers its own raw listener during init(). Keep this listener
+        // activity-only so voice packets are not processed twice.
         let lastMusicEventAt = Date.now();
-        TrueMusic.on('raw', (packet) => {
-            // Voice packets forwarded first — zero logic before this call
-            if (packet.t === 'VOICE_STATE_UPDATE' || packet.t === 'VOICE_SERVER_UPDATE') {
-                try { TrueMusic.poru.packetUpdate(packet); } catch {}
-            }
+        TrueMusic.on('raw', () => {
             lastMusicEventAt = Date.now();
         });
 
@@ -2965,22 +2922,35 @@ module.exports = {
             const now = Date.now();
             if (now - lastPoruInitAt < cooldownMs) return false;
             lastPoruInitAt = now;
-            console.warn(`[Poru] ${reason} — re-init`);
+            lavalinkConsole.updateBot(TrueMusic, {
+                token,
+                state: 'reinit',
+                event: 'poru_reinit',
+                note: reason,
+            });
             try {
-                // ── Reset Poru node attempt counter before re-init ────────────────
-                // Poru stops reconnecting permanently once node.attempt > reconnectTries.
-                // Resetting attempt=0 allows it to reconnect again from scratch.
-                TrueMusic.poru.nodes?.forEach(node => {
+                const poru = TrueMusic.poru;
+                if (!poru) return false;
+
+                if (!poru.userId && TrueMusic.user?.id) poru.userId = TrueMusic.user.id;
+
+                const nodes = [...(poru.nodes?.values?.() || [])];
+                if (nodes.length === 0 && Array.isArray(poru._nodes) && poru._nodes.length > 0) {
+                    restorePoruNodes(poru, TrueMusic, reason);
+                    return true;
+                }
+
+                nodes.forEach(node => {
                     try {
                         node.attempt = 0;
-                        if (!node.isConnected) {
+                        const wsState = node.ws?.readyState;
+                        if (!node.isConnected && wsState !== 0 && wsState !== 1) {
                             clearTimeout(node.reconnectAttempt);
                             node.reconnectAttempt = null;
                             node.connect?.().catch(() => {});
                         }
                     } catch {}
                 });
-                TrueMusic.poru.init(TrueMusic);
             } catch {}
             return true;
         }
@@ -3000,13 +2970,7 @@ module.exports = {
         }
 
         TrueMusic.poru.on('nodeConnect', (node) => {
-            // Patch REST immediately so all commands (skip/stop/pause/volume)
-            // use undici keep-alive instead of globalThis.fetch (new TCP per call)
-            // Pass session-lost callback so REST 404 triggers immediate reconnect
-            patchPoruNodeRest(node, () => requestPoruInit('Session not found (REST)', 5_000));
-
-            // Enable server-side resuming (الإصلاح الجذري: Poru يرسل payload خاطئ)
-            // + WS ping كل 25s (يمنع Railway من قطع الاتصال الخامل)
+            // Configure Lavalink v4 resume and WS keep-alive without reusing stale sessions.
             lavalinkKeepAlive.onNodeConnect(node, TrueMusic).catch(() => {});
 
             const name = node.options.name || node.options.host;
@@ -3017,28 +2981,34 @@ module.exports = {
                 reconnects: prev.reconnects ?? 0,
             };
             statusStore.setNode(name, data);
+            lavalinkConsole.updateNode(node, 'online', {
+                event: 'node_connect',
+                reconnects: data.reconnects,
+                note: 'Connected to Lavalink',
+            });
 
             let newData = tempData.get("bots");
             if (!newData.includes(TrueMusic)) newData.push(TrueMusic);
             tempData.set("bots", newData);
-
-            let botNumber = newData.indexOf(TrueMusic) + 1;
-            console.log(`\x1b[33m${botNumber}\x1b[0m | ${TrueMusic.user?.username || 'Unknown'} | Connected \x1b[32m${node.options.host}\x1b[0m`);
             scheduleNodeRecovery(node, 'node_connect');
         });
 
         TrueMusic.poru.on('nodeReconnect', (node) => {
-            patchPoruNodeRest(node, () => requestPoruInit('Session not found (REST reconnect)', 5_000));
-            // أعد تفعيل resuming + WS ping بعد كل إعادة اتصال
+            // Reapply resume and ping after every reconnect.
             lavalinkKeepAlive.onNodeConnect(node, TrueMusic).catch(() => {});
             const name = node.options.name || node.options.host;
             const prev = statusStore.getNodes().get(name) || {};
             const data = {
-                status: 'online',
+                status: 'reconnecting',
                 connectedAt: Date.now(),
                 reconnects: (prev.reconnects ?? 0) + 1,
             };
             statusStore.setNode(name, data);
+            lavalinkConsole.updateNode(node, 'reconnecting', {
+                event: 'node_reconnect',
+                reconnects: data.reconnects,
+                note: 'Reconnect attempt started',
+            });
             scheduleNodeRecovery(node, 'node_reconnect');
         });
 
@@ -3049,7 +3019,11 @@ module.exports = {
             const prev = statusStore.getNodes().get(name) || {};
             const data = { status: 'offline', reconnects: prev.reconnects ?? 0 };
             statusStore.setNode(name, data);
-            console.log(`\x1b[33m[Poru] Node disconnected: ${name} — waiting for reconnect\x1b[0m`);
+            lavalinkConsole.updateNode(node, 'offline', {
+                event: 'node_disconnect',
+                reconnects: data.reconnects,
+                note: 'Waiting for reconnect',
+            });
 
             // ── Ghost-player prevention ───────────────────────────────────────────
             // When a node goes offline, Poru players on it keep isPlaying=true
@@ -3075,7 +3049,12 @@ module.exports = {
                 markPlayerNeedsVoiceRefresh(player, 'node_disconnect');
             });
             if (ghostCount > 0) {
-                console.log(`\x1b[33m[Poru] Froze ${ghostCount} ghost player(s) on ${name} — will revive on reconnect\x1b[0m`);
+                lavalinkConsole.updateNode(node, 'offline', {
+                    event: 'ghost_players_frozen',
+                    reconnects: data.reconnects,
+                    note: `Frozen ghost players: ${ghostCount}`,
+                    players: TrueMusic.poru.players.size,
+                });
             }
             // ─────────────────────────────────────────────────────────────────────
         });
@@ -3087,7 +3066,11 @@ module.exports = {
             statusStore.setNode(name, data);
             const message = err?.message || String(err || 'unknown');
             const transient = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket/i.test(message);
-            console.log(`${transient ? '\x1b[33m' : '\x1b[31m'}[Poru] Node ${transient ? 'transient' : 'error'} (${name}): ${message}\x1b[0m`);
+            lavalinkConsole.updateNode(node, transient ? 'transient_error' : 'error', {
+                event: 'node_error',
+                reconnects: data.reconnects,
+                note: message,
+            });
         });
 
 
@@ -3210,9 +3193,19 @@ module.exports = {
                 .catch(err => console.warn(`[EmojiSync] ${err?.message || err}`));
             warnUnavailableMusicEmojis(TrueMusic);
             warmTintCache(TINTED_ICON_FILES, [getEmbedColor(TrueMusic)]);
-            // حقن sessions محفوظة → يرسل Poru sessionId القديم عند الاتصال لمحاولة الـ resume
+            // Patch Lavalink v4 resume/keep-alive before the first node connection.
+            // No session IDs are persisted across process restarts.
             lavalinkKeepAlive.prepareNodes(TrueMusic.poru);
-            try { TrueMusic.poru.init(TrueMusic); } catch (e) { console.error(`[Poru] فشل الاتصال بـ Lavalink: ${e.message}`); }
+            try {
+                TrueMusic.poru.init(TrueMusic);
+            } catch (e) {
+                lavalinkConsole.updateBot(TrueMusic, {
+                    token,
+                    state: 'init_failed',
+                    event: 'poru_init_failed',
+                    note: e?.message || e,
+                });
+            }
             collection.set(TrueMusic.user.id, TrueMusic);
 
             // ── Startup Guarantee (Layer 1) ────────────────────────────────────────
@@ -3225,12 +3218,23 @@ module.exports = {
                 for (let startupAttempt = 1; startupAttempt <= 3; startupAttempt++) {
                     const ready = await waitForPoruReady(8_000);
                     if (ready) {
-                        if (startupAttempt > 1)
-                            console.log(`[PoruGuardian] ${TrueMusic.user?.username || 'bot'}: Lavalink connected on startup attempt ${startupAttempt}`);
+                        if (startupAttempt > 1) {
+                            lavalinkConsole.updateBot(TrueMusic, {
+                                token,
+                                state: 'online',
+                                event: 'startup_connected',
+                                note: `Connected on startup attempt ${startupAttempt}`,
+                            });
+                        }
                         break;
                     }
                     if (startupAttempt < 3) {
-                        console.warn(`[PoruGuardian] ${TrueMusic.user?.username || 'bot'}: Lavalink not ready (attempt ${startupAttempt}/3) — retrying`);
+                        lavalinkConsole.updateBot(TrueMusic, {
+                            token,
+                            state: 'startup_retry',
+                            event: 'lavalink_not_ready',
+                            note: `Startup attempt ${startupAttempt}/3`,
+                        });
                         // Reset attempt counters so Poru doesn't think it already tried
                         TrueMusic.poru?.nodes?.forEach(node => {
                             try {
@@ -3240,9 +3244,14 @@ module.exports = {
                             } catch {}
                         });
                         lastPoruInitAt = 0; // bypass cooldown for startup retries
-                        try { TrueMusic.poru.init(TrueMusic); } catch {}
+                        restorePoruNodes(TrueMusic.poru, TrueMusic, 'startup retry');
                     } else {
-                        console.warn(`[PoruGuardian] ${TrueMusic.user?.username || 'bot'}: Lavalink startup failed after 3 attempts — watchdog will keep retrying`);
+                        lavalinkConsole.updateBot(TrueMusic, {
+                            token,
+                            state: 'startup_failed',
+                            event: 'startup_failed',
+                            note: 'Watchdog will keep retrying',
+                        });
                     }
                 }
             })().catch(() => {});
@@ -3266,6 +3275,12 @@ module.exports = {
 
                     const allOffline = nodes.every(n => !n.isConnected);
                     if (allOffline) {
+                        lavalinkConsole.updateBot(TrueMusic, {
+                            token,
+                            state: 'reinit',
+                            event: 'rest_monitor_offline',
+                            note: 'REST monitor found all nodes offline',
+                        });
                         requestPoruInit('REST monitor found all nodes offline', 30_000);
                         return;
                     }
@@ -3273,7 +3288,10 @@ module.exports = {
                     for (const node of nodes) {
                         const name = node.options?.name || node.options?.host;
                         if (!node.isConnected) {
-                            console.warn(`[PoruHealth] Node ${name} disconnected — attempting reconnect`);
+                            lavalinkConsole.updateNode(node, 'reconnecting', {
+                                event: 'rest_monitor_reconnect',
+                                note: 'Node disconnected; reconnect requested',
+                            });
                             try { node.connect?.(); } catch {}
                             continue;
                         }
@@ -3290,7 +3308,10 @@ module.exports = {
                         } catch (e) {
                             const failures = (nodeRestFailures.get(name) || 0) + 1;
                             nodeRestFailures.set(name, failures);
-                            console.warn(`[PoruHealth] Node ${name} REST unresponsive: ${e.message} (${failures}/3) — keeping node connected`);
+                            lavalinkConsole.updateNode(node, 'rest_unresponsive', {
+                                event: 'rest_probe_failed',
+                                note: `${e.message} (${failures}/3), keeping WS connected`,
+                            });
                             if (failures >= 3 && !TrueMusic.poru.players.size) {
                                 nodeRestFailures.set(name, 0);
                                 requestPoruInit(`REST monitor repeated failures for ${name}`, 60_000);
@@ -3309,6 +3330,12 @@ module.exports = {
                 let tokenObj = dataaa.find((tokenBot) => tokenBot.token === token);
 
                 if (!tokenObj) {
+                    lavalinkConsole.updateBot(TrueMusic, {
+                        token,
+                        state: 'stopped',
+                        event: 'token_removed',
+                        note: 'Subscription token removed',
+                    });
                     clearInterval(playbackWatchdog);
                     lavalinkKeepAlive.destroyKeepAlive(TrueMusic.poru); // Fix #8: تنظيف intervals قبل destroy
                     await TrueMusic.destroy().catch(() => 0);
@@ -3317,6 +3344,12 @@ module.exports = {
                 }
 
                 if (tokenObj.awaitingReplacement || tokenObj.expireDate <= Date.now()) {
+                    lavalinkConsole.updateBot(TrueMusic, {
+                        token,
+                        state: 'stopped',
+                        event: tokenObj.awaitingReplacement ? 'awaiting_replacement' : 'expired',
+                        note: tokenObj.awaitingReplacement ? 'Awaiting replacement token' : 'Subscription expired',
+                    });
                     clearInterval(playbackWatchdog);
                     lavalinkKeepAlive.destroyKeepAlive(TrueMusic.poru); // Fix #8: تنظيف intervals قبل destroy
                     await TrueMusic.destroy().catch(() => 0);
@@ -3362,14 +3395,16 @@ module.exports = {
 
                             // ── Not truly connected ────────────────────────────────────
                             const name = node.options?.name || node.options?.host || 'node';
-                            const botName = TrueMusic.user?.username || token.slice(-6);
 
                             // Layer 3: reset attempt counter BEFORE it hits the limit (50)
                             if ((node.attempt ?? 0) >= 30) {
                                 node.attempt = 0;
                                 clearTimeout(node.reconnectAttempt);
                                 node.reconnectAttempt = null;
-                                console.log(`[PoruGuardian] ${botName}: reset attempt counter for ${name} (was ≥30)`);
+                                lavalinkConsole.updateNode(node, 'reconnecting', {
+                                    event: 'attempt_counter_reset',
+                                    note: 'Reset reconnect attempt counter',
+                                });
                             }
 
                             // Layer 2: WS is CLOSED/never opened → force reconnect now
@@ -3379,7 +3414,10 @@ module.exports = {
                                     clearTimeout(node.reconnectAttempt);
                                     node.reconnectAttempt = null;
                                     node.connect?.().catch(() => {});
-                                    console.log(`[PoruGuardian] ${botName}: forced reconnect → ${name} (WS=${wsState ?? 'none'})`);
+                                    lavalinkConsole.updateNode(node, 'reconnecting', {
+                                        event: 'forced_reconnect',
+                                        note: `WS=${wsState ?? 'none'}`,
+                                    });
                                 } catch {}
                             }
                             // wsState 0 (CONNECTING) or 2 (CLOSING) → in progress, wait
@@ -3535,7 +3573,12 @@ module.exports = {
                         const shouldReconnect = !isDiscordConnected ||
                             (musicElapsed > MUSIC_ZOMBIE_THRESHOLD_MS && wsPing > 30_000);
                         if (shouldReconnect) {
-                            console.log(`[KeepAlive-music] ${TrueMusic.user?.username || token.slice(-6)}: zombie detected (ping=${wsPing}ms, silence=${Math.floor(musicElapsed/1000)}s) — reconnecting shards`);
+                            lavalinkConsole.updateBot(TrueMusic, {
+                                token,
+                                state: 'discord_reconnect',
+                                event: 'zombie_shard_detected',
+                                note: `ping=${wsPing}ms silence=${Math.floor(musicElapsed/1000)}s`,
+                            });
                             lastMusicEventAt = Date.now();
                             try {
                                 if (TrueMusic.ws?.shards?.size > 0) {
@@ -3550,7 +3593,12 @@ module.exports = {
                         // Never reconnect just because no raw events arrived —
                         // quiet servers generate no events and that is normal.
                         if (!isDiscordConnected && TrueMusic.readyAt) {
-                            console.log(`[KeepAlive-music] ${TrueMusic.user?.username || token.slice(-6)}: idle bot — Discord disconnected (ping=${wsPing}) — reconnecting`);
+                            lavalinkConsole.updateBot(TrueMusic, {
+                                token,
+                                state: 'discord_reconnect',
+                                event: 'idle_discord_disconnected',
+                                note: `ping=${wsPing}`,
+                            });
                             lastMusicEventAt = Date.now();
                             try {
                                 if (TrueMusic.ws?.shards?.size > 0) {
@@ -5942,3 +5990,4 @@ module.exports = {
 };
 module.exports.runningBots = runningBots;
 module.exports.botLastActivity = botLastActivity;
+module.exports.restorePoruNodes = restorePoruNodes;

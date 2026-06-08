@@ -21,6 +21,12 @@ const { owners } = require('../../config');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
 const { getEmbedColor } = require('../../utils/embedColor');
+const {
+  buildOwnershipTransferredDm,
+  buildServerUpdatedDm,
+  buildSubscriptionBotsAddedDm,
+  buildSubscriptionTimeUpdatedDm,
+} = require('../../utils/subscriptionDm');
 
 const AUTO_SETTINGS_FILE = path.join(process.cwd(), 'settings', 'automatic.json');
 const REQUESTS_FILE = path.join(process.cwd(), 'settings', 'invoices.tmp.json');
@@ -196,20 +202,19 @@ function autoImagePayload(embed) {
   return { embeds: [embed], files: [AUTO_IMAGE_PATH] };
 }
 
-// Public panel: image + buttons only — no embed text, no title, no description
 function publicPanelPayload(client) {
   const settings = automaticSettings();
   const components = publicPanelRows();
+  const embed = publicPanelEmbed(client);
   if (settings.panelImageUrl) {
-    return {
-      embeds: [new EmbedBuilder().setImage(settings.panelImageUrl).setColor(getEmbedColor(client))],
-      components,
-    };
+    embed.setImage(settings.panelImageUrl);
+    return { embeds: [embed], components };
   }
   if (fs.existsSync(AUTO_IMAGE_PATH)) {
-    return { files: [AUTO_IMAGE_PATH], components };
+    embed.setImage('attachment://Auto.png');
+    return { embeds: [embed], files: [AUTO_IMAGE_PATH], components };
   }
-  return { embeds: [publicPanelEmbed(client)], components };
+  return { embeds: [embed], components };
 }
 
 function buildOwnerEmbed(client, requester) {
@@ -225,22 +230,22 @@ function buildOwnerEmbed(client, requester) {
 
   return new EmbedBuilder()
     .setColor(getEmbedColor(client))
-    .setTitle('Automatic System')
+    .setTitle('Automatic System | نظام الأوتوماتك')
     .setThumbnail(requester.displayAvatarURL({ dynamic: true, size: 256 }))
     .setDescription([
-      `**Stock :** *\`${stock}\` بوت جاهز*`,
+      `**Stock | الستوك :** *\`${stock}\`*`,
       '',
-      `**Active Bots :** *\`${activeBots}\` بوت يعمل حاليا*`,
+      `**Active Bots | البوتات النشطة :** *\`${activeBots}\`*`,
       '',
-      `**Subscriptions :** *\`${activeSubs}\` اشتراك محفوظ*`,
+      `**Subscriptions | الاشتراكات :** *\`${activeSubs}\`*`,
       '',
-      `**Paused :** *\`${pausedSubs}\` اشتراك متوقف مؤقتا*`,
+      `**Paused | المتوقفة :** *\`${pausedSubs}\`*`,
       '',
-      `**Bot Price :** *${formatMoney(settings.botPrice, settings.currency)} لكل بوت إضافي*`,
+      `**Bot Price | سعر البوت :** *${formatMoney(settings.botPrice, settings.currency)}*`,
       '',
-      `**Request Target :** *${target}*`,
+      `**Request Target | وجهة الطلبات :** *${target}*`,
       '',
-      `**Customer Panel :** *${link ? `[فتح اللوحة](${link})` : 'لم يتم إرسالها بعد'}*`,
+      `**Customer Panel | لوحة العملاء :** *${link ? `[Open Panel | فتح اللوحة](${link})` : 'Not sent yet | لم يتم إرسالها بعد'}*`,
     ].join('\n'))
     .setFooter({ text: `${client.user?.username || 'Music'} | Automatic`, iconURL: client.user?.displayAvatarURL({ dynamic: true }) })
     .setTimestamp();
@@ -251,30 +256,25 @@ function ownerRows() {
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('auto_admin_target')
-        .setLabel('Request Target')
-        .setEmoji('📨')
+        .setLabel('Requests | الطلبات')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId('auto_admin_pricing')
-        .setLabel('Pricing')
-        .setEmoji('💳')
+        .setLabel('Pricing | السعر')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId('auto_admin_send')
-        .setLabel('Send Panel')
-        .setEmoji('🖼️')
+        .setLabel('Send Panel | إرسال')
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
         .setCustomId('auto_admin_image')
-        .setLabel('Panel Image')
-        .setEmoji('🎨')
+        .setLabel('Image | الصورة')
         .setStyle(ButtonStyle.Secondary),
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('auto_admin_profile')
-        .setLabel('Bot Profile')
-        .setEmoji('🤖')
+        .setLabel('Bot Profile | مظهر البوت')
         .setStyle(ButtonStyle.Secondary),
     ),
   ];
@@ -282,28 +282,37 @@ function ownerRows() {
 
 function publicPanelEmbed(client) {
   const settings = automaticSettings();
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setColor(getEmbedColor(client))
-    .setTitle('Music Automatic')
+    .setTitle('Automatic Purchase | الشراء التلقائي')
     .setDescription([
-      '**My Subscription :** *عرض اشتراكاتك الحالية وإدارة كل اشتراك بشكل منفصل*',
+      '**My Subscription | اشتراكي**',
+      '*View and manage your active subscriptions.*',
+      '*عرض وإدارة اشتراكاتك الحالية.*',
       '',
-      '**Control :** *نقل الملكية، نقل البوتات لسيرفر آخر، وروابط البوتات*',
+      '**Management | الإدارة**',
+      '*Open My Sub, then use Manage for ownership, server, and bot links.*',
+      '*افتح اشتراكي ثم استخدم إدارة لنقل الملكية أو السيرفر أو روابط البوتات.*',
       '',
-      '**Renewal :** *اطلب التجديد ثم ارسل صورة الفاتورة في الخاص خلال 12 ساعة*',
+      '**Renewal | التجديد**',
+      '*Request renewal, then send the invoice image in DM within 12 hours.*',
+      '*اطلب التجديد ثم ارسل صورة الفاتورة في الخاص خلال 12 ساعة.*',
       '',
-      `**Bot Price :** *${formatMoney(settings.botPrice, settings.currency)} لكل بوت إضافي*`,
+      `**Bot Price | سعر البوت :** *${formatMoney(settings.botPrice, settings.currency)}*`,
     ].join('\n'))
     .setFooter({ text: `${client.user?.username || 'Music'} | Automatic`, iconURL: client.user?.displayAvatarURL({ dynamic: true }) });
+  const thumb = client.user?.displayAvatarURL({ dynamic: true, size: 256 });
+  if (thumb) embed.setThumbnail(thumb);
+  return embed;
 }
 
 function publicPanelRows() {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('auto_user_my').setLabel('My Subscription').setEmoji('📋').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('auto_user_renew').setLabel('Renew').setEmoji('🧾').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId('auto_user_control').setLabel('Control').setEmoji('🛠️').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('auto_user_pause').setLabel('Pause / Resume').setEmoji('⏸️').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('auto_user_my').setLabel('My Sub | اشتراكي').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('auto_user_renew').setLabel('Renew | تجديد').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId('auto_user_links').setLabel('Links | روابط').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('auto_user_pause').setLabel('Pause/Resume | إيقاف/تشغيل').setStyle(ButtonStyle.Secondary),
     ),
   ];
 }
@@ -328,24 +337,24 @@ function subscriptionEmbed(client, user, entry) {
 
   return new EmbedBuilder()
     .setColor(paused ? 0xf1c40f : getEmbedColor(client))
-    .setTitle('Subscription Info')
+    .setTitle('Subscription Info | معلومات الاشتراك')
     .setThumbnail(user.displayAvatarURL({ dynamic: true, size: 256 }))
     .setDescription([
-      `**Subscription :** *\`${entry.code}\`*`,
+      `**Subscription ID | رقم الاشتراك :** *\`${entry.code}\`*`,
       '',
-      `**Bot Count :** *\`${entry.botsCount}\` بوت داخل الاشتراك*`,
+      `**Bot Count | عدد البوتات :** *\`${entry.botsCount}\`*`,
       '',
-      `**Active Bots :** *\`${tokens.length}\` بوت مفعل حاليا*`,
+      `**Active Bots | البوتات النشطة :** *\`${tokens.length}\`*`,
       '',
-      `**Bot Price :** *${formatMoney(automaticSettings().botPrice, automaticSettings().currency)} لكل بوت إضافي*`,
+      `**Bot Price | سعر البوت :** *${formatMoney(automaticSettings().botPrice, automaticSettings().currency)}*`,
       '',
-      `**Server :** *\`${entry.server || tokens[0]?.Server || 'غير محدد'}\`*`,
+      `**Server | السيرفر :** *\`${entry.server || tokens[0]?.Server || 'غير محدد'}\`*`,
       '',
-      `**Status :** *${paused ? 'متوقف مؤقتا' : 'نشط'}*`,
+      `**Status | الحالة :** *${paused ? 'Paused | متوقف مؤقتا' : 'Active | نشط'}*`,
       '',
-      `**Remaining :** *\`${formatDuration(remaining)}\`*`,
+      `**Remaining | المتبقي :** *\`${formatDuration(remaining)}\`*`,
       '',
-      `**Expires :** *<t:${Math.floor(entry.expirationTime / 1000)}:R>*`,
+      `**Expires | ينتهي :** *<t:${Math.floor(entry.expirationTime / 1000)}:R>*`,
     ].join('\n'))
     .setFooter({ text: `${client.user?.username || 'Music'} | Subscription` });
 }
@@ -354,10 +363,10 @@ function subscriptionRows(entry) {
   const paused = !!entry.pausedAt;
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`auto_sub_add_${entry.code}`).setLabel('Add Bots').setEmoji('➕').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`auto_sub_renew_${entry.code}`).setLabel('Renew').setEmoji('🧾').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId(`auto_sub_pause_${entry.code}`).setLabel(paused ? 'Resume' : 'Pause').setEmoji(paused ? '▶️' : '⏸️').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`auto_sub_control_${entry.code}`).setLabel('Control').setEmoji('🛠️').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`auto_sub_add_${entry.code}`).setLabel('Add Bots | إضافة').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`auto_sub_renew_${entry.code}`).setLabel('Renew | تجديد').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`auto_sub_pause_${entry.code}`).setLabel(paused ? 'Resume | تشغيل' : 'Pause | إيقاف').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`auto_sub_control_${entry.code}`).setLabel('Manage | إدارة').setStyle(ButtonStyle.Secondary),
     ),
   ];
 }
@@ -366,22 +375,25 @@ function controlEmbed(client, user, entry) {
   const tokens = subscriptionTokens(entry.code);
   return new EmbedBuilder()
     .setColor(getEmbedColor(client))
-    .setTitle('Subscription Control')
+    .setTitle('Manage Subscription | إدارة الاشتراك')
     .setThumbnail(user.displayAvatarURL({ dynamic: true, size: 256 }))
     .setDescription([
-      `**Subscription :** *\`${entry.code}\`*`,
+      `**Subscription ID | رقم الاشتراك :** *\`${entry.code}\`*`,
       '',
-      `**Owner :** *<@${entry.user}>*`,
+      `**Owner | المالك :** *<@${entry.user}>*`,
       '',
-      `**Bot Count :** *\`${entry.botsCount}\` بوت داخل الاشتراك*`,
+      `**Bot Count | عدد البوتات :** *\`${entry.botsCount}\`*`,
       '',
-      `**Server :** *\`${entry.server || tokens[0]?.Server || 'غير محدد'}\`*`,
+      `**Server | السيرفر :** *\`${entry.server || tokens[0]?.Server || 'غير محدد'}\`*`,
       '',
-      '**Transfer Ownership :** *نقل ملكية الاشتراك والبوتات إلى مستخدم آخر*',
+      '**Transfer Ownership | نقل الملكية**',
+      '*Move this subscription and its bots to another user.*',
       '',
-      '**Move Server :** *تحديث سيرفر الاشتراك وإرسال روابط البوتات للخاص*',
+      '**Move Server | تغيير السيرفر**',
+      '*Move the subscription to another server and send bot links in DM.*',
       '',
-      '**Bot Links :** *إرسال روابط البوتات كلها أو البوتات خارج السيرفر فقط*',
+      '**Bot Links | روابط البوتات**',
+      '*Send all bot links or only bots outside the server.*',
     ].join('\n'))
     .setFooter({ text: `${client.user?.username || 'Music'} | Control` });
 }
@@ -389,11 +401,11 @@ function controlEmbed(client, user, entry) {
 function controlRows(entry) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`auto_control_owner_${entry.code}`).setLabel('Transfer Ownership').setEmoji('👤').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId(`auto_control_server_${entry.code}`).setLabel('Move Server').setEmoji('🖥️').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId(`auto_control_links_all_${entry.code}`).setLabel('All Links').setEmoji('🔗').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`auto_control_links_off_${entry.code}`).setLabel('Outside Server').setEmoji('🚪').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`auto_control_back_${entry.code}`).setLabel('Back').setEmoji('↩️').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`auto_control_owner_${entry.code}`).setLabel('Owner | المالك').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`auto_control_server_${entry.code}`).setLabel('Move Server | سيرفر').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`auto_control_links_all_${entry.code}`).setLabel('All Links | الكل').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`auto_control_links_off_${entry.code}`).setLabel('Outside | خارج').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`auto_control_back_${entry.code}`).setLabel('Back | رجوع').setStyle(ButtonStyle.Secondary),
     ),
   ];
 }
@@ -468,9 +480,9 @@ function buildAddBotsRequestEmbed(client, req) {
 function addBotsRequestRows(reqId, disabled = false) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`auto_req_tokens_${reqId}`).setLabel('Add Tokens').setEmoji('📦').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
-      new ButtonBuilder().setCustomId(`auto_req_add_${reqId}`).setLabel('Add Bots').setEmoji('✅').setStyle(ButtonStyle.Success).setDisabled(disabled),
-      new ButtonBuilder().setCustomId(`auto_req_reject_${reqId}`).setLabel('Reject').setEmoji('✖️').setStyle(ButtonStyle.Danger).setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`auto_req_tokens_${reqId}`).setLabel('Add Tokens | توكنات').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`auto_req_add_${reqId}`).setLabel('Approve | قبول').setStyle(ButtonStyle.Success).setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`auto_req_reject_${reqId}`).setLabel('Reject | رفض').setStyle(ButtonStyle.Danger).setDisabled(disabled),
     ),
   ];
 }
@@ -495,8 +507,8 @@ function buildRenewRequestEmbed(client, req) {
 function renewRequestRows(reqId, disabled = false) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`auto_renew_accept_${reqId}`).setLabel('Accept Renewal').setEmoji('✅').setStyle(ButtonStyle.Success).setDisabled(disabled),
-      new ButtonBuilder().setCustomId(`auto_renew_reject_${reqId}`).setLabel('Reject').setEmoji('✖️').setStyle(ButtonStyle.Danger).setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`auto_renew_accept_${reqId}`).setLabel('Accept Renewal | قبول').setStyle(ButtonStyle.Success).setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`auto_renew_reject_${reqId}`).setLabel('Reject | رفض').setStyle(ButtonStyle.Danger).setDisabled(disabled),
     ),
   ];
 }
@@ -673,10 +685,11 @@ async function approveAddBots(interaction, reqId) {
   const user = await interaction.client.users.fetch(req.userId).catch(() => null);
   if (user) {
     user.send({
-      embeds: [new EmbedBuilder()
-        .setColor(0x2ecc71)
-        .setTitle('Bots Added')
-        .setDescription(`**Subscription :** *\`${req.code}\`*\n\n**Added Bots :** *\`${req.count}\` بوت تمت إضافته لاشتراكك*`)],
+      embeds: [buildSubscriptionBotsAddedDm(interaction.client, {
+        code: req.code,
+        addedBots: req.count,
+        totalBots: entry.botsCount,
+      })],
     }).catch(() => {});
   }
 }
@@ -803,10 +816,12 @@ async function acceptRenewal(interaction, reqId) {
   const user = await interaction.client.users.fetch(req.userId).catch(() => null);
   if (user) {
     user.send({
-      embeds: [new EmbedBuilder()
-        .setColor(0x2ecc71)
-        .setTitle('Renewal Approved')
-        .setDescription(`**Subscription :** *\`${req.code}\`*\n\n**Added Duration :** *\`${raw}\` تمت إضافتها للاشتراك*\n\n**Expires :** *<t:${Math.floor(entry.expirationTime / 1000)}:R>*`)],
+      embeds: [buildSubscriptionTimeUpdatedDm(interaction.client, {
+        code: req.code,
+        addedTime: raw,
+        previousExpiry: entry.expirationTime - durationMs,
+        newExpiry: entry.expirationTime,
+      })],
     }).catch(() => {});
   }
 }
@@ -959,16 +974,12 @@ async function transferSubscriptionOwnership(interaction, code, rawUser) {
   }).catch(() => {});
 
   await newUser.send({
-    embeds: [new EmbedBuilder()
-      .setColor(getEmbedColor(interaction.client))
-      .setTitle('Ownership Transferred')
-      .setDescription([
-        `**Subscription :** *\`${code}\`*`,
-        '',
-        `**Bot Count :** *\`${entry.botsCount || subTokens.length}\` بوت تم نقلها لحسابك*`,
-        '',
-        '**Control :** *افتح لوحة الأوتوماتك لإدارة الاشتراك.*',
-      ].join('\n'))],
+    embeds: [buildOwnershipTransferredDm(interaction.client, {
+      oldOwnerId: interaction.user.id,
+      newOwnerId,
+      codes: [code],
+      botCount: entry.botsCount || subTokens.length,
+    })],
   }).catch(() => {});
 }
 
@@ -1000,6 +1011,15 @@ async function moveSubscriptionServer(interaction, code, rawServerId) {
   const infos = await collectSubscriptionLinks(code, interaction.user.id, 'all');
   const sentCount = await sendSubscriptionLinksToUser(interaction.client, interaction.user, code, infos, 'all');
   await disconnectSubscriptionBots(subTokens);
+
+  await interaction.user.send({
+    embeds: [buildServerUpdatedDm(interaction.client, {
+      serverId: newServerId,
+      codes: [code],
+      movedBots: subTokens.length,
+      linksSent: sentCount > 0,
+    })],
+  }).catch(() => {});
 
   return interaction.editReply([
     `**Move Server :** *تم نقل اشتراك \`${code}\` إلى السيرفر الجديد.*`,
@@ -1207,32 +1227,34 @@ async function handleAdminProfile(interaction) {
 
   const profileEmbed = new EmbedBuilder()
     .setColor(getEmbedColor(interaction.client))
-    .setTitle('🤖  Sub-Bot Profile')
+    .setTitle('Sub-Bot Profile | مظهر البوتات')
+    .setThumbnail(interaction.client.user.displayAvatarURL({ dynamic: true, size: 256 }))
     .setDescription([
-      '> إعدادات البوتات الفرعية — تُطبَّق تلقائياً عند إضافة أي توكن جديد.',
+      'Sub-bot appearance settings. These settings apply to new stock tokens and can be applied to free stock bots.',
+      'إعدادات مظهر البوتات الفرعية. تطبق على التوكنات الجديدة ويمكن تطبيقها على بوتات الستوك الحرة.',
       '',
-      `**🏷️ Prefix :** *\`${profile.prefix}\` — البادئة قبل الأرقام العشوائية في الاسم*`,
+      `**Prefix | بادئة الاسم :** *\`${profile.prefix}\`*`,
       '',
-      `**🖼️ Avatar :** *${profile.avatar ? `[رابط محفوظ](${profile.avatar})` : '`غير محدد`'}*`,
+      `**Avatar | الصورة :** *${profile.avatar ? `[Saved Link | رابط محفوظ](${profile.avatar})` : '`Not set | غير محدد`'}*`,
       '',
-      `**🎨 Banner :** *${profile.banner ? `[رابط محفوظ](${profile.banner})` : '`غير محدد`'}*`,
+      `**Banner | البنر :** *${profile.banner ? `[Saved Link | رابط محفوظ](${profile.banner})` : '`Not set | غير محدد`'}*`,
       '',
-      `**🎙️ Streaming :** *\`${profile.status || 'غير محدد'}\`*`,
+      `**Streaming | حالة الستريمنق :** *\`${profile.status || 'Not set | غير محدد'}\`*`,
       '',
-      `**📦 الستوك الحر :** *\`${freeStock}\` بوت — Apply يطبق عليهم فقط*`,
-      `**🔗 في اشتراكات :** *\`${inSubs}\` بوت — لا تتأثر بـ Apply*`,
+      `**Free Stock | الستوك الحر :** *\`${freeStock}\`*`,
+      `**In Subscriptions | داخل اشتراكات :** *\`${inSubs}\`*`,
     ].join('\n'))
     .setFooter({ text: `${interaction.client.user.username} | Sub-Bot Profile`, iconURL: interaction.client.user.displayAvatarURL({ dynamic: true }) });
 
   const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('auto_profile_botsname').setLabel('Prefix').setEmoji('🏷️').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('auto_profile_avatar').setLabel('Avatar').setEmoji('🖼️').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('auto_profile_banner').setLabel('Banner').setEmoji('🎨').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('auto_profile_streaming').setLabel('Streaming').setEmoji('🎙️').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('auto_profile_applyall').setLabel('Apply to All').setEmoji('🔄').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('auto_profile_botsname').setLabel('Prefix | الاسم').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('auto_profile_avatar').setLabel('Avatar | الصورة').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('auto_profile_banner').setLabel('Banner | البنر').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('auto_profile_streaming').setLabel('Streaming | الحالة').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('auto_profile_applyall').setLabel('Apply | تطبيق').setStyle(ButtonStyle.Success),
   );
   const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('auto_profile_back').setLabel('Back').setEmoji('◀️').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('auto_profile_back').setLabel('Back | رجوع').setStyle(ButtonStyle.Primary),
   );
 
   return interaction.update({ embeds: [profileEmbed], components: [row1, row2] });
@@ -1345,7 +1367,7 @@ async function handleProfileAction(interaction, action) {
       }
       await new Promise(r => setTimeout(r, 5000));
     }
-    return interaction.followUp({ content: `**Apply Done :** *تم ✅ \`${done}\` | فشل ❌ \`${failed}\` — البوتات اللي في اشتراكات لم تُمس.*`, ephemeral: true }).catch(() => {});
+    return interaction.followUp({ content: `**Apply Done | تم التطبيق**\nSuccess: \`${done}\`\nFailed: \`${failed}\`\nالبوتات الموجودة داخل اشتراكات لم يتم تعديلها.`, ephemeral: true }).catch(() => {});
   }
 }
 
@@ -1379,7 +1401,6 @@ async function handleInteraction(interaction) {
     if (id === 'auto_profile_applyall') return handleProfileAction(interaction, 'applyall');
     if (id === 'auto_user_my') return showSubscriptionPicker(interaction, 'my');
     if (id === 'auto_user_renew') return showSubscriptionPicker(interaction, 'renew');
-    if (id === 'auto_user_control') return showSubscriptionPicker(interaction, 'control');
     if (id === 'auto_user_links') return showSubscriptionPicker(interaction, 'links_all');
     if (id === 'auto_user_pause') return showSubscriptionPicker(interaction, 'pause');
 
@@ -1486,7 +1507,6 @@ async function handleInteraction(interaction) {
     if (id.startsWith('auto_select_my_')) return showSubscription(interaction, interaction.values[0]);
     if (id.startsWith('auto_select_renew_')) return startRenewal(interaction, interaction.values[0]);
     if (id.startsWith('auto_select_pause_')) return togglePause(interaction, interaction.values[0]);
-    if (id.startsWith('auto_select_control_')) return showControlPanel(interaction, interaction.values[0]);
     if (id.startsWith('auto_select_links_all_')) return sendLinks(interaction, interaction.values[0], 'all');
   }
 
@@ -1509,7 +1529,7 @@ function installAutomaticHandlers(client) {
 
 module.exports = {
   name: 'automatic',
-  aliases: ['ظبط'],
+  aliases: ['auto', 'autopurchase', 'اوتوماتيك', 'تلقائي', 'ظبط'],
   description: 'Automatic purchase panel',
   async execute(client, message) {
     if (!owners.includes(message.author.id)) return;
@@ -1524,7 +1544,7 @@ module.exports = {
       await message.channel.send(payload);
     } catch (error) {
       console.error(error);
-      await message.reply('**Automatic :** *حدث خطأ أثناء تنفيذ الأمر.*');
+      await message.reply('**Automatic**\nAn error occurred while running the command.\nحدث خطأ أثناء تنفيذ الأمر.');
     }
   },
   installAutomaticHandlers,

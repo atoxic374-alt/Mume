@@ -7,6 +7,10 @@ const axios = require("axios");
 const db = require('../../utils/db');
 const Discord = require('discord.js');
 const path = require('path');
+const {
+    buildOwnershipTransferredDm,
+    buildServerUpdatedDm,
+} = require('../../utils/subscriptionDm');
 
 function formatDuration(msValue) {
     const value = Math.max(0, Number(msValue || 0));
@@ -411,18 +415,12 @@ module.exports = {
                     });
                     store.set('tokens', allTokens);
 
-                    const successEmbed = new EmbedBuilder()
-                        .setColor(0x2ecc71)
-                        .setTitle('Ownership Transferred')
-                        .setDescription([
-                            `**Old Owner :** *<@${targetUser.id}>*`,
-                            '',
-                            `**New Owner :** *<@${newUserId}>*`,
-                            '',
-                            `**Subscriptions :** *${selectedCodes.map(code => `\`${code}\``).join(', ')}*`,
-                            '',
-                            `**Bot Count :** *\`${movedBots}\` بوت*`,
-                        ].join('\n'));
+                    const successEmbed = buildOwnershipTransferredDm(client, {
+                        oldOwnerId: targetUser.id,
+                        newOwnerId: newUserId,
+                        codes: selectedCodes,
+                        botCount: movedBots,
+                    });
 
                     await submit.reply({ embeds: [successEmbed], ephemeral: true }).catch(() => {});
                     await newOwner.send({ embeds: [successEmbed] }).catch(() => {});
@@ -484,20 +482,12 @@ module.exports = {
                         await interaction.user.send({ embeds: [embed] }).catch(() => {});
                     }
 
-                    const successEmbed = new EmbedBuilder()
-                        .setColor(0x2ecc71)
-                        .setTitle('Server Updated')
-                        .setDescription([
-                            `**User :** *<@${targetUser.id}>*`,
-                            '',
-                            `**New Server :** *\`${newServerId}\`*`,
-                            '',
-                            `**Subscriptions :** *${selectedCodes.map(code => `\`${code}\``).join(', ')}*`,
-                            '',
-                            `**Moved Bots :** *\`${movedBots}\` بوت*`,
-                            '',
-                            `**Links :** *تم إرسال روابط البوتات في الخاص.*`,
-                        ].join('\n'));
+                    const successEmbed = buildServerUpdatedDm(client, {
+                        serverId: newServerId,
+                        codes: selectedCodes,
+                        movedBots,
+                        linksSent: true,
+                    });
 
                     await submit.reply({ embeds: [successEmbed], ephemeral: true }).catch(() => {});
                     await targetUser.send({ embeds: [successEmbed] }).catch(() => {});

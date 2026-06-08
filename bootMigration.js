@@ -1,5 +1,9 @@
 'use strict';
 
+try {
+  require('dns').setDefaultResultOrder('ipv4first');
+} catch {}
+
 /**
  * Boot Migration — Railway Volume Safety Layer
  * 
@@ -21,11 +25,21 @@ const SETTINGS_DIR    = path.join(ROOT, 'settings');
 const DEFAULTS_DIR    = path.join(ROOT, 'settings_default');
 const LEGACY_DB_FILE  = path.join(ROOT, 'database.json');
 const SETTINGS_DB     = path.join(SETTINGS_DIR, 'database.json');
+const STALE_LL_SESSIONS = path.join(SETTINGS_DIR, 'lavalink-sessions.json');
 
 // ── 1. Ensure settings/ exists ──────────────────────────────────────────────
 if (!fs.existsSync(SETTINGS_DIR)) {
   fs.mkdirSync(SETTINGS_DIR, { recursive: true });
   console.log('[Boot] Created settings/ directory.');
+}
+
+try {
+  if (fs.existsSync(STALE_LL_SESSIONS)) {
+    fs.unlinkSync(STALE_LL_SESSIONS);
+    console.log('[Boot] Removed stale Lavalink session cache.');
+  }
+} catch (err) {
+  console.warn('[Boot] Failed to remove stale Lavalink session cache:', err.message);
 }
 
 // ── 2. Copy missing defaults from settings_default/ → settings/ ─────────────

@@ -4,6 +4,7 @@ const ms = require('ms');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
 const { getEmbedColor } = require('../../utils/embedColor');
+const { buildSubscriptionTimeUpdatedDm } = require('../../utils/subscriptionDm');
 
 function formatDuration(msValue) {
   const d = Math.floor(msValue / 86400000);
@@ -143,5 +144,14 @@ async function executeAddTime(code, durationMs, durationStr, message, client, pr
           .setColor(getEmbedColor(client))]
       });
     }
+
+    client.users.fetch(entry.user)
+      .then(user => user.send({ embeds: [buildSubscriptionTimeUpdatedDm(client, {
+        code,
+        addedTime: durationStr,
+        previousExpiry: oldExpiry,
+        newExpiry: entry.expirationTime,
+      })] }).catch(() => {}))
+      .catch(() => {});
   } catch (e) { console.error(e); }
 }
