@@ -39,36 +39,25 @@ async function checkForNewBots() {
   }
 }
 
-// Lazy unloading: destroy bots idle >30min and NOT in VC and have no configured channel
+// Lazy unloading: only destroy truly ORPHANED bots (running but no longer in tokens list).
+// Bots that have an active subscription entry in tokens are NEVER unloaded here,
+// even if they have no channel yet — destroying/restarting them breaks Lavalink
+// sessions and causes "No nodes available" when the user tries to put them in voice.
 async function unloadIdleBots() {
-  const now = Date.now();
-  const IDLE_MS = 30 * 60 * 1000;
   const tokens = store.get('tokens') || [];
+  const tokenSet = new Set(tokens.map(t => t.token));
 
   for (const [token, botClient] of runningBots) {
-    const lastActive = botLastActivity?.get(token) || 0;
-    if (now - lastActive < IDLE_MS) continue; // recently active
+    // Bot still has a valid subscription entry → keep it alive no matter what
+    if (tokenSet.has(token)) continue;
 
-    // Never destroy a bot that has a configured voice channel in its token entry
-    const tokenObj = tokens.find(t => t.token === token);
-    if (tokenObj?.channel) continue; // has a configured VC → keep alive
-
-    // Never destroy a bot with active Poru players
-    const hasActivePlayers = botClient.poru?.players?.size > 0;
-    if (hasActivePlayers) continue;
-
-    // check if in VC via member cache
-    const inVC = [...(botClient.guilds?.cache?.values() || [])].some(g =>
-      g.members?.me?.voice?.channel
-    );
-    if (inVC) continue; // in VC → keep alive
-
-    // truly idle and not in VC → destroy
+    // Bot is running but not in tokens at all → orphaned, safe to destroy
     try { await botClient.destroy(); } catch (err) {
-      console.warn('[Manager] destroy failed for idle bot:', err?.message || err);
+      console.warn('[Manager] destroy failed for orphaned bot:', err?.message || err);
     }
     runningBots.delete(token);
     botLastActivity?.delete(token);
+    console.log(`[Manager] Unloaded orphaned bot token …${token.slice(-6)}`);
   }
 }
 

@@ -3427,21 +3427,60 @@ module.exports = {
                 // ─────────────────────────────────────────────────────────────────
 
                 // ── Zombie-connection detection for music sub-bots ────────────────
-                // If no raw gateway event has arrived in 4 minutes, the WebSocket
-                // is likely in a zombie state. Force a shard reconnect so the bot
-                // recovers without needing a full restart.
-                const MUSIC_ZOMBIE_THRESHOLD_MS = 4 * 60 * 1000;
-                const musicElapsed = Date.now() - lastMusicEventAt;
-                if (musicElapsed > MUSIC_ZOMBIE_THRESHOLD_MS) {
-                    console.log(`[KeepAlive-music] ${TrueMusic.user?.username || token.slice(-6)}: no events for ${Math.floor(musicElapsed / 1000)}s — reconnecting shards`);
-                    lastMusicEventAt = Date.now(); // reset before reconnect to avoid spam
-                    try {
-                        if (TrueMusic.ws?.shards?.size > 0) {
-                            TrueMusic.ws.shards.forEach(shard => {
-                                try { shard.destroy({ recover: true }); } catch {}
-                            });
+                // Root cause of Lavalink drops for idle bots:
+                // Bots with no voice channel are in quiet servers that generate
+                // almost no raw gateway events. The old 4-minute threshold was
+                // firing constantly → shard reconnects → Lavalink session disruption.
+                //
+                // Fix: use Discord.js's actual WebSocket ping to check if the
+                // connection is truly alive. A ping of -1 means disconnected.
+                // Raw-event timing is only a fallback for genuine zombie shards
+                // (ping stuck but events stopped).
+                //
+                // For bots with no channel (idle/stock): NEVER force-reconnect
+                // based on raw event absence alone — Discord.js handles its own
+                // heartbeat and will reconnect automatically if truly dead.
+                // Only reconnect if Discord.js itself reports the connection lost.
+                {
+                    const tokenObjForZombie = (store.get('tokens') || []).find(t => t.token === token);
+                    const hasChannel = !!(tokenObjForZombie?.channel);
+                    const wsPing = TrueMusic.ws?.ping ?? -1;
+                    const isDiscordConnected = TrueMusic.readyAt && wsPing !== -1;
+
+                    if (hasChannel) {
+                        // Bot is in active voice use: use the combined check
+                        // (Discord.js ping dead OR extended raw event silence)
+                        const MUSIC_ZOMBIE_THRESHOLD_MS = 8 * 60 * 1000; // 8 min (raised from 4)
+                        const musicElapsed = Date.now() - lastMusicEventAt;
+                        const shouldReconnect = !isDiscordConnected ||
+                            (musicElapsed > MUSIC_ZOMBIE_THRESHOLD_MS && wsPing > 30_000);
+                        if (shouldReconnect) {
+                            console.log(`[KeepAlive-music] ${TrueMusic.user?.username || token.slice(-6)}: zombie detected (ping=${wsPing}ms, silence=${Math.floor(musicElapsed/1000)}s) — reconnecting shards`);
+                            lastMusicEventAt = Date.now();
+                            try {
+                                if (TrueMusic.ws?.shards?.size > 0) {
+                                    TrueMusic.ws.shards.forEach(shard => {
+                                        try { shard.destroy({ recover: true }); } catch {}
+                                    });
+                                }
+                            } catch {}
                         }
-                    } catch {}
+                    } else {
+                        // Idle/stock bot: ONLY reconnect if Discord.js reports dead
+                        // Never reconnect just because no raw events arrived —
+                        // quiet servers generate no events and that is normal.
+                        if (!isDiscordConnected && TrueMusic.readyAt) {
+                            console.log(`[KeepAlive-music] ${TrueMusic.user?.username || token.slice(-6)}: idle bot — Discord disconnected (ping=${wsPing}) — reconnecting`);
+                            lastMusicEventAt = Date.now();
+                            try {
+                                if (TrueMusic.ws?.shards?.size > 0) {
+                                    TrueMusic.ws.shards.forEach(shard => {
+                                        try { shard.destroy({ recover: true }); } catch {}
+                                    });
+                                }
+                            } catch {}
+                        }
+                    }
                 }
                 // ─────────────────────────────────────────────────────────────────
 
