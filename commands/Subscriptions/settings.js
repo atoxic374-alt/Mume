@@ -1388,7 +1388,7 @@ module.exports = {
                                 { label: 'Display', value: 'DISPLAY', description: 'تفعيل أو تعطيل الأزرار والإيمبد', emoji: { id: '1512475951844294867' } },
                                 { label: 'Platform', value: 'PLATFORM', description: 'اختيار منصة البحث والتشغيل', emoji: { id: '1512475949331906682' } },
                                 ...(canManageSubscriptionOwners(selectedCode)
-                                    ? [{ label: 'Owners', value: 'OWNERS', description: 'إضافة وإزالة أونرز يتحكمون ببوتات الاشتراك', emoji: { id: '1484364982094266428' } }]
+                                    ? [{ label: 'Owners', value: 'OWNERS', description: 'إضافة وإزالة أونرز يتحكمون ببوتات الاشتراك', emoji: { id: '1485476329171320855' } }]
                                     : []),
                             ])
                     );
@@ -1436,8 +1436,8 @@ module.exports = {
                     embeds.push(embed);
 
                     components.push(new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`stg_${mid}_owner_add`).setLabel('Add Owner').setEmoji({ id: '1484364982094266428' }).setStyle(ButtonStyle.Success),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_owner_remove`).setLabel('Remove Owner').setEmoji({ id: '1484364982094266428' }).setStyle(ButtonStyle.Danger).setDisabled(subOwnerIds.length === 0),
+                        new ButtonBuilder().setCustomId(`stg_${mid}_owner_add`).setLabel('Add Owner').setEmoji({ id: '1485476329171320855' }).setStyle(ButtonStyle.Success),
+                        new ButtonBuilder().setCustomId(`stg_${mid}_owner_remove`).setLabel('Remove Owner').setEmoji({ id: '1485476329171320855' }).setStyle(ButtonStyle.Danger).setDisabled(subOwnerIds.length === 0),
                         new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary),
                     ));
                 }

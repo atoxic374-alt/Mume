@@ -1357,7 +1357,7 @@ function playerVolumeValue(player) {
 function clampPlayerVolume(volume) {
     const value = Number(volume);
     if (!Number.isFinite(value)) return 100;
-    return Math.max(0, Math.min(130, Math.round(value)));
+    return Math.max(0, Math.min(1000, Math.round(value)));
 }
 
 function assertLavalinkRestOk(response, label = 'Lavalink request') {
@@ -3990,9 +3990,10 @@ module.exports = {
                   console.warn(`[TrackEnd] non-natural end for ${trackIdentity(track) || 'unknown'}: ${reason}`);
               }
 
-              if (naturalEnd) {
-                  disableIdlePlaybackModesIfAlone(TrueMusic, player, 'track_end_alone');
-              }
+              // Note: disableIdlePlaybackModesIfAlone is intentionally NOT called
+              // on trackEnd to avoid a race condition where the voice-state cache
+              // hasn't updated yet between tracks — this caused autoplay to randomly
+              // stop itself between songs. The queueEnd event handles the solo check.
 
       // Guard: if the new track already started and its panel is live, skip UI finalization
       // to avoid disabling the new panel by mistake (race condition with trackStart).
@@ -4967,10 +4968,10 @@ module.exports = {
                     }));
                 }
 
-                if (volume < 0 || volume > 130) {
+                if (volume < 0 || volume > 1000) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'Volume',
-                        description: '**Please provide a valid volume level between 0% and 130%**.',
+                        description: '**Please provide a valid volume level between 0% and 1000%**.',
                         thumbnail: 'attachment://Error.png',
                         files: ['./assets/image/icons/Error.png'],
                     }));
@@ -5639,40 +5640,40 @@ module.exports = {
                         const newLoopMode = player.loop === 'NONE' ? 'TRACK' : 'NONE';
                         player.setLoop(newLoopMode);
                         responseMessage = `**Loop is ${newLoopMode === 'TRACK' ? 'ON' : 'OFF'}.**`;
+                        // Fire panel update in background — no need to await for instant response
+                        editPanel(!!ui.liked).catch(() => {});
                     }
 
                     if (interaction.customId === 'pause') {
                         if (player.isPaused) {
                             responseMessage = '**Done resume the music.**';
-                            await Promise.all([
-                                pausePlayerSynced(player, false).catch(err => console.warn('[button resume]', err?.message || err)),
-                                editPanel(!!ui.liked),
-                            ]);
+                            // Update local state immediately, fire both tasks in background
+                            player.isPaused = false;
+                            player.isPlaying = true;
+                            pausePlayerSynced(player, false).catch(err => console.warn('[button resume]', err?.message || err));
+                            editPanel(!!ui.liked).catch(() => {});
                         } else {
                             responseMessage = '**Done pause the music.**';
-                            await Promise.all([
-                                pausePlayerSynced(player, true).catch(err => console.warn('[button pause]', err?.message || err)),
-                                editPanel(!!ui.liked),
-                            ]);
+                            player.isPaused = true;
+                            player.isPlaying = false;
+                            pausePlayerSynced(player, true).catch(err => console.warn('[button pause]', err?.message || err));
+                            editPanel(!!ui.liked).catch(() => {});
                         }
                     }
 
                     if (interaction.customId === 'volume_down') {
                         const newVolume = clampPlayerVolume(playerVolumeValue(player) - 10);
                         responseMessage = `**Volume is now __${newVolume}%__.**`;
-                        await Promise.all([
-                            setPlayerVolumeSynced(player, newVolume).catch(err => console.warn('[button volume down]', err?.message || err)),
-                            editPanel(!!ui.liked),
-                        ]);
+                        // setPlayerVolumeSynced already updates local state + fires lavalink fire-and-forget
+                        setPlayerVolumeSynced(player, newVolume).catch(err => console.warn('[button volume down]', err?.message || err));
+                        editPanel(!!ui.liked).catch(() => {});
                     }
 
                     if (interaction.customId === 'volume_up') {
                         const newVolume = clampPlayerVolume(playerVolumeValue(player) + 10);
                         responseMessage = `**Volume is now __${newVolume}%__.**`;
-                        await Promise.all([
-                            setPlayerVolumeSynced(player, newVolume).catch(err => console.warn('[button volume up]', err?.message || err)),
-                            editPanel(!!ui.liked),
-                        ]);
+                        setPlayerVolumeSynced(player, newVolume).catch(err => console.warn('[button volume up]', err?.message || err));
+                        editPanel(!!ui.liked).catch(() => {});
                     }
 
                             if (interaction.customId === 'skip') {
@@ -5681,11 +5682,9 @@ module.exports = {
                                     responseMessage = '*لا توجد أغنية للتخطي*.';
                                 } else if (player.queue.length === 0 && player.data?.autoPlay) {
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
-                                    // Lavalink + panel in parallel — same instant
-                                    await Promise.all([
-                                        skipPlayerSynced(TrueMusic.poru, player, currentTrack),
-                                        editPanel(!!ui.liked),
-                                    ]);
+                                    // Fire both in background — instant response
+                                    skipPlayerSynced(TrueMusic.poru, player, currentTrack).catch(() => {});
+                                    editPanel(!!ui.liked).catch(() => {});
                                 } else if (player.queue.length === 0) {
                                     const finalOptions = finalUiOptionsFor(player, currentTrack);
                                     markStopped();
@@ -5693,11 +5692,9 @@ module.exports = {
                                     clearStoppedPlaybackCaches(player);
                                     clearProgressInterval(player, 'button skip end');
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
-                                    // Lavalink + panel in parallel — same instant
-                                    await Promise.all([
-                                        stopPlayerAudio(player, { wait: false }),
-                                        editPanel(!!ui.liked),
-                                    ]);
+                                    // Fire both in background — instant response
+                                    stopPlayerAudio(player, { wait: false }).catch(() => {});
+                                    editPanel(!!ui.liked).catch(() => {});
                                     runBackground('button skip end cleanup', async () => {
                                         await finalizePlayerUi(player, finalOptions);
                                         await bumpQueueVersion(player, 'button_skip_end');
@@ -5705,11 +5702,9 @@ module.exports = {
                                     });
                                 } else {
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
-                                    // Lavalink + panel in parallel — same instant
-                                    await Promise.all([
-                                        skipPlayerSynced(TrueMusic.poru, player, currentTrack),
-                                        editPanel(!!ui.liked),
-                                    ]);
+                                    // Fire both in background — instant response
+                                    skipPlayerSynced(TrueMusic.poru, player, currentTrack).catch(() => {});
+                                    editPanel(!!ui.liked).catch(() => {});
                                     runBackground('button skip cleanup', () => bumpQueueVersion(player, 'button_skip'));
                                 }
                     }
@@ -5750,11 +5745,9 @@ module.exports = {
                         clearStoppedPlaybackCaches(player);
                         clearProgressInterval(player, 'button stop');
                         responseMessage = '**Done stopped the song.**';
-                        // Lavalink + panel update in parallel — same instant
-                        await Promise.all([
-                            stopPlayerAudio(player, { wait: false }),
-                            editPanel(!!ui.liked),
-                        ]);
+                        // Fire both in background — instant response
+                        stopPlayerAudio(player, { wait: false }).catch(() => {});
+                        editPanel(!!ui.liked).catch(() => {});
                         runBackground('button stop cleanup', async () => {
                             await finalizePlayerUi(player, finalOptions);
                             await bumpQueueVersion(player, 'button_stop');

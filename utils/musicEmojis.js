@@ -232,9 +232,24 @@ function messageEmoji(data, client = null, fallback = '') {
     if (!emoji) return fallback;
     if (!emoji.id) return emoji.name || fallback;
 
+    // ── Primary: use the cached emoji object (guild or application) ─────────
     const cached = cachedEmoji(data, client);
-    if (!cached) return fallback;
-    return `<${cached.animated ? 'a' : ''}:${cached.name || emoji.name || 'emoji'}:${cached.id}>`;
+    if (cached) {
+        return `<${cached.animated ? 'a' : ''}:${cached.name || emoji.name || 'emoji'}:${cached.id}>`;
+    }
+
+    // ── Fallback: string format works for app-emojis even without local cache ─
+    // Some bots have emojis as application-emojis that are not in the guild
+    // cache yet (slow startup) — the <:name:id> string is resolved server-side
+    // by Discord and renders correctly as long as the bot owns the emoji.
+    const mappedId = _emojiIdMap[emoji.id];
+    const resolvedId = (mappedId && mappedId !== emoji.id) ? mappedId : emoji.id;
+    const resolvedName = emoji.name || 'emoji';
+    if (resolvedId && resolvedName) {
+        return `<${emoji.animated ? 'a' : ''}:${resolvedName}:${resolvedId}>`;
+    }
+
+    return fallback;
 }
 
 function emojiResolvable(data, client = null) {
