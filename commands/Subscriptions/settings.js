@@ -24,6 +24,35 @@ const { getEmbedColor, refreshEmbedColor } = require('../../utils/embedColor');
 const SETTINGS_PROCESS_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PROCESS_CONCURRENCY || 16));
 const SETTINGS_PROFILE_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PROFILE_CONCURRENCY || 4));
 const SETTINGS_DISTRIBUTION_BATCH_SIZE = Math.max(1, Number(process.env.SETTINGS_DISTRIBUTION_BATCH_SIZE || 12));
+
+// ── Wait for a bot's Poru node to connect (up to timeoutMs) ──────────────────
+// Fixes "No nodes are available" for new bots whose Lavalink connection
+// hasn't finished establishing yet when distribution/join is triggered.
+async function waitForBotPoruReady(bot, timeoutMs = 12_000) {
+    if (bot?.poru?.leastUsedNodes?.length) return true;
+    // Try to nudge any exhausted nodes back to life
+    try {
+        bot.poru.nodes?.forEach(node => {
+            if (!node.isConnected) {
+                try {
+                    node.attempt = 0;
+                    clearTimeout(node.reconnectAttempt);
+                    node.reconnectAttempt = null;
+                    node.connect?.().catch(() => {});
+                } catch {}
+            }
+        });
+        if (!bot.poru.nodes?.size) {
+            bot.poru.init(bot).catch?.(() => {});
+        }
+    } catch {}
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (bot?.poru?.leastUsedNodes?.length) return true;
+        await new Promise(r => setTimeout(r, 500));
+    }
+    return !!(bot?.poru?.leastUsedNodes?.length);
+}
 const SETTINGS_PROGRESS_INTERVAL_MS = Math.max(750, Number(process.env.SETTINGS_PROGRESS_INTERVAL_MS || 1500));
 const SETTINGS_MAX_PROGRESS_LINES = Math.max(20, Number(process.env.SETTINGS_MAX_PROGRESS_LINES || 120));
 
@@ -694,6 +723,11 @@ module.exports = {
                                         }
 
                                         const nameResult = await setBotNameAndVerify(bot, targetName);
+
+                                        // ── Wait for this bot's Poru node before touching voice ──
+                                        // New bots may not have finished connecting to Lavalink yet.
+                                        const poruReady = await waitForBotPoruReady(bot, 12_000);
+                                        if (!poruReady) throw new Error('[Poru] No nodes available — Lavalink not connected yet');
 
                                         t.channel = targetChannel.id;
                                         const existing = bot.poru.players.get(guild.id);

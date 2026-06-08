@@ -2966,8 +2966,37 @@ module.exports = {
             if (now - lastPoruInitAt < cooldownMs) return false;
             lastPoruInitAt = now;
             console.warn(`[Poru] ${reason} — re-init`);
-            try { TrueMusic.poru.init(TrueMusic); } catch {}
+            try {
+                // ── Reset Poru node attempt counter before re-init ────────────────
+                // Poru stops reconnecting permanently once node.attempt > reconnectTries.
+                // Resetting attempt=0 allows it to reconnect again from scratch.
+                TrueMusic.poru.nodes?.forEach(node => {
+                    try {
+                        node.attempt = 0;
+                        if (!node.isConnected) {
+                            clearTimeout(node.reconnectAttempt);
+                            node.reconnectAttempt = null;
+                            node.connect?.().catch(() => {});
+                        }
+                    } catch {}
+                });
+                TrueMusic.poru.init(TrueMusic);
+            } catch {}
             return true;
+        }
+
+        // ── Helper: wait up to timeoutMs for at least one Poru node to be ready ──
+        async function waitForPoruReady(timeoutMs = 12_000) {
+            if (TrueMusic.poru?.leastUsedNodes?.length) return true;
+            // Trigger re-init immediately (bypass cooldown)
+            lastPoruInitAt = 0;
+            requestPoruInit('waitForPoruReady: no nodes yet', 0);
+            const deadline = Date.now() + timeoutMs;
+            while (Date.now() < deadline) {
+                if (TrueMusic.poru?.leastUsedNodes?.length) return true;
+                await new Promise(r => setTimeout(r, 500));
+            }
+            return !!(TrueMusic.poru?.leastUsedNodes?.length);
         }
 
         TrueMusic.poru.on('nodeConnect', (node) => {
@@ -3262,17 +3291,37 @@ module.exports = {
                     return clearInterval(int);
                 }
 
+                // ── Always check Poru health regardless of whether bot has a channel ──
+                // New bots with no channel assigned still need their Lavalink node
+                // to connect. Without this, they stay broken until a channel is set.
+                {
+                    const nodes = TrueMusic.poru?.nodes;
+                    if (nodes?.size > 0) {
+                        const allNodesOffline = [...nodes.values()].every(n => !n.isConnected);
+                        if (allNodesOffline) {
+                            requestPoruInit('All nodes offline (global check)', 30_000);
+                        } else {
+                            // Some nodes exist but might have exhausted reconnect — nudge them
+                            nodes.forEach(node => {
+                                if (!node.isConnected && node.attempt > 0) {
+                                    try {
+                                        node.attempt = 0;
+                                        clearTimeout(node.reconnectAttempt);
+                                        node.reconnectAttempt = null;
+                                        node.connect?.().catch(() => {});
+                                    } catch {}
+                                }
+                            });
+                        }
+                    } else if (TrueMusic.readyAt) {
+                        // No nodes at all — Poru was never initialized or failed before init
+                        requestPoruInit('No Poru nodes registered', 60_000);
+                    }
+                }
+
                 if (tokenObj.channel) {
                     // ── Heartbeat: keep activity alive so idle-killer never fires ──
                     botLastActivity.set(token, Date.now());
-
-                    // ── Always check: if all Lavalink nodes offline, force re-init ──
-                    // (runs even when bot is already in the correct VC)
-                    const allNodesOffline = TrueMusic.poru?.nodes?.size > 0 &&
-                        [...(TrueMusic.poru.nodes?.values() || [])].every(n => !n.isConnected);
-                    if (allNodesOffline) {
-                        requestPoruInit('All nodes offline', 30_000);
-                    }
 
                     let guild = TrueMusic.guilds.cache.get(tokenObj.Server);
                     if (guild) {
@@ -3661,6 +3710,11 @@ module.exports = {
                         });
                         store.set('tokens', data);
 
+                        // ── Wait for Poru to be ready before connecting ───────────────
+                        // New bots may still be establishing their Lavalink connection.
+                        // Without this wait, createConnection throws "No nodes available".
+                        const poruReady = await waitForPoruReady(12_000);
+
                         // Connect to voice immediately
                         try {
                             const guild = message.guild;
@@ -3669,7 +3723,7 @@ module.exports = {
                                 if (!existingPlayer.isConnected || existingPlayer.voiceChannel !== channel.id) {
                                     existingPlayer.setVoiceChannel(channel.id, { deaf: true, mute: false });
                                 }
-                            } else if (TrueMusic.poru) {
+                            } else if (TrueMusic.poru && poruReady) {
                                 await TrueMusic.poru.createConnection({
                                     guildId: guild.id,
                                     voiceChannel: channel.id,
