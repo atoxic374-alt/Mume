@@ -3215,6 +3215,39 @@ module.exports = {
             try { TrueMusic.poru.init(TrueMusic); } catch (e) { console.error(`[Poru] فشل الاتصال بـ Lavalink: ${e.message}`); }
             collection.set(TrueMusic.user.id, TrueMusic);
 
+            // ── Startup Guarantee (Layer 1) ────────────────────────────────────────
+            // poru.init() fires the WS connection but doesn't wait for it.
+            // If Lavalink is briefly down (restart, deploy, cold start) the bot
+            // will fail silently and stay broken forever.
+            // Fix: retry up to 3 times with 8s between attempts so every new
+            // bot always ends up connected even during Lavalink hiccups at startup.
+            (async () => {
+                for (let startupAttempt = 1; startupAttempt <= 3; startupAttempt++) {
+                    const ready = await waitForPoruReady(8_000);
+                    if (ready) {
+                        if (startupAttempt > 1)
+                            console.log(`[PoruGuardian] ${TrueMusic.user?.username || 'bot'}: Lavalink connected on startup attempt ${startupAttempt}`);
+                        break;
+                    }
+                    if (startupAttempt < 3) {
+                        console.warn(`[PoruGuardian] ${TrueMusic.user?.username || 'bot'}: Lavalink not ready (attempt ${startupAttempt}/3) — retrying`);
+                        // Reset attempt counters so Poru doesn't think it already tried
+                        TrueMusic.poru?.nodes?.forEach(node => {
+                            try {
+                                node.attempt = 0;
+                                clearTimeout(node.reconnectAttempt);
+                                node.reconnectAttempt = null;
+                            } catch {}
+                        });
+                        lastPoruInitAt = 0; // bypass cooldown for startup retries
+                        try { TrueMusic.poru.init(TrueMusic); } catch {}
+                    } else {
+                        console.warn(`[PoruGuardian] ${TrueMusic.user?.username || 'bot'}: Lavalink startup failed after 3 attempts — watchdog will keep retrying`);
+                    }
+                }
+            })().catch(() => {});
+            // ──────────────────────────────────────────────────────────────────────
+
             TrueMusic.poru.players.forEach(player => {
                 player.queue.clear();
                 player.skip?.().catch(() => {});
@@ -3291,33 +3324,80 @@ module.exports = {
                     return clearInterval(int);
                 }
 
-                // ── Always check Poru health regardless of whether bot has a channel ──
-                // New bots with no channel assigned still need their Lavalink node
-                // to connect. Without this, they stay broken until a channel is set.
+                // ── Lavalink Node Guardian (Layers 2 + 3) ────────────────────────────
+                // Runs every 15s for EVERY bot regardless of channel assignment.
+                //
+                // Layer 2 — WS readyState ground-truth check
+                //   node.isConnected can lie (flag not cleared on silent WS close).
+                //   node.ws.readyState === 1 (OPEN) is the real source of truth.
+                //   Any node with WS != OPEN is force-reconnected immediately,
+                //   no cooldown — this is a lightweight per-node call, not a full init.
+                //
+                // Layer 3 — Proactive attempt-counter reset
+                //   Poru gives up permanently when node.attempt >= reconnectTries (50).
+                //   We reset it at 30 so the bot NEVER exhausts its reconnect budget.
+                //   For truly connected nodes we reset to 0 as maintenance.
                 {
                     const nodes = TrueMusic.poru?.nodes;
-                    if (nodes?.size > 0) {
-                        const allNodesOffline = [...nodes.values()].every(n => !n.isConnected);
-                        if (allNodesOffline) {
-                            requestPoruInit('All nodes offline (global check)', 30_000);
-                        } else {
-                            // Some nodes exist but might have exhausted reconnect — nudge them
-                            nodes.forEach(node => {
-                                if (!node.isConnected && node.attempt > 0) {
-                                    try {
-                                        node.attempt = 0;
-                                        clearTimeout(node.reconnectAttempt);
-                                        node.reconnectAttempt = null;
-                                        node.connect?.().catch(() => {});
-                                    } catch {}
-                                }
-                            });
+                    if (!nodes || nodes.size === 0) {
+                        // Poru was never initialized or all nodes vanished
+                        if (TrueMusic.readyAt) {
+                            requestPoruInit('No Poru nodes registered', 60_000);
                         }
-                    } else if (TrueMusic.readyAt) {
-                        // No nodes at all — Poru was never initialized or failed before init
-                        requestPoruInit('No Poru nodes registered', 60_000);
+                    } else {
+                        let connectedCount = 0;
+
+                        for (const [, node] of nodes) {
+                            // WS readyState: 0=CONNECTING 1=OPEN 2=CLOSING 3=CLOSED
+                            const wsState = node.ws?.readyState;
+                            const wsOpen  = wsState === 1;
+                            const truly   = wsOpen && node.isConnected === true;
+
+                            if (truly) {
+                                // Layer 3: connected — keep attempt at 0 as maintenance
+                                if ((node.attempt ?? 0) > 0) node.attempt = 0;
+                                connectedCount++;
+                                continue;
+                            }
+
+                            // ── Not truly connected ────────────────────────────────────
+                            const name = node.options?.name || node.options?.host || 'node';
+                            const botName = TrueMusic.user?.username || token.slice(-6);
+
+                            // Layer 3: reset attempt counter BEFORE it hits the limit (50)
+                            if ((node.attempt ?? 0) >= 30) {
+                                node.attempt = 0;
+                                clearTimeout(node.reconnectAttempt);
+                                node.reconnectAttempt = null;
+                                console.log(`[PoruGuardian] ${botName}: reset attempt counter for ${name} (was ≥30)`);
+                            }
+
+                            // Layer 2: WS is CLOSED/never opened → force reconnect now
+                            if (wsState === 3 || wsState === undefined || wsState === null) {
+                                try {
+                                    node.attempt = 0;
+                                    clearTimeout(node.reconnectAttempt);
+                                    node.reconnectAttempt = null;
+                                    node.connect?.().catch(() => {});
+                                    console.log(`[PoruGuardian] ${botName}: forced reconnect → ${name} (WS=${wsState ?? 'none'})`);
+                                } catch {}
+                            }
+                            // wsState 0 (CONNECTING) or 2 (CLOSING) → in progress, wait
+                        }
+
+                        // All nodes dead AND all WS sockets closed → full re-init fallback
+                        if (connectedCount === 0) {
+                            const allSocketsClosed = [...nodes.values()].every(n => {
+                                const ws = n.ws?.readyState;
+                                return ws === 3 || ws === undefined || ws === null;
+                            });
+                            if (allSocketsClosed) {
+                                requestPoruInit('All nodes dead — full re-init fallback', 30_000);
+                            }
+                        }
                     }
                 }
+                // ─────────────────────────────────────────────────────────────────────
 
                 if (tokenObj.channel) {
                     // ── Heartbeat: keep activity alive so idle-killer never fires ──
