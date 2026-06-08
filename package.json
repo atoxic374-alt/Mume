@@ -24,7 +24,7 @@
     "ts-mixer": "^6.0.4",
     "tslib": "^2.8.1",
     "undici": "^6.26.0",
-    "undici-types": "^7.27.1",
+    "undici-types": "^7.27.2",
     "ws": "^8.21.0"
   },
   "author": "",
