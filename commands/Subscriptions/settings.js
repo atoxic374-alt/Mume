@@ -40,14 +40,10 @@ function resolveSettingsEmoji(client, emojiId) {
     const id = String(emojiId || '');
     if (!id) return null;
     const emoji = client?.application?.emojis?.cache?.get?.(id) || client?.emojis?.cache?.get?.(id);
-    if (!emoji) return null;
-    const resolvedId = String(emoji.id || '');
-    const resolvedName = String(emoji.name || '');
-    if (!/^\d{17,20}$/.test(resolvedId) || !resolvedName) return null;
-    if (emoji.available === false) return null;
+    if (!emoji || emoji.available === false) return null;
     return {
-        id: resolvedId,
-        name: resolvedName,
+        id: emoji.id,
+        name: emoji.name || undefined,
         animated: emoji.animated === true,
     };
 }
@@ -2619,22 +2615,21 @@ module.exports = {
                 const slice = subTokens.slice(start, end);
 
                 const lines = slice.map((t, idx) => {
-                    const { bot, statusText } = getBotVoiceInfo(t);
+                    const { bot, statusText, inRoom, inServer } = getBotVoiceInfo(t);
                     const mention = bot ? `<@${bot.user.id}>` : '`غير معروف`';
-                    const num = String(start + idx + 1).padStart(3, ' ');
-                    return `\`${num}\` ${mention}  ${statusText}`;
+                    const num = start + idx + 1;
+                    const arrow = inRoom ? '**›**' : inServer ? '**·**' : '**×**';
+                    return `**#${num}** — ${mention}  ${arrow}  ${statusText}`;
                 });
 
                 const embed = new EmbedBuilder()
                     .setTitle(`Voice Status — ${selectedCode}`)
                     .setDescription(
-                        `> البوتات **${start + 1}–${end}** من أصل **${subTokens.length}**\n` +
-                        `> بروم  |  بدون روم  |  خارج سيرفر  |  غير متصل\n` +
-                        `\u200b\n` +
-                        lines.join('\n')
+                        `> **${start + 1}–${end}** من أصل **${subTokens.length}** بوت\n\u200b\n` +
+                        lines.join('\n\u200b\n')
                     )
                     .setColor(getEmbedColor(client))
-                    .setFooter({ text: `Page ${page + 1} / ${Math.ceil(subTokens.length / 10)}` });
+                    .setFooter({ text: `Page ${page + 1} / ${Math.ceil(subTokens.length / 10)}  •  › بروم  · بالسيرفر  × خارج` });
 
                 const row1 = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId(`stg_vs_${mid}_prev`).setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
