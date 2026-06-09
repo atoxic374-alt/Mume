@@ -52,6 +52,34 @@ function resolveSettingsEmoji(client, emojiId) {
     };
 }
 
+function resolveRawEmoji(client, raw) {
+    if (!raw) return null;
+    let id = null;
+    let name = null;
+    let animated = false;
+    if (typeof raw === 'string') {
+        const match = raw.match(/^<(a?):([A-Za-z0-9_~.\-]+):(\d{17,20})>$/);
+        if (match) {
+            animated = match[1] === 'a';
+            name = match[2];
+            id = match[3];
+        } else if (/^\d{17,20}$/.test(raw.trim())) {
+            id = raw.trim();
+        }
+    } else if (raw && typeof raw === 'object') {
+        id = raw.id ? String(raw.id) : null;
+        name = raw.name ? String(raw.name) : null;
+        animated = raw.animated === true;
+    }
+    if (!id || !/^\d{17,20}$/.test(id)) return null;
+    const cached = client?.application?.emojis?.cache?.get?.(id) || client?.emojis?.cache?.get?.(id);
+    if (cached) {
+        if (cached.available === false) return null;
+        return { id: String(cached.id), name: String(cached.name || name || 'emoji'), animated: cached.animated === true };
+    }
+    return null;
+}
+
 function settingsOption(client, option, emojiId) {
     const emoji = resolveSettingsEmoji(client, emojiId);
     return emoji ? { ...option, emoji } : option;
@@ -1647,8 +1675,8 @@ module.exports = {
                                     : `اشتراك ${code}`,
                                 value: code,
                             };
-                            const emoji = muEmojis[index];
-                                    if (emoji) opt.emoji = emoji;
+                            const resolvedEmoji = resolveRawEmoji(client, muEmojis[index]);
+                                    if (resolvedEmoji) opt.emoji = resolvedEmoji;
                                     return opt;
                                 }));
                             components.push(new ActionRowBuilder().addComponents(selectMenu));
