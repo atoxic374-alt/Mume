@@ -39,6 +39,41 @@ const REQUESTS_FILE = path.join(process.cwd(), 'settings', 'invoices.tmp.json');
 const AUTO_IMAGE_PATH = path.join(process.cwd(), 'assets', 'image', 'Auto.png');
 const AUTO_PROFILE_ASSET_DIR = path.join(process.cwd(), 'assets', 'automatic');
 const RENEWAL_TTL_MS = 12 * 60 * 60 * 1000;
+
+const MONTH_PRESETS = [
+  { months: 1, ms: 30 * 24 * 60 * 60 * 1000, labelAr: 'شهر واحد',  labelEn: '1 Month',  days: 30 },
+  { months: 2, ms: 60 * 24 * 60 * 60 * 1000, labelAr: 'شهرين',     labelEn: '2 Months', days: 60 },
+  { months: 3, ms: 90 * 24 * 60 * 60 * 1000, labelAr: '٣ أشهر',    labelEn: '3 Months', days: 90 },
+];
+
+function durationBuyRows(iid) {
+  const s = automaticSettings();
+  const price = Number(s.botPrice || 0);
+  const cur   = s.currency || 'SAR';
+  return [
+    new ActionRowBuilder().addComponents(
+      ...MONTH_PRESETS.map(p =>
+        new ButtonBuilder()
+          .setCustomId(`auto_buy_dur_${p.months}_${iid}`)
+          .setLabel(`${p.labelAr} — ${p.days} يوم  |  ${formatMoney(price * p.months, cur)} / بوت`)
+          .setStyle(p.months === 3 ? ButtonStyle.Success : ButtonStyle.Primary),
+      ),
+    ),
+  ];
+}
+
+function durationRenewRows(code, iid) {
+  return [
+    new ActionRowBuilder().addComponents(
+      ...MONTH_PRESETS.map(p =>
+        new ButtonBuilder()
+          .setCustomId(`auto_rdur_${p.months}_${code}_${String(iid).slice(-10)}`)
+          .setLabel(`${p.labelAr} — ${p.days} يوم`)
+          .setStyle(p.months === 3 ? ButtonStyle.Success : ButtonStyle.Primary),
+      ),
+    ),
+  ];
+}
 const installedClients = new WeakSet();
 const PROFILE_IMAGE_TIMEOUT_MS = Math.max(3000, Number(process.env.PROFILE_IMAGE_TIMEOUT_MS || 10000));
 const PROFILE_IMAGE_MAX_BYTES = Math.max(256 * 1024, Number(process.env.PROFILE_IMAGE_MAX_BYTES || 8 * 1024 * 1024));
@@ -553,11 +588,13 @@ function addBotsRequestRows(reqId, disabled = false) {
 function buildRenewRequestEmbed(client, req) {
   return new EmbedBuilder()
     .setColor(getEmbedColor(client))
-    .setTitle('Renewal Request')
+    .setTitle('Renewal Request | طلب تجديد')
     .setDescription([
       `**Customer :** *<@${req.userId}>*`,
       '',
       `**Subscription :** *\`${req.code}\`*`,
+      '',
+      `**Duration | المدة :** *\`${req.durationLabel || 'غير محدد'}\` (${req.durationDays || '?'} يوم)*`,
       '',
       `**Invoice :** *${req.invoiceUrl ? `[فتح الصورة](${req.invoiceUrl})` : 'بانتظار الصورة'}*`,
       '',
@@ -580,6 +617,8 @@ function buildPurchaseRequestEmbed(client, req) {
       `**Customer :** *<@${req.userId}>*`,
       '',
       `**Requested Bots :** *\`${req.count}\` بوت*`,
+      '',
+      `**Duration | المدة :** *\`${req.durationLabel || 'غير محدد'}\` (${req.durationDays || '?'} يوم)*`,
       '',
       `**Server ID :** *\`${req.serverId || 'غير محدد'}\`*`,
       '',
@@ -616,7 +655,7 @@ function renewRequestRows(reqId, disabled = false) {
   ];
 }
 
-async function startPurchase(interaction, count, serverId) {
+async function startPurchase(interaction, count, serverId, durationMs, durationLabel, durationDays) {
   const stock = (store.get('bots') || []).length;
   if (stock < count) {
     return interaction.reply({
@@ -629,19 +668,19 @@ async function startPurchase(interaction, count, serverId) {
     r.type === 'purchase' &&
     r.userId === interaction.user.id &&
     ['awaiting_invoice', 'pending_owner'].includes(r.status) &&
-    Date.now() - Number(r.createdAt || 0) < 24 * 60 * 60 * 1000,
+    Number(r.expiresAt || 0) > Date.now(),
   );
   if (existing) {
-    return interaction.reply({
-      content: '**Purchase :** *لديك طلب شراء معلق بالفعل. ارسل الفاتورة أو انتظر رد الإدارة.*',
-      flags: MessageFlags.Ephemeral,
-    }).catch(() => {});
+    const msg = existing.status === 'awaiting_invoice'
+      ? '**Purchase :** *لديك طلب شراء معلق بانتظار الفاتورة. ارسل صورة الفاتورة في الخاص أو انتظر 12 ساعة.*'
+      : '**Purchase :** *طلبك وصل للإدارة وبانتظار الرد. يرجى الانتظار.*';
+    return interaction.reply({ content: msg, flags: MessageFlags.Ephemeral }).catch(() => {});
   }
 
   const settings = automaticSettings();
   const unitPrice = Number(settings.botPrice || 0);
   const currency = settings.currency || 'SAR';
-  const totalPrice = unitPrice * count;
+  const totalPrice = unitPrice * count * (durationMs / MONTH_PRESETS[0].ms);
   const req = {
     id: randomId(10),
     type: 'purchase',
@@ -652,10 +691,13 @@ async function startPurchase(interaction, count, serverId) {
     unitPrice,
     totalPrice,
     currency,
+    durationMs,
+    durationLabel,
+    durationDays,
     createdAt: Date.now(),
     expiresAt: Date.now() + RENEWAL_TTL_MS,
   };
-  const requests = readRequests().filter(item => !(item.type === 'purchase' && item.userId === req.userId && item.status === 'awaiting_invoice'));
+  const requests = readRequests().filter(item => !(item.type === 'purchase' && item.userId === req.userId && ['awaiting_invoice'].includes(item.status)));
   requests.push(req);
   saveRequests(requests);
 
@@ -665,6 +707,8 @@ async function startPurchase(interaction, count, serverId) {
     .setTitle('Purchase Invoice | فاتورة الشراء')
     .setDescription([
       `**Bot Count :** *\`${count}\`*`,
+      '',
+      `**Duration | المدة :** *\`${durationLabel}\` (${durationDays} يوم)*`,
       '',
       `**Server ID :** *\`${serverId}\`*`,
       '',
@@ -903,19 +947,62 @@ async function rejectRequest(interaction, reqId, type = 'add') {
       : addBotsRequestRows(reqId, true);
   await interaction.update({ embeds: [embed], components: rows }).catch(() => {});
   const user = await interaction.client.users.fetch(req.userId).catch(() => null);
-  if (user) user.send(`**Request :** *تم رفض طلبك للاشتراك \`${req.code}\`.*`).catch(() => {});
+  if (user) {
+    const typeMsg = type === 'purchase'
+      ? `**Purchase :** *تم رفض طلب شرائك (${req.count || '?'} بوت — ${req.durationLabel || ''}). يمكنك المحاولة مجدداً.*`
+      : type === 'renew'
+        ? `**Renewal :** *تم رفض طلب تجديد الاشتراك \`${req.code || ''}\`. يمكنك المحاولة مجدداً.*`
+        : `**Add Bots :** *تم رفض طلب إضافة البوتات للاشتراك \`${req.code || ''}\`.*`;
+    user.send(typeMsg).catch(() => {});
+  }
 }
 
 async function startRenewal(interaction, code) {
   const entry = findSubscription(code, interaction.user.id);
   if (!entry) return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', flags: MessageFlags.Ephemeral }).catch(() => {});
 
+  // منع الطلبات المكررة بينما طلب معلّق
+  const existing = readRequests().find(r =>
+    r.type === 'renewal' && r.userId === interaction.user.id && r.code === code &&
+    ['awaiting_invoice', 'pending_owner'].includes(r.status) &&
+    Number(r.expiresAt || 0) > Date.now(),
+  );
+  if (existing) {
+    const msg = existing.status === 'awaiting_invoice'
+      ? '**Renewal :** *لديك طلب تجديد معلق بانتظار الفاتورة. ارسل صورة الفاتورة في الخاص أو انتظر 12 ساعة.*'
+      : '**Renewal :** *طلب تجديدك وصل للإدارة وبانتظار الرد. يرجى الانتظار.*';
+    return interaction.reply({ content: msg, flags: MessageFlags.Ephemeral }).catch(() => {});
+  }
+
+  // اختر المدة أولاً
+  const settings = automaticSettings();
+  const price = Number(settings.botPrice || 0);
+  const currency = settings.currency || 'SAR';
+  const payload = {
+    content: [
+      `**Renewal | تجديد الاشتراك \`${code}\`**`,
+      '*اختر مدة التجديد:*',
+      '',
+      ...MONTH_PRESETS.map(p => `• **${p.labelAr}** — ${p.days} يوم | ${formatMoney(price * entry.botsCount * p.months, currency)}`),
+    ].join('\n'),
+    components: durationRenewRows(code, interaction.id),
+    flags: MessageFlags.Ephemeral,
+  };
+  if (interaction.replied || interaction.deferred) return interaction.editReply(payload).catch(() => {});
+  if (interaction.isStringSelectMenu() || interaction.isButton()) return interaction.update(payload).catch(() => {});
+  return interaction.reply(payload).catch(() => {});
+}
+
+async function doStartRenewal(interaction, code, durationMs, durationLabel, durationDays) {
   const req = {
     id: randomId(10),
     type: 'renewal',
     status: 'awaiting_invoice',
     userId: interaction.user.id,
     code,
+    durationMs,
+    durationLabel,
+    durationDays,
     createdAt: Date.now(),
     expiresAt: Date.now() + RENEWAL_TTL_MS,
   };
@@ -924,11 +1011,21 @@ async function startRenewal(interaction, code) {
   saveRequests(requests);
 
   const { paymentMethods: pmRenewal } = automaticSettings();
+  const settings = automaticSettings();
+  const price = Number(settings.botPrice || 0);
+  const entry = findSubscription(code, interaction.user.id);
+  const totalPrice = price * (entry?.botsCount || 0) * (durationMs / MONTH_PRESETS[0].ms);
+  const currency = settings.currency || 'SAR';
+
   const dmEmbed = new EmbedBuilder()
     .setColor(getEmbedColor(interaction.client))
     .setTitle('Renewal Invoice | فاتورة التجديد')
     .setDescription([
       `**Subscription :** *\`${code}\`*`,
+      '',
+      `**Duration | المدة :** *\`${durationLabel}\` (${durationDays} يوم)*`,
+      '',
+      `**Total Price :** *${formatMoney(totalPrice, currency)}*`,
       '',
       pmRenewal ? `**Payment Methods | طرق الدفع :**\n${pmRenewal}` : null,
       pmRenewal ? '' : null,
@@ -938,12 +1035,15 @@ async function startRenewal(interaction, code) {
     ].filter(v => v !== null).join('\n'));
 
   const dmOk = await interaction.user.send({ embeds: [dmEmbed] }).then(() => true).catch(() => false);
-  return interaction.reply({
+  const confirmPayload = {
     content: dmOk
-      ? '**Renewal :** *تم إرسال تعليمات التجديد في الخاص. ارسل صورة الفاتورة هناك خلال 12 ساعة.*'
+      ? `**Renewal :** *تم إرسال تعليمات التجديد في الخاص. ارسل صورة الفاتورة هناك خلال 12 ساعة.*`
       : '**DM :** *لم أستطع إرسال الخاص. افتح رسائل الخاص ثم اضغط Renew مرة أخرى.*',
+    components: [],
     flags: MessageFlags.Ephemeral,
-  }).catch(() => {});
+  };
+  if (interaction.replied || interaction.deferred) return interaction.editReply(confirmPayload).catch(() => {});
+  return interaction.update(confirmPayload).catch(() => {});
 }
 
 async function handleInvoiceDm(client, message) {
@@ -990,30 +1090,15 @@ async function acceptPurchase(interaction, reqId) {
     return interaction.reply({ content: '**Request :** *الطلب غير موجود أو غير جاهز.*', flags: MessageFlags.Ephemeral });
   }
 
-  const modal = new ModalBuilder().setCustomId(`auto_purchase_accept_modal_${reqId}`).setTitle('Purchase Duration');
-  modal.addComponents(new ActionRowBuilder().addComponents(
-    new TextInputBuilder()
-      .setCustomId('duration')
-      .setLabel('Duration')
-      .setPlaceholder('Example: 30d, 90d, 12h')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true),
-  ));
-  await interaction.showModal(modal);
-
-  const submit = await interaction.awaitModalSubmit({
-    filter: i => i.customId === `auto_purchase_accept_modal_${reqId}` && i.user.id === interaction.user.id,
-    time: 60000,
-  }).catch(() => null);
-  if (!submit) return;
-
-  const raw = submit.fields.getTextInputValue('duration').trim();
-  const durationMs = ms(raw);
-  if (!durationMs || durationMs <= 0) return submit.reply({ content: '**Duration :** *اكتب مدة صحيحة مثل `30d` أو `12h`.*', flags: MessageFlags.Ephemeral });
+  const durationMs = Number(req.durationMs || 0);
+  const durationLabel = req.durationLabel || `${req.durationDays || '?'} يوم`;
+  if (!durationMs || durationMs <= 0) {
+    return interaction.reply({ content: '**Duration :** *المدة غير محددة في الطلب. اطلب من المستخدم إعادة الطلب.*', flags: MessageFlags.Ephemeral });
+  }
 
   const bots = store.get('bots') || [];
   if (bots.length < req.count) {
-    return submit.reply({ content: `**Stock :** *المخزون غير كافي. المتاح الآن: \`${bots.length}\` بوت.*`, flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: `**Stock :** *المخزون غير كافي. المتاح الآن: \`${bots.length}\` بوت.*`, flags: MessageFlags.Ephemeral });
   }
 
   const code = `#${randomId(5)}`;
@@ -1023,7 +1108,7 @@ async function acceptPurchase(interaction, reqId) {
     user: req.userId,
     server: req.serverId,
     botsCount: req.count,
-    subscriptionTime: raw,
+    subscriptionTime: durationLabel,
     expirationTime,
     code,
   });
@@ -1045,8 +1130,8 @@ async function acceptPurchase(interaction, reqId) {
   store.set('tokens', tokens);
   store.set('bots', bots);
 
-  const updated = updateRequest(reqId, { status: 'approved', duration: raw, code });
-  await submit.reply({ content: '**Purchase :** *تم قبول الشراء وتفعيل الاشتراك.*', flags: MessageFlags.Ephemeral }).catch(() => {});
+  const updated = updateRequest(reqId, { status: 'approved', duration: durationLabel, code });
+  await interaction.reply({ content: `**Purchase :** *تم قبول الشراء وتفعيل الاشتراك \`${code}\` لمدة ${durationLabel}.*`, flags: MessageFlags.Ephemeral }).catch(() => {});
   await interaction.message.edit({
     embeds: [buildPurchaseRequestEmbed(interaction.client, updated)],
     components: purchaseRequestRows(reqId, true),
@@ -1071,35 +1156,22 @@ async function acceptRenewal(interaction, reqId) {
   const req = readRequests().find(item => item.id === reqId);
   if (!req || req.status !== 'pending_owner') return interaction.reply({ content: '**Request :** *الطلب غير موجود أو غير جاهز.*', flags: MessageFlags.Ephemeral });
 
-  const modal = new ModalBuilder().setCustomId(`auto_renew_accept_modal_${reqId}`).setTitle('Renew Duration');
-  modal.addComponents(new ActionRowBuilder().addComponents(
-    new TextInputBuilder()
-      .setCustomId('duration')
-      .setLabel('Duration')
-      .setPlaceholder('Example: 30d, 90d, 12h')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true),
-  ));
-  await interaction.showModal(modal);
-
-  const submit = await interaction.awaitModalSubmit({
-    filter: i => i.customId === `auto_renew_accept_modal_${reqId}` && i.user.id === interaction.user.id,
-    time: 60000,
-  }).catch(() => null);
-  if (!submit) return;
-
-  const raw = submit.fields.getTextInputValue('duration').trim();
-  const durationMs = ms(raw);
-  if (!durationMs || durationMs <= 0) return submit.reply({ content: '**Duration :** *اكتب مدة صحيحة مثل `30d` أو `12h`.*', flags: MessageFlags.Ephemeral });
+  const durationMs = Number(req.durationMs || 0);
+  const durationLabel = req.durationLabel || `${req.durationDays || '?'} يوم`;
+  if (!durationMs || durationMs <= 0) {
+    return interaction.reply({ content: '**Duration :** *المدة غير محددة في الطلب. اطلب من المستخدم إعادة الطلب.*', flags: MessageFlags.Ephemeral });
+  }
 
   const timeArray = store.get('time') || [];
   const entry = timeArray.find(item => item.code === req.code && item.user === req.userId);
-  if (!entry) return submit.reply({ content: '**Subscription :** *الاشتراك غير موجود.*', flags: MessageFlags.Ephemeral });
+  if (!entry) return interaction.reply({ content: '**Subscription :** *الاشتراك غير موجود في قاعدة البيانات.*', flags: MessageFlags.Ephemeral });
+
+  const prevExpiry = entry.expirationTime;
   entry.expirationTime += durationMs;
   store.set('time', timeArray);
 
-  const updated = updateRequest(reqId, { status: 'approved', duration: raw });
-  await submit.reply({ content: '**Renewal :** *تم قبول التجديد وتحديث مدة الاشتراك.*', flags: MessageFlags.Ephemeral }).catch(() => {});
+  const updated = updateRequest(reqId, { status: 'approved', duration: durationLabel });
+  await interaction.reply({ content: `**Renewal :** *تم قبول التجديد وإضافة ${durationLabel} للاشتراك \`${req.code}\`.*`, flags: MessageFlags.Ephemeral }).catch(() => {});
   await interaction.message.edit({
     embeds: [buildRenewRequestEmbed(interaction.client, updated)],
     components: renewRequestRows(reqId, true),
@@ -1110,8 +1182,8 @@ async function acceptRenewal(interaction, reqId) {
     user.send({
       embeds: [buildSubscriptionTimeUpdatedDm(interaction.client, {
         code: req.code,
-        addedTime: raw,
-        previousExpiry: entry.expirationTime - durationMs,
+        addedTime: durationLabel,
+        previousExpiry: prevExpiry,
         newExpiry: entry.expirationTime,
       })],
     }).catch(() => {});
@@ -1801,21 +1873,45 @@ async function handleInteraction(interaction) {
     if (id === 'auto_profile_streaming') return handleProfileAction(interaction, 'streaming');
     if (id === 'auto_profile_applyall') return handleProfileAction(interaction, 'applyall');
     if (id === 'auto_user_buy') {
+      // Check for existing pending request before showing duration buttons
+      const existingBuy = readRequests().find(r =>
+        r.type === 'purchase' && r.userId === interaction.user.id &&
+        ['awaiting_invoice', 'pending_owner'].includes(r.status) &&
+        Number(r.expiresAt || 0) > Date.now(),
+      );
+      if (existingBuy) {
+        const blockedMsg = existingBuy.status === 'awaiting_invoice'
+          ? '**Purchase :** *لديك طلب شراء معلق بانتظار الفاتورة. ارسل صورة الفاتورة في الخاص أو انتظر 12 ساعة.*'
+          : '**Purchase :** *طلبك وصل للإدارة وبانتظار الرد. يرجى الانتظار.*';
+        return interaction.reply({ content: blockedMsg, flags: MessageFlags.Ephemeral }).catch(() => {});
+      }
+      return interaction.reply({
+        content: '**Buy | شراء اشتراك**\n*اختر مدة الاشتراك:*',
+        components: durationBuyRows(interaction.id),
+        flags: MessageFlags.Ephemeral,
+      }).catch(() => {});
+    }
+
+    // Duration selection for Buy: auto_buy_dur_{months}_{origIid}
+    if (/^auto_buy_dur_[123]_/.test(id)) {
+      const months = parseInt(id.split('_')[3], 10);
+      const preset = MONTH_PRESETS.find(p => p.months === months);
+      if (!preset) return;
       const modal = new ModalBuilder().setCustomId(`auto_buy_modal_${interaction.id}`).setTitle('Buy Subscription');
       modal.addComponents(
         new ActionRowBuilder().addComponents(
           new TextInputBuilder()
             .setCustomId('count')
-            .setLabel('Bot Count')
-            .setPlaceholder('Example: 2')
+            .setLabel('Bot Count | عدد البوتات')
+            .setPlaceholder('مثال: 2')
             .setStyle(TextInputStyle.Short)
             .setRequired(true),
         ),
         new ActionRowBuilder().addComponents(
           new TextInputBuilder()
             .setCustomId('server_id')
-            .setLabel('Server ID')
-            .setPlaceholder('Example: 123456789012345678')
+            .setLabel('Server ID | ايدي السيرفر')
+            .setPlaceholder('مثال: 123456789012345678')
             .setStyle(TextInputStyle.Short)
             .setRequired(true)
             .setMinLength(15)
@@ -1825,14 +1921,25 @@ async function handleInteraction(interaction) {
       await interaction.showModal(modal);
       const submit = await interaction.awaitModalSubmit({
         filter: i => i.customId === `auto_buy_modal_${interaction.id}` && i.user.id === interaction.user.id,
-        time: 60000,
+        time: 120000,
       }).catch(() => null);
       if (!submit) return;
       const count = parseInt(submit.fields.getTextInputValue('count').trim(), 10);
       const serverId = submit.fields.getTextInputValue('server_id').trim();
       if (!Number.isInteger(count) || count <= 0) return submit.reply({ content: '**Bot Count :** *اكتب عدد صحيح أكبر من صفر.*', flags: MessageFlags.Ephemeral });
       if (!/^\d{15,20}$/.test(serverId)) return submit.reply({ content: '**Server ID :** *اكتب ايدي سيرفر صحيح.*', flags: MessageFlags.Ephemeral });
-      return startPurchase(submit, count, serverId);
+      return startPurchase(submit, count, serverId, preset.ms, preset.labelAr, preset.days);
+    }
+
+    // Duration selection for Renewal: auto_rdur_{months}_{code}_{iid_last10}
+    if (/^auto_rdur_[123]_/.test(id)) {
+      const parts = id.split('_');
+      const months = parseInt(parts[2], 10);
+      const preset = MONTH_PRESETS.find(p => p.months === months);
+      if (!preset) return;
+      // code is parts[3] (e.g. "#AB12C"), everything before last segment
+      const code = parts.slice(3, -1).join('_');
+      return doStartRenewal(interaction, code, preset.ms, preset.labelAr, preset.days);
     }
     if (id === 'auto_user_my') return showSubscriptionPicker(interaction, 'my');
     if (id === 'auto_user_renew') return showSubscriptionPicker(interaction, 'renew');
