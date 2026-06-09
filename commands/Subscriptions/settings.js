@@ -2631,7 +2631,7 @@ module.exports = {
                 });
 
                 const summary =
-                    `🔊 **في روم:** \`${countRoom}\`　💤 **خامل:** \`${countIdle}\`　⛔ **خارج:** \`${countOffline}\``;
+                    `🔊 **في روم :** \`${countRoom}\`　💤 **خامل :** \`${countIdle}\`　⛔ **خارج السيرفر :** \`${countOffline}\``;
 
                 const embed = new EmbedBuilder()
                     .setTitle(`Voice Status — ${selectedCode}`)
