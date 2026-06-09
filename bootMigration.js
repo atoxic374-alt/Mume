@@ -4,6 +4,16 @@ try {
   require('dns').setDefaultResultOrder('ipv4first');
 } catch {}
 
+// ── Patch EventEmitter limits as early as possible (before any Client) ────────
+// discord.js WebSocketShard uses AsyncEventEmitter (not Node's EventEmitter).
+// Setting Node's defaultMaxListeners has no effect on it — we must patch both.
+try { require('events').EventEmitter.defaultMaxListeners = 0; } catch {}
+try {
+  const { AsyncEventEmitter } = require('@vladfrangu/async_event_emitter');
+  if (AsyncEventEmitter) AsyncEventEmitter.defaultMaxListeners = 0;
+} catch {}
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * Boot Migration — Railway Volume Safety Layer
  * 
