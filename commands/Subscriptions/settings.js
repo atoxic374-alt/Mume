@@ -2614,22 +2614,34 @@ module.exports = {
                 const end = Math.min(start + 10, subTokens.length);
                 const slice = subTokens.slice(start, end);
 
+                let countRoom = 0, countIdle = 0, countOffline = 0;
+                subTokens.forEach(t => {
+                    const info = getBotVoiceInfo(t);
+                    if (info.inRoom) countRoom++;
+                    else if (info.inServer) countIdle++;
+                    else countOffline++;
+                });
+
                 const lines = slice.map((t, idx) => {
                     const { bot, statusText, inRoom, inServer } = getBotVoiceInfo(t);
                     const mention = bot ? `<@${bot.user.id}>` : '`غير معروف`';
                     const num = start + idx + 1;
-                    const arrow = inRoom ? '**›**' : inServer ? '**·**' : '**×**';
-                    return `**#${num}** — ${mention}  ${arrow}  ${statusText}`;
+                    const icon = inRoom ? '🔊' : inServer ? '💤' : '⛔';
+                    return `${icon} **#${num}** — ${mention} → ${statusText}`;
                 });
+
+                const summary =
+                    `🔊 **في روم:** \`${countRoom}\`　💤 **خامل:** \`${countIdle}\`　⛔ **خارج:** \`${countOffline}\``;
 
                 const embed = new EmbedBuilder()
                     .setTitle(`Voice Status — ${selectedCode}`)
                     .setDescription(
-                        `> **${start + 1}–${end}** من أصل **${subTokens.length}** بوت\n\u200b\n` +
+                        summary + `\n\u200b\n` +
+                        `> البوتات **${start + 1}–${end}** من أصل **${subTokens.length}**\n\u200b\n` +
                         lines.join('\n\u200b\n')
                     )
                     .setColor(getEmbedColor(client))
-                    .setFooter({ text: `Page ${page + 1} / ${Math.ceil(subTokens.length / 10)}  •  › بروم  · بالسيرفر  × خارج` });
+                    .setFooter({ text: `Page ${page + 1} / ${Math.ceil(subTokens.length / 10)}` });
 
                 const row1 = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId(`stg_vs_${mid}_prev`).setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
