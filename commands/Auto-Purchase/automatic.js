@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const ms = require('ms');
+const axios = require('axios');
 const {
   ActionRowBuilder,
   ButtonBuilder,
@@ -36,8 +37,17 @@ const {
 const AUTO_SETTINGS_FILE = path.join(process.cwd(), 'settings', 'automatic.json');
 const REQUESTS_FILE = path.join(process.cwd(), 'settings', 'invoices.tmp.json');
 const AUTO_IMAGE_PATH = path.join(process.cwd(), 'assets', 'image', 'Auto.png');
+const AUTO_PROFILE_ASSET_DIR = path.join(process.cwd(), 'assets', 'automatic');
 const RENEWAL_TTL_MS = 12 * 60 * 60 * 1000;
 const installedClients = new WeakSet();
+const PROFILE_IMAGE_TIMEOUT_MS = Math.max(3000, Number(process.env.PROFILE_IMAGE_TIMEOUT_MS || 10000));
+const PROFILE_IMAGE_MAX_BYTES = Math.max(256 * 1024, Number(process.env.PROFILE_IMAGE_MAX_BYTES || 8 * 1024 * 1024));
+const PROFILE_IMAGE_EXT_BY_MIME = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+};
 
 function readJson(file, fallback) {
   try {
@@ -90,6 +100,62 @@ async function applyProfileToToken(token, profile, options = {}) {
 
 function saveAutomaticSettings(next) {
   writeJson(AUTO_SETTINGS_FILE, { ...automaticSettings(), ...next });
+}
+
+function relativeAssetPath(filePath) {
+  return path.relative(process.cwd(), filePath).split(path.sep).join('/');
+}
+
+function profileImageDisplay(value) {
+  if (!value) return '`Not set | غير محدد`';
+  if (/^https?:\/\//i.test(value)) return `[Saved Link | رابط محفوظ](${value})`;
+  return `\`${value}\``;
+}
+
+async function saveProfileImageLocally(rawValue, kind) {
+  const value = String(rawValue || '').trim();
+  if (!value) return null;
+
+  if (!/^https?:\/\//i.test(value)) {
+    const filePath = path.isAbsolute(value) ? value : path.join(process.cwd(), value);
+    if (!fs.existsSync(filePath)) throw new Error('ملف الصورة غير موجود.');
+    return relativeAssetPath(filePath);
+  }
+
+  const response = await axios.get(value, {
+    responseType: 'arraybuffer',
+    timeout: PROFILE_IMAGE_TIMEOUT_MS,
+    maxContentLength: PROFILE_IMAGE_MAX_BYTES,
+    validateStatus: status => status >= 200 && status < 300,
+  });
+  const contentType = String(response.headers?.['content-type'] || '').split(';')[0].trim().toLowerCase();
+  const ext = PROFILE_IMAGE_EXT_BY_MIME[contentType];
+  if (!ext) throw new Error('الرابط ليس صورة مدعومة.');
+
+  const buffer = Buffer.from(response.data);
+  if (buffer.length > PROFILE_IMAGE_MAX_BYTES) {
+    throw new Error(`الصورة كبيرة جداً. الحد ${Math.round(PROFILE_IMAGE_MAX_BYTES / 1024 / 1024)}MB.`);
+  }
+
+  fs.mkdirSync(AUTO_PROFILE_ASSET_DIR, { recursive: true });
+  const filePath = path.join(AUTO_PROFILE_ASSET_DIR, `subbot-${kind}.${ext}`);
+  fs.writeFileSync(filePath, buffer);
+  return relativeAssetPath(filePath);
+}
+
+async function ensureProfileImagesLocal() {
+  const settings = automaticSettings();
+  const patch = {};
+
+  if (/^https?:\/\//i.test(String(settings.subBotAvatar || ''))) {
+    patch.subBotAvatar = await saveProfileImageLocally(settings.subBotAvatar, 'avatar');
+  }
+  if (/^https?:\/\//i.test(String(settings.subBotBanner || ''))) {
+    patch.subBotBanner = await saveProfileImageLocally(settings.subBotBanner, 'banner');
+  }
+
+  if (Object.keys(patch).length) saveAutomaticSettings(patch);
+  return { ...settings, ...patch };
 }
 
 function readRequests() {
@@ -734,6 +800,7 @@ async function addTokensToStock(raw) {
   let added = 0;
   let invalid = 0;
   let duplicate = 0;
+  await ensureProfileImagesLocal().catch(() => {});
   const profile = subBotProfile();
   let assets = null;
   try {
@@ -1431,6 +1498,7 @@ async function handleAdminImage(interaction) {
 async function handleAdminProfile(interaction) {
   if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
 
+  await ensureProfileImagesLocal().catch(() => {});
   const profile = subBotProfile();
   const allBots = store.get('bots') || [];
   const activeSubs = new Set((store.get('tokens') || []).map(t => t.token));
@@ -1447,9 +1515,9 @@ async function handleAdminProfile(interaction) {
       '',
       `**Prefix | بادئة الاسم :** *\`${profile.prefix}\`*`,
       '',
-      `**Avatar | الصورة :** *${profile.avatar ? `[Saved Link | رابط محفوظ](${profile.avatar})` : '`Not set | غير محدد`'}*`,
+      `**Avatar | الصورة :** *${profileImageDisplay(profile.avatar)}*`,
       '',
-      `**Banner | البنر :** *${profile.banner ? `[Saved Link | رابط محفوظ](${profile.banner})` : '`Not set | غير محدد`'}*`,
+      `**Banner | البنر :** *${profileImageDisplay(profile.banner)}*`,
       '',
       `**Streaming | حالة الستريمنق :** *\`${profile.status || 'Not set | غير محدد'}\`*`,
       '',
@@ -1476,6 +1544,7 @@ async function handleProfileAction(interaction, action) {
   if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
 
   if (action === 'botsname') {
+    await ensureProfileImagesLocal().catch(() => {});
     const profile = subBotProfile();
     const modal = new ModalBuilder().setCustomId('auto_profile_modal_botsname').setTitle('Sub-Bot Name Prefix');
     modal.addComponents(new ActionRowBuilder().addComponents(
@@ -1494,10 +1563,11 @@ async function handleProfileAction(interaction, action) {
     const val = submit.fields.getTextInputValue('botsname').trim();
     saveAutomaticSettings({ subBotPrefix: val });
     return submit.reply({ content: `**Prefix :** *تم حفظ البادئة \`${val}\` — ستُطبَّق على البوتات الجديدة عند إضافتها.*`, flags: MessageFlags.Ephemeral });
-  }
-
-  if (action === 'avatar') {
-    const profile = subBotProfile();
+	  }
+	
+	  if (action === 'avatar') {
+	    await ensureProfileImagesLocal().catch(() => {});
+	    const profile = subBotProfile();
     const modal = new ModalBuilder().setCustomId('auto_profile_modal_avatar').setTitle('Sub-Bot Avatar URL');
     modal.addComponents(new ActionRowBuilder().addComponents(
       new TextInputBuilder()
@@ -1512,8 +1582,13 @@ async function handleProfileAction(interaction, action) {
     const submit = await interaction.awaitModalSubmit({ filter: i => i.customId === 'auto_profile_modal_avatar' && i.user.id === interaction.user.id, time: 60000 }).catch(() => null);
     if (!submit) return;
     const val = submit.fields.getTextInputValue('url').trim();
-    saveAutomaticSettings({ subBotAvatar: val });
-    return submit.reply({ content: `**Avatar :** *تم حفظ رابط الصورة — ستُطبَّق على البوتات الجديدة عند إضافتها.*`, flags: MessageFlags.Ephemeral });
+    try {
+      const savedPath = await saveProfileImageLocally(val, 'avatar');
+      saveAutomaticSettings({ subBotAvatar: savedPath });
+      return submit.reply({ content: `**Avatar :** *تم حفظ الصورة محلياً في \`${savedPath}\` — ستُطبَّق على البوتات الجديدة عند إضافتها.*`, flags: MessageFlags.Ephemeral });
+    } catch (error) {
+      return submit.reply({ content: `**Avatar :** *فشل حفظ الصورة محلياً: ${error.message || 'Unknown error'}*`, flags: MessageFlags.Ephemeral });
+    }
   }
 
   if (action === 'banner') {
@@ -1532,8 +1607,13 @@ async function handleProfileAction(interaction, action) {
     const submit = await interaction.awaitModalSubmit({ filter: i => i.customId === 'auto_profile_modal_banner' && i.user.id === interaction.user.id, time: 60000 }).catch(() => null);
     if (!submit) return;
     const val = submit.fields.getTextInputValue('url').trim();
-    saveAutomaticSettings({ subBotBanner: val });
-    return submit.reply({ content: `**Banner :** *تم حفظ رابط البنر — سيُطبَّق على البوتات الجديدة عند إضافتها.*`, flags: MessageFlags.Ephemeral });
+    try {
+      const savedPath = await saveProfileImageLocally(val, 'banner');
+      saveAutomaticSettings({ subBotBanner: savedPath });
+      return submit.reply({ content: `**Banner :** *تم حفظ البنر محلياً في \`${savedPath}\` — سيُطبَّق على البوتات الجديدة عند إضافتها.*`, flags: MessageFlags.Ephemeral });
+    } catch (error) {
+      return submit.reply({ content: `**Banner :** *فشل حفظ البنر محلياً: ${error.message || 'Unknown error'}*`, flags: MessageFlags.Ephemeral });
+    }
   }
 
   if (action === 'streaming') {
@@ -1556,18 +1636,19 @@ async function handleProfileAction(interaction, action) {
     return submit.reply({ content: `**Streaming :** *تم حفظ الحالة \`${val || '(فارغة)'}\` — ستُطبَّق على البوتات الجديدة.*`, flags: MessageFlags.Ephemeral });
   }
 
-  if (action === 'applyall') {
-    const allBots = store.get('bots') || [];
-    const activeSubs = new Set((store.get('tokens') || []).map(t => t.token));
-    const stockBots = allBots.filter(b => !activeSubs.has(b.token));
+	  if (action === 'applyall') {
+	    const allBots = store.get('bots') || [];
+	    const activeSubs = new Set((store.get('tokens') || []).map(t => t.token));
+	    const stockBots = allBots.filter(b => !activeSubs.has(b.token));
 
-    if (stockBots.length === 0) return interaction.reply({ content: '**Apply :** *لا توجد بوتات حرة في الستوك (كلهم في اشتراكات).*', flags: MessageFlags.Ephemeral });
-
-    const secs = stockBots.length * 5;
-    const timeStr = `${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, '0')}`;
-    await interaction.reply({ content: `**Apply :** *جاري تطبيق الإعدادات على \`${stockBots.length}\` بوت حر في الستوك — الوقت المتوقع ~${timeStr} دقيقة.*`, flags: MessageFlags.Ephemeral });
-
-    const profile = subBotProfile();
+	    if (stockBots.length === 0) return interaction.reply({ content: '**Apply :** *لا توجد بوتات حرة في الستوك (كلهم في اشتراكات).*', flags: MessageFlags.Ephemeral });
+	
+	    const secs = stockBots.length * 5;
+	    const timeStr = `${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, '0')}`;
+	    await interaction.reply({ content: `**Apply :** *جاري تطبيق الإعدادات على \`${stockBots.length}\` بوت حر في الستوك — الوقت المتوقع ~${timeStr} دقيقة.*`, flags: MessageFlags.Ephemeral });
+	
+	    await ensureProfileImagesLocal().catch(() => {});
+	    const profile = subBotProfile();
     let assets = null;
     try {
       assets = await resolveProfileAssets(profile);

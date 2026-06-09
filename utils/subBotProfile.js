@@ -10,6 +10,13 @@ const { liftDiscordClientLimits } = require('./discordClientTuning');
 const AUTO_SETTINGS_FILE = path.join(process.cwd(), 'settings', 'automatic.json');
 const IMAGE_TIMEOUT_MS = Math.max(3000, Number(process.env.PROFILE_IMAGE_TIMEOUT_MS || 10000));
 const IMAGE_MAX_BYTES = Math.max(256 * 1024, Number(process.env.PROFILE_IMAGE_MAX_BYTES || 8 * 1024 * 1024));
+const IMAGE_MIME_BY_EXT = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
 
 function readAutomaticSettings() {
   try {
@@ -45,7 +52,23 @@ function assertHttpUrl(value, label = 'URL') {
 }
 
 async function fetchImageDataUri(rawUrl, label = 'Image') {
-  const url = assertHttpUrl(rawUrl, label);
+  const value = String(rawUrl || '').trim();
+  if (value.startsWith('data:image/')) return value;
+
+  if (!/^https?:\/\//i.test(value)) {
+    const filePath = path.isAbsolute(value) ? value : path.join(process.cwd(), value);
+    if (!fs.existsSync(filePath)) throw new Error(`${label} غير موجود محلياً.`);
+    const ext = path.extname(filePath).toLowerCase();
+    const contentType = IMAGE_MIME_BY_EXT[ext];
+    if (!contentType) throw new Error(`${label} ليس بصيغة صورة مدعومة.`);
+    const buffer = fs.readFileSync(filePath);
+    if (buffer.length > IMAGE_MAX_BYTES) {
+      throw new Error(`${label} كبير جداً. الحد ${Math.round(IMAGE_MAX_BYTES / 1024 / 1024)}MB.`);
+    }
+    return `data:${contentType};base64,${buffer.toString('base64')}`;
+  }
+
+  const url = assertHttpUrl(value, label);
   const response = await axios.get(url, {
     responseType: 'arraybuffer',
     timeout: IMAGE_TIMEOUT_MS,

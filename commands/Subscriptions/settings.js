@@ -28,10 +28,36 @@ const SETTINGS_DISTRIBUTION_BATCH_SIZE = Math.max(1, Number(process.env.SETTINGS
 const SETTINGS_IMAGE_TIMEOUT_MS = Math.max(3000, Number(process.env.SETTINGS_IMAGE_TIMEOUT_MS || 10000));
 const SETTINGS_IMAGE_MAX_BYTES = Math.max(256 * 1024, Number(process.env.SETTINGS_IMAGE_MAX_BYTES || 8 * 1024 * 1024));
 const SETTINGS_SELECT_PAGE_SIZE = 25;
-const SETTINGS_ROOMS_EMOJI = { id: '1484364982094266428' };
-const SETTINGS_OWNERS_EMOJI = { id: '1485476329171320855' };
+const SETTINGS_APPEARANCE_EMOJI_ID = '1512475944839942176';
+const SETTINGS_ROOMS_EMOJI_ID = '1484364982094266428';
+const SETTINGS_OWNERS_EMOJI_ID = '1485476329171320855';
+const SETTINGS_DISPLAY_EMOJI_ID = '1512475951844294867';
+const SETTINGS_PLATFORM_EMOJI_ID = '1512475949331906682';
 const activeSmartDistributions = new Set();
 const activeSettingsProcesses = new Set();
+
+function resolveSettingsEmoji(client, emojiId) {
+    const id = String(emojiId || '');
+    if (!id) return null;
+    const emoji = client?.emojis?.cache?.get?.(id) || client?.application?.emojis?.cache?.get?.(id);
+    if (!emoji) return null;
+    return {
+        id: emoji.id,
+        name: emoji.name || undefined,
+        animated: emoji.animated === true,
+    };
+}
+
+function settingsOption(client, option, emojiId) {
+    const emoji = resolveSettingsEmoji(client, emojiId);
+    return emoji ? { ...option, emoji } : option;
+}
+
+function setSettingsEmoji(client, component, emojiId) {
+    const emoji = resolveSettingsEmoji(client, emojiId);
+    if (emoji) component.setEmoji(emoji);
+    return component;
+}
 
 function assertHttpUrl(value, label = 'URL') {
     let parsed;
@@ -198,9 +224,13 @@ module.exports = {
 
 	        let selectedCode = uniqueCodes.length === 1 ? uniqueCodes[0] : null;
 
-	        const mainMsg = await message.reply({ content: 'جاري التحميل...', components: [] });
+		        const mainMsg = await message.reply({ content: 'جاري التحميل...', components: [] });
+		        await Promise.allSettled([
+		            message.guild?.emojis?.fetch?.(),
+		            client.application?.emojis?.fetch?.(),
+		        ]);
 
-	        const collector = mainMsg.createMessageComponentCollector({
+		        const collector = mainMsg.createMessageComponentCollector({
 	            filter: i => i.user.id === userId,
 	            time: 300000
 	        });
@@ -1743,20 +1773,20 @@ module.exports = {
 
                     embeds.push(embed);
 
-                    const row1 = new ActionRowBuilder().addComponents(
-                        new StringSelectMenuBuilder()
-                            .setCustomId(`stg_${mid}_main_menu`)
-                            .setPlaceholder('Select section')
-                            .addOptions([
-                                { label: 'Appearance', value: 'APPEARANCE', description: 'تغيير الصورة، البنر، والحالة لكل البوتات', emoji: { id: '1512475944839942176' } },
-	                                { label: 'Rooms', value: 'ROOMS', description: 'الغرف، التوزيع الذكي، الروابط، وشات الأوامر', emoji: SETTINGS_ROOMS_EMOJI },
-                                { label: 'Display', value: 'DISPLAY', description: 'تفعيل أو تعطيل الأزرار والإيمبد', emoji: { id: '1512475951844294867' } },
-                                { label: 'Platform', value: 'PLATFORM', description: 'اختيار منصة البحث والتشغيل', emoji: { id: '1512475949331906682' } },
-                                ...(canManageSubscriptionOwners(selectedCode)
-	                                    ? [{ label: 'Owners', value: 'OWNERS', description: 'إضافة وإزالة أونرز يتحكمون ببوتات الاشتراك', emoji: SETTINGS_OWNERS_EMOJI }]
-                                    : []),
-                            ])
-                    );
+	                    const row1 = new ActionRowBuilder().addComponents(
+	                        new StringSelectMenuBuilder()
+	                            .setCustomId(`stg_${mid}_main_menu`)
+	                            .setPlaceholder('Select section')
+	                            .addOptions([
+	                                settingsOption(client, { label: 'Appearance', value: 'APPEARANCE', description: 'تغيير الصورة، البنر، والحالة لكل البوتات' }, SETTINGS_APPEARANCE_EMOJI_ID),
+		                                settingsOption(client, { label: 'Rooms', value: 'ROOMS', description: 'الغرف، التوزيع الذكي، الروابط، وشات الأوامر' }, SETTINGS_ROOMS_EMOJI_ID),
+	                                settingsOption(client, { label: 'Display', value: 'DISPLAY', description: 'تفعيل أو تعطيل الأزرار والإيمبد' }, SETTINGS_DISPLAY_EMOJI_ID),
+	                                settingsOption(client, { label: 'Platform', value: 'PLATFORM', description: 'اختيار منصة البحث والتشغيل' }, SETTINGS_PLATFORM_EMOJI_ID),
+	                                ...(canManageSubscriptionOwners(selectedCode)
+		                                    ? [settingsOption(client, { label: 'Owners', value: 'OWNERS', description: 'إضافة وإزالة أونرز يتحكمون ببوتات الاشتراك' }, SETTINGS_OWNERS_EMOJI_ID)]
+	                                    : []),
+	                            ])
+	                    );
                     const row2 = new ActionRowBuilder().addComponents(
                         new ButtonBuilder().setCustomId(`stg_${mid}_close`).setLabel('Close').setStyle(ButtonStyle.Danger)
                     );
@@ -1800,11 +1830,11 @@ module.exports = {
                         .setColor(getEmbedColor(client));
                     embeds.push(embed);
 
-                    components.push(new ActionRowBuilder().addComponents(
-	                        new ButtonBuilder().setCustomId(`stg_${mid}_owner_add`).setLabel('Add Owner').setEmoji(SETTINGS_OWNERS_EMOJI).setStyle(ButtonStyle.Success),
-	                        new ButtonBuilder().setCustomId(`stg_${mid}_owner_remove`).setLabel('Remove Owner').setEmoji(SETTINGS_OWNERS_EMOJI).setStyle(ButtonStyle.Danger).setDisabled(subOwnerIds.length === 0),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary),
-                    ));
+	                    components.push(new ActionRowBuilder().addComponents(
+		                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_owner_add`).setLabel('Add Owner').setStyle(ButtonStyle.Success), SETTINGS_OWNERS_EMOJI_ID),
+		                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_owner_remove`).setLabel('Remove Owner').setStyle(ButtonStyle.Danger).setDisabled(subOwnerIds.length === 0), SETTINGS_OWNERS_EMOJI_ID),
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary),
+	                    ));
                 }
                 else if (currentPanel === 'APPEARANCE') {
 	                    const embed = new EmbedBuilder()
@@ -1813,13 +1843,13 @@ module.exports = {
                         .setColor(getEmbedColor(client));
                     embeds.push(embed);
 
-	                    const row = new ActionRowBuilder().addComponents(
-	                        new ButtonBuilder().setCustomId(`stg_${mid}_set_name`).setLabel('Name').setEmoji({ id: '1512475944839942176' }).setStyle(ButtonStyle.Secondary),
-	                        new ButtonBuilder().setCustomId(`stg_${mid}_set_avatar`).setLabel('Avatar').setEmoji({ id: '1512475944839942176' }).setStyle(ButtonStyle.Secondary),
-	                        new ButtonBuilder().setCustomId(`stg_${mid}_set_banner`).setLabel('Banner').setEmoji({ id: '1512475944839942176' }).setStyle(ButtonStyle.Secondary),
-	                        new ButtonBuilder().setCustomId(`stg_${mid}_set_status`).setLabel('Status').setEmoji({ id: '1512475944839942176' }).setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
-                    );
+		                    const row = new ActionRowBuilder().addComponents(
+		                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_name`).setLabel('Name').setStyle(ButtonStyle.Secondary), SETTINGS_APPEARANCE_EMOJI_ID),
+		                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_avatar`).setLabel('Avatar').setStyle(ButtonStyle.Secondary), SETTINGS_APPEARANCE_EMOJI_ID),
+		                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_banner`).setLabel('Banner').setStyle(ButtonStyle.Secondary), SETTINGS_APPEARANCE_EMOJI_ID),
+		                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_status`).setLabel('Status').setStyle(ButtonStyle.Secondary), SETTINGS_APPEARANCE_EMOJI_ID),
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+	                    );
                     components.push(row);
                 }
                         else if (currentPanel === 'DISPLAY') {
@@ -1830,19 +1860,17 @@ module.exports = {
                                 .setColor(getEmbedColor(client));
                     embeds.push(embed);
 
-                    const row = new ActionRowBuilder().addComponents(
-                                new ButtonBuilder()
-                                    .setCustomId(`stg_${mid}_toggle_buttons`)
-                                    .setLabel(`Buttons: ${display.buttons ? 'ON' : 'OFF'}`)
-                                    .setEmoji({ id: '1512475951844294867' })
-                                    .setStyle(display.buttons ? ButtonStyle.Success : ButtonStyle.Danger),
-                                new ButtonBuilder()
-                                    .setCustomId(`stg_${mid}_toggle_embeds`)
-                                    .setLabel(`Embeds: ${display.embeds ? 'ON' : 'OFF'}`)
-                                    .setEmoji({ id: '1512475951844294867' })
-                                    .setStyle(display.embeds ? ButtonStyle.Success : ButtonStyle.Danger),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
-                    );
+	                    const row = new ActionRowBuilder().addComponents(
+	                                setSettingsEmoji(client, new ButtonBuilder()
+	                                    .setCustomId(`stg_${mid}_toggle_buttons`)
+	                                    .setLabel(`Buttons: ${display.buttons ? 'ON' : 'OFF'}`)
+	                                    .setStyle(display.buttons ? ButtonStyle.Success : ButtonStyle.Danger), SETTINGS_DISPLAY_EMOJI_ID),
+	                                setSettingsEmoji(client, new ButtonBuilder()
+	                                    .setCustomId(`stg_${mid}_toggle_embeds`)
+	                                    .setLabel(`Embeds: ${display.embeds ? 'ON' : 'OFF'}`)
+	                                    .setStyle(display.embeds ? ButtonStyle.Success : ButtonStyle.Danger), SETTINGS_DISPLAY_EMOJI_ID),
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+	                    );
                     components.push(row);
                 }
                 else if (currentPanel === 'PLATFORM') {
@@ -1902,19 +1930,19 @@ module.exports = {
 
                                     const roomsMenu = new StringSelectMenuBuilder()
                                         .setCustomId(`stg_${mid}_rooms_menu`)
-                                        .setPlaceholder('Select option')
-                                        .addOptions([
-                                            { label: 'Voice Status', value: 'voice_status', description: 'عرض مكان كل بوت في الرومات', emoji: SETTINGS_ROOMS_EMOJI },
-                                            { label: 'Smart Distribution', value: 'distribute', description: 'توزيع البوتات على نطاق رومات', emoji: SETTINGS_ROOMS_EMOJI },
-                                            { label: 'Move Idle', value: 'moveidle', description: 'تحريك البوتات الخاملة إلى روم', emoji: SETTINGS_ROOMS_EMOJI },
-                                            { label: `Back to Voice : ${backVoice.enabled ? 'ON' : 'OFF'}`, value: 'toggle_back_voice', description: 'تفعيل أو تعطيل الرجوع التلقائي للروم', emoji: SETTINGS_ROOMS_EMOJI },
-                                            { label: `Voice Status : ${display.voiceStatus ? 'ON' : 'OFF'}`, value: 'toggle_voice_status', description: 'تفعيل أو تعطيل كتابة اسم الأغنية على Status', emoji: SETTINGS_ROOMS_EMOJI },
-                                            { label: 'Command Chat', value: 'panel_chat', description: 'تحديد الشات الذي يستقبل الأوامر', emoji: SETTINGS_ROOMS_EMOJI },
-                                            { label: 'Status Emoji', value: 'voice_status_emoji', description: 'تغيير إيموجي Status الروم', emoji: SETTINGS_ROOMS_EMOJI },
-                                            { label: 'Pin Room', value: 'pin_room', description: 'تثبيت كل البوتات في روم واحد', emoji: SETTINGS_ROOMS_EMOJI },
-                                            { label: 'All Links', value: 'links_all', description: 'روابط دعوة كل البوتات', emoji: SETTINGS_ROOMS_EMOJI },
-                                            { label: 'Outside Server', value: 'links_out', description: 'روابط البوتات الموجودة خارج السيرفر', emoji: SETTINGS_ROOMS_EMOJI },
-                                        ]);
+	                                        .setPlaceholder('Select option')
+	                                        .addOptions([
+	                                            settingsOption(client, { label: 'Voice Status', value: 'voice_status', description: 'عرض مكان كل بوت في الرومات' }, SETTINGS_ROOMS_EMOJI_ID),
+	                                            settingsOption(client, { label: 'Smart Distribution', value: 'distribute', description: 'توزيع البوتات على نطاق رومات' }, SETTINGS_ROOMS_EMOJI_ID),
+	                                            settingsOption(client, { label: 'Move Idle', value: 'moveidle', description: 'تحريك البوتات الخاملة إلى روم' }, SETTINGS_ROOMS_EMOJI_ID),
+	                                            settingsOption(client, { label: `Back to Voice : ${backVoice.enabled ? 'ON' : 'OFF'}`, value: 'toggle_back_voice', description: 'تفعيل أو تعطيل الرجوع التلقائي للروم' }, SETTINGS_ROOMS_EMOJI_ID),
+	                                            settingsOption(client, { label: `Voice Status : ${display.voiceStatus ? 'ON' : 'OFF'}`, value: 'toggle_voice_status', description: 'تفعيل أو تعطيل كتابة اسم الأغنية على Status' }, SETTINGS_ROOMS_EMOJI_ID),
+	                                            settingsOption(client, { label: 'Command Chat', value: 'panel_chat', description: 'تحديد الشات الذي يستقبل الأوامر' }, SETTINGS_ROOMS_EMOJI_ID),
+	                                            settingsOption(client, { label: 'Status Emoji', value: 'voice_status_emoji', description: 'تغيير إيموجي Status الروم' }, SETTINGS_ROOMS_EMOJI_ID),
+	                                            settingsOption(client, { label: 'Pin Room', value: 'pin_room', description: 'تثبيت كل البوتات في روم واحد' }, SETTINGS_ROOMS_EMOJI_ID),
+	                                            settingsOption(client, { label: 'All Links', value: 'links_all', description: 'روابط دعوة كل البوتات' }, SETTINGS_ROOMS_EMOJI_ID),
+	                                            settingsOption(client, { label: 'Outside Server', value: 'links_out', description: 'روابط البوتات الموجودة خارج السيرفر' }, SETTINGS_ROOMS_EMOJI_ID),
+	                                        ]);
                                     const roomsRow1 = new ActionRowBuilder().addComponents(roomsMenu);
                                     const roomsRow2 = new ActionRowBuilder().addComponents(
                                         new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
