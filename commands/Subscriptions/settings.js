@@ -29,8 +29,8 @@ const SETTINGS_IMAGE_TIMEOUT_MS = Math.max(3000, Number(process.env.SETTINGS_IMA
 const SETTINGS_IMAGE_MAX_BYTES = Math.max(256 * 1024, Number(process.env.SETTINGS_IMAGE_MAX_BYTES || 8 * 1024 * 1024));
 const SETTINGS_SELECT_PAGE_SIZE = 25;
 const SETTINGS_APPEARANCE_EMOJI_ID = '1512475944839942176';
-const SETTINGS_ROOMS_EMOJI_ID = '1484364982094266428';
-const SETTINGS_OWNERS_EMOJI_ID = '1485476329171320855';
+const SETTINGS_ROOMS_EMOJI_ID = '1485476329171320855';
+const SETTINGS_OWNERS_EMOJI_ID = '1484364982094266428';
 const SETTINGS_DISPLAY_EMOJI_ID = '1512475951844294867';
 const SETTINGS_PLATFORM_EMOJI_ID = '1512475949331906682';
 const activeSmartDistributions = new Set();
@@ -222,80 +222,80 @@ module.exports = {
             return message.reply('❌ لا يوجد لديك اشتراكات نشطة.');
         }
 
-	        let selectedCode = uniqueCodes.length === 1 ? uniqueCodes[0] : null;
+                let selectedCode = uniqueCodes.length === 1 ? uniqueCodes[0] : null;
 
-		        const mainMsg = await message.reply({ content: 'جاري التحميل...', components: [] });
-		        await Promise.allSettled([
-		            message.guild?.emojis?.fetch?.(),
-		            client.application?.emojis?.fetch?.(),
-		        ]);
+                        const mainMsg = await message.reply({ content: 'جاري التحميل...', components: [] });
+                        await Promise.allSettled([
+                            message.guild?.emojis?.fetch?.(),
+                            client.application?.emojis?.fetch?.(),
+                        ]);
 
-		        const collector = mainMsg.createMessageComponentCollector({
-	            filter: i => i.user.id === userId,
-	            time: 300000
-	        });
+                        const collector = mainMsg.createMessageComponentCollector({
+                    filter: i => i.user.id === userId,
+                    time: 300000
+                });
 
-	        // Current panel state
-	        let currentPanel = 'SELECT';
-	        if (selectedCode) currentPanel = 'MAIN';
-		        let selectPage = 0;
-		        let activeDistributionCollector = null;
-		        let activeDistributionState = null;
-		        let activeChildCollector = null;
-		        let modalSeq = 0;
-		        const pendingModalContexts = new Map();
+                // Current panel state
+                let currentPanel = 'SELECT';
+                if (selectedCode) currentPanel = 'MAIN';
+                        let selectPage = 0;
+                        let activeDistributionCollector = null;
+                        let activeDistributionState = null;
+                        let activeChildCollector = null;
+                        let modalSeq = 0;
+                        const pendingModalContexts = new Map();
 
-	        function replaceChildCollector(nextCollector) {
-	            if (activeChildCollector && activeChildCollector !== nextCollector) {
-	                activeChildCollector.stop('replaced');
-	            }
-	            activeChildCollector = nextCollector;
-	            nextCollector.on('end', () => {
-	                if (activeChildCollector === nextCollector) activeChildCollector = null;
-	            });
-	        }
+                function replaceChildCollector(nextCollector) {
+                    if (activeChildCollector && activeChildCollector !== nextCollector) {
+                        activeChildCollector.stop('replaced');
+                    }
+                    activeChildCollector = nextCollector;
+                    nextCollector.on('end', () => {
+                        if (activeChildCollector === nextCollector) activeChildCollector = null;
+                    });
+                }
 
-		        function stopChildCollector(reason = 'replaced') {
-		            if (!activeChildCollector) return;
-		            const current = activeChildCollector;
-		            activeChildCollector = null;
-		            current.stop(reason);
-		        }
+                        function stopChildCollector(reason = 'replaced') {
+                            if (!activeChildCollector) return;
+                            const current = activeChildCollector;
+                            activeChildCollector = null;
+                            current.stop(reason);
+                        }
 
-		        function createSettingsModalId(type, context = {}) {
-		            const customId = `stg_mod_${mid}_${type}_${++modalSeq}`;
-		            pendingModalContexts.set(customId, {
-		                type,
-		                code: context.code || selectedCode,
-		                createdAt: Date.now(),
-		            });
-		            return customId;
-		        }
+                        function createSettingsModalId(type, context = {}) {
+                            const customId = `stg_mod_${mid}_${type}_${++modalSeq}`;
+                            pendingModalContexts.set(customId, {
+                                type,
+                                code: context.code || selectedCode,
+                                createdAt: Date.now(),
+                            });
+                            return customId;
+                        }
 
-		        function consumeSettingsModalContext(customId) {
-		            const context = pendingModalContexts.get(customId);
-		            if (context) {
-		                pendingModalContexts.delete(customId);
-		                return context;
-		            }
+                        function consumeSettingsModalContext(customId) {
+                            const context = pendingModalContexts.get(customId);
+                            if (context) {
+                                pendingModalContexts.delete(customId);
+                                return context;
+                            }
 
-		            const prefix = `stg_mod_${mid}_`;
-		            if (!customId.startsWith(prefix)) return null;
+                            const prefix = `stg_mod_${mid}_`;
+                            if (!customId.startsWith(prefix)) return null;
 
-		            const rest = customId.slice(prefix.length);
-		            const legacyTypes = [
-		                'voice_status_emoji',
-		                'owner_remove',
-		                'owner_add',
-		                'dist_prefix',
-		                'moveidle',
-		                'avatar',
-		                'banner',
-		                'status',
-		            ];
-		            const type = legacyTypes.find(name => rest === name || rest.startsWith(`${name}_`));
-		            return type ? { type, code: selectedCode, legacy: true } : null;
-		        }
+                            const rest = customId.slice(prefix.length);
+                            const legacyTypes = [
+                                'voice_status_emoji',
+                                'owner_remove',
+                                'owner_add',
+                                'dist_prefix',
+                                'moveidle',
+                                'avatar',
+                                'banner',
+                                'status',
+                            ];
+                            const type = legacyTypes.find(name => rest === name || rest.startsWith(`${name}_`));
+                            return type ? { type, code: selectedCode, legacy: true } : null;
+                        }
 
         function getClientId(token) {
             try { return Buffer.from(token.split('.')[0], 'base64').toString('utf8'); } catch { return ''; }
@@ -321,33 +321,33 @@ module.exports = {
                     return t?.awaitingReplacement || t?.invalidTokenNotifiedAt || t?.invalidBotId;
                 }
 
-		                function getSelectedTokens(options = {}) {
-		                    tokens = store.get('tokens') || [];
-		                    const code = options.code || selectedCode;
-		                    const selected = tokens.filter(t => t.code === code);
-		                    return options.includeWaiting ? selected : selected.filter(t => !isWaitingReplacement(t));
-		                }
+                                function getSelectedTokens(options = {}) {
+                                    tokens = store.get('tokens') || [];
+                                    const code = options.code || selectedCode;
+                                    const selected = tokens.filter(t => t.code === code);
+                                    return options.includeWaiting ? selected : selected.filter(t => !isWaitingReplacement(t));
+                                }
 
-		                function subscriptionServerIdFor(code = selectedCode) {
-		                    const selected = getSelectedTokens({ code, includeWaiting: true });
-		                    const tokenServer = selected.find(t => t.Server)?.Server;
-		                    if (tokenServer) return tokenServer;
-		                    const timeData = store.get('time') || [];
-		                    return timeData.find(t => t.code === code)?.server || null;
-		                }
+                                function subscriptionServerIdFor(code = selectedCode) {
+                                    const selected = getSelectedTokens({ code, includeWaiting: true });
+                                    const tokenServer = selected.find(t => t.Server)?.Server;
+                                    if (tokenServer) return tokenServer;
+                                    const timeData = store.get('time') || [];
+                                    return timeData.find(t => t.code === code)?.server || null;
+                                }
 
-		                async function requireSubscriptionGuild(interaction, label = 'هذا الخيار', code = selectedCode) {
-		                    const serverId = subscriptionServerIdFor(code);
-		                    if (!serverId || message.guild?.id === serverId) return true;
+                                async function requireSubscriptionGuild(interaction, label = 'هذا الخيار', code = selectedCode) {
+                                    const serverId = subscriptionServerIdFor(code);
+                                    if (!serverId || message.guild?.id === serverId) return true;
 
-		                    const content = `⚠️ ${label} يجب استخدامه داخل سيرفر الاشتراك.\nالسيرفر الصحيح: \`${serverId}\``;
-		                    if (interaction.replied || interaction.deferred) {
-		                        await mainMsg.edit({ content, embeds: [], components: [] }).catch(() => {});
-		                    } else {
-		                        await interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => {});
-		                    }
-		                    return false;
-		                }
+                                    const content = `⚠️ ${label} يجب استخدامه داخل سيرفر الاشتراك.\nالسيرفر الصحيح: \`${serverId}\``;
+                                    if (interaction.replied || interaction.deferred) {
+                                        await mainMsg.edit({ content, embeds: [], components: [] }).catch(() => {});
+                                    } else {
+                                        await interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => {});
+                                    }
+                                    return false;
+                                }
 
                 function isVoiceChannel(channel) {
                     return channel?.type === ChannelType.GuildVoice || channel?.type === 2;
@@ -391,21 +391,21 @@ module.exports = {
                     };
                 }
 
-	                async function showMoveIdleModal(interaction, code = selectedCode) {
-	                    if (!(await requireSubscriptionGuild(interaction, 'Move Idle', code))) return;
+                        async function showMoveIdleModal(interaction, code = selectedCode) {
+                            if (!(await requireSubscriptionGuild(interaction, 'Move Idle', code))) return;
 
-	                    const idleBots = getSelectedTokens({ code }).filter(t => {
-	                        const info = getBotVoiceInfo(t);
-	                        return info.inServer && !info.inRoom;
-	                    });
+                            const idleBots = getSelectedTokens({ code }).filter(t => {
+                                const info = getBotVoiceInfo(t);
+                                return info.inServer && !info.inRoom;
+                            });
 
                     if (idleBots.length === 0) {
                         return interaction.reply({ content: '✅ لا يوجد بوتات خاملة — كلها في رومات.', flags: MessageFlags.Ephemeral });
                     }
 
-	                    const modal = new ModalBuilder()
-	                        .setCustomId(createSettingsModalId('moveidle', { code }))
-	                        .setTitle(`Move ${idleBots.length} Idle Bots`);
+                            const modal = new ModalBuilder()
+                                .setCustomId(createSettingsModalId('moveidle', { code }))
+                                .setTitle(`Move ${idleBots.length} Idle Bots`);
                     modal.addComponents(
                         new ActionRowBuilder().addComponents(
                             new TextInputBuilder()
@@ -419,8 +419,8 @@ module.exports = {
                     return interaction.showModal(modal);
                 }
 
-	                function distributionBuckets(code = selectedCode) {
-	                    const selectedTokens = getSelectedTokens({ code });
+                        function distributionBuckets(code = selectedCode) {
+                            const selectedTokens = getSelectedTokens({ code });
                     const available = [];
                     const idle = [];
                     const inRoom = [];
@@ -452,8 +452,8 @@ module.exports = {
                     return { available, idle, inRoom, grouped };
                 }
 
-	                function distributionTargets(scope, code = selectedCode) {
-	                    const buckets = distributionBuckets(code);
+                        function distributionTargets(scope, code = selectedCode) {
+                            const buckets = distributionBuckets(code);
                     if (scope === 'idle') return buckets.idle.map(entry => entry.token);
                     if (scope === 'grouped') return buckets.grouped.map(entry => entry.token);
                     if (scope === 'in_room') return buckets.inRoom.map(entry => entry.token);
@@ -663,24 +663,24 @@ module.exports = {
                                 .setColor(getEmbedColor(client));
                         }
 
-	                        async function runBotProcess(title, targetTokens, action, options = {}) {
-	                            const processCode = options.code || selectedCode || 'unknown';
-	                            const processKey = `process:${processCode}`;
-	                            const smartKey = `smart:${processCode}`;
-	                            if (activeSettingsProcesses.has(processKey) || activeSmartDistributions.has(smartKey)) {
-	                                await mainMsg.edit({
-	                                    content: `<@${userId}>`,
-	                                    embeds: [buildDistributionEmbed(title, 'توجد عملية أخرى تعمل حالياً لهذا الاشتراك. انتظر حتى تنتهي ثم حاول مرة أخرى.')],
-	                                    components: [],
-	                                    allowedMentions: { users: [userId] },
-	                                }).catch(() => {});
-	                                return { ok: 0, failed: 0, total: 0, lines: [], locked: true };
-	                            }
-	                            activeSettingsProcesses.add(processKey);
-	                            const targets = uniqueTokensByToken(targetTokens).filter(Boolean);
-	                            let done = 0;
-	                            let ok = 0;
-	                            let failed = 0;
+                                async function runBotProcess(title, targetTokens, action, options = {}) {
+                                    const processCode = options.code || selectedCode || 'unknown';
+                                    const processKey = `process:${processCode}`;
+                                    const smartKey = `smart:${processCode}`;
+                                    if (activeSettingsProcesses.has(processKey) || activeSmartDistributions.has(smartKey)) {
+                                        await mainMsg.edit({
+                                            content: `<@${userId}>`,
+                                            embeds: [buildDistributionEmbed(title, 'توجد عملية أخرى تعمل حالياً لهذا الاشتراك. انتظر حتى تنتهي ثم حاول مرة أخرى.')],
+                                            components: [],
+                                            allowedMentions: { users: [userId] },
+                                        }).catch(() => {});
+                                        return { ok: 0, failed: 0, total: 0, lines: [], locked: true };
+                                    }
+                                    activeSettingsProcesses.add(processKey);
+                                    const targets = uniqueTokensByToken(targetTokens).filter(Boolean);
+                                    let done = 0;
+                                    let ok = 0;
+                                    let failed = 0;
                             const lines = [];
                             const concurrency = Math.max(1, Number(options.concurrency || SETTINGS_PROCESS_CONCURRENCY));
                             const startedAt = Date.now();
@@ -713,39 +713,39 @@ module.exports = {
                                 }
                             };
 
-	                            try {
-	                                await mainMsg.edit({
-	                                    content: `<@${userId}>`,
-	                                    embeds: [buildProcessEmbed(title, 0, targets.length, 0, 0, [], progressMeta)],
-	                                    components: [],
-	                                    allowedMentions: { users: [userId] },
-	                                }).catch(() => {});
+                                    try {
+                                        await mainMsg.edit({
+                                            content: `<@${userId}>`,
+                                            embeds: [buildProcessEmbed(title, 0, targets.length, 0, 0, [], progressMeta)],
+                                            components: [],
+                                            allowedMentions: { users: [userId] },
+                                        }).catch(() => {});
 
-	                                await runLimited(targets, concurrency, async (t, index) => {
-	                                    const bot = runningBots.get(t.token);
-	                                    const mention = bot?.user?.id ? `<@${bot.user.id}>` : `\`${t.invalidBotName || 'Offline bot'}\``;
+                                        await runLimited(targets, concurrency, async (t, index) => {
+                                            const bot = runningBots.get(t.token);
+                                            const mention = bot?.user?.id ? `<@${bot.user.id}>` : `\`${t.invalidBotName || 'Offline bot'}\``;
 
-	                                    try {
-	                                        await action(t, bot, index);
-	                                        ok++;
-	                                        pushLine(`✅ ${mention} done`);
-	                                    } catch (err) {
-	                                        failed++;
-	                                        pushLine(`❌ ${mention} ${String(err?.message || 'failed').slice(0, 80)}`);
-	                                    }
+                                            try {
+                                                await action(t, bot, index);
+                                                ok++;
+                                                pushLine(`✅ ${mention} done`);
+                                            } catch (err) {
+                                                failed++;
+                                                pushLine(`❌ ${mention} ${String(err?.message || 'failed').slice(0, 80)}`);
+                                            }
 
-	                                    done++;
-	                                    await renderProgress(false);
-	                                });
+                                            done++;
+                                            await renderProgress(false);
+                                        });
 
-	                                while (editing) await wait(100);
-	                                await renderProgress(true);
+                                        while (editing) await wait(100);
+                                        await renderProgress(true);
 
-	                                return { ok, failed, total: targets.length, lines };
-		                            } finally {
-		                                activeSettingsProcesses.delete(processKey);
-		                            }
-		                        }
+                                        return { ok, failed, total: targets.length, lines };
+                                            } finally {
+                                                activeSettingsProcesses.delete(processKey);
+                                            }
+                                        }
 
                         function getTwitchUrl() {
                             return Array.isArray(TwitchUrl) ? TwitchUrl[0] : TwitchUrl;
@@ -908,12 +908,12 @@ module.exports = {
                             };
                         }
 
-	                        async function executeSmartDistribution(interaction, state) {
-	                            const code = state.code || selectedCode;
-	                            const targets = distributionTargets(state.scope, code);
-	                            if (targets.length === 0) {
-	                                return interaction.update({
-	                                    content: '',
+                                async function executeSmartDistribution(interaction, state) {
+                                    const code = state.code || selectedCode;
+                                    const targets = distributionTargets(state.scope, code);
+                                    if (targets.length === 0) {
+                                        return interaction.update({
+                                            content: '',
                                     embeds: [buildDistributionEmbed('Smart Distribution', 'لا توجد بوتات مناسبة لهذا الخيار حالياً.')],
                                     components: [new ActionRowBuilder().addComponents(
                                         new ButtonBuilder().setCustomId(`stg_dist_${mid}_back_rooms`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
@@ -921,8 +921,8 @@ module.exports = {
                                 });
                             }
 
-	                            const lockKey = `smart:${code}`;
-	                            const processKey = `process:${code}`;
+                                    const lockKey = `smart:${code}`;
+                                    const processKey = `process:${code}`;
                             if (activeSmartDistributions.has(lockKey) || activeSettingsProcesses.has(processKey)) {
                                 const payload = {
                                     content: '',
@@ -1034,7 +1034,7 @@ module.exports = {
                             };
 
                             try {
-	                                const targetChannels = await getDistributionChannels(state.firstChannelId, state.lastChannelId);
+                                        const targetChannels = await getDistributionChannels(state.firstChannelId, state.lastChannelId);
                                 const plan = buildDistributionPlan(targets, targetChannels);
                                 plannedTotal = plan.bots.length;
                                 plannedRooms = plan.rooms.length;
@@ -1181,23 +1181,23 @@ module.exports = {
                                     components: [],
                                     allowedMentions: { users: [interaction.user.id] },
                                 });
-	                            } finally {
-	                                activeSmartDistributions.delete(lockKey);
-	                                if (activeDistributionState === state) activeDistributionState = null;
-	                                setTimeout(() => updatePanel(), 5000);
-	                            }
-	                        }
+                                    } finally {
+                                        activeSmartDistributions.delete(lockKey);
+                                        if (activeDistributionState === state) activeDistributionState = null;
+                                        setTimeout(() => updatePanel(), 5000);
+                                    }
+                                }
 
-	                async function startSmartDistribution(interaction) {
-		                    stopChildCollector('replaced');
-		                    const code = selectedCode;
-		                    if (!(await requireSubscriptionGuild(interaction, 'التوزيع الذكي', code))) return;
+                        async function startSmartDistribution(interaction) {
+                                    stopChildCollector('replaced');
+                                    const code = selectedCode;
+                                    if (!(await requireSubscriptionGuild(interaction, 'التوزيع الذكي', code))) return;
 
-	                    if (activeDistributionCollector) activeDistributionCollector.stop('restart');
+                            if (activeDistributionCollector) activeDistributionCollector.stop('restart');
 
-		                    const state = {
-		                        code,
-		                        scope: null,
+                                    const state = {
+                                        code,
+                                        scope: null,
                         firstChannelId: null,
                         lastChannelId: null,
                         mode: null,
@@ -1206,10 +1206,10 @@ module.exports = {
                     };
                     activeDistributionState = state;
 
-	                    const renderScope = async (i = interaction) => {
-	                        const buckets = distributionBuckets(state.code);
-	                        const embed = buildDistributionEmbed(
-	                            `Smart Distribution — ${state.code}`,
+                            const renderScope = async (i = interaction) => {
+                                const buckets = distributionBuckets(state.code);
+                                const embed = buildDistributionEmbed(
+                                    `Smart Distribution — ${state.code}`,
                             'اختر نوع البوتات التي تريد توزيعها أولاً.',
                             [
                                 { name: 'Idle Bots', value: `\`${buckets.idle.length}\``, inline: true },
@@ -1291,31 +1291,31 @@ module.exports = {
                         });
                     };
 
-	                    const renderMode = async (i) => {
-	                        let previewLines = [];
-	                        try {
-	                            const previewChannels = await getDistributionChannels(state.firstChannelId, state.lastChannelId);
-	                            const previewPlan = buildDistributionPlan(distributionTargets(state.scope, state.code), previewChannels);
-	                            previewLines = [
-	                                `**Available Bots :** *\`${previewPlan.bots.length}\`*`,
-	                                `**Selected Rooms :** *\`${previewPlan.rooms.length}\`*`,
-	                                `**Will Move :** *\`${previewPlan.assignments.length}\`*`,
-	                                `**Extra Bots :** *\`${previewPlan.unusedBots.length}\`*`,
-	                                `**Extra Rooms :** *\`${previewPlan.unusedRooms.length}\`*`,
-	                            ];
-	                        } catch (err) {
-	                            return i.update({
-	                                content: '',
-	                                embeds: [buildDistributionEmbed('Smart Distribution', `تعذر تجهيز مدى الرومات.\n\n**الخطأ:** ${err.message}`)],
-	                                components: [new ActionRowBuilder().addComponents(
-	                                    new ButtonBuilder().setCustomId(`stg_dist_${mid}_last_back`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
-	                                )],
-	                            });
-	                        }
+                            const renderMode = async (i) => {
+                                let previewLines = [];
+                                try {
+                                    const previewChannels = await getDistributionChannels(state.firstChannelId, state.lastChannelId);
+                                    const previewPlan = buildDistributionPlan(distributionTargets(state.scope, state.code), previewChannels);
+                                    previewLines = [
+                                        `**Available Bots :** *\`${previewPlan.bots.length}\`*`,
+                                        `**Selected Rooms :** *\`${previewPlan.rooms.length}\`*`,
+                                        `**Will Move :** *\`${previewPlan.assignments.length}\`*`,
+                                        `**Extra Bots :** *\`${previewPlan.unusedBots.length}\`*`,
+                                        `**Extra Rooms :** *\`${previewPlan.unusedRooms.length}\`*`,
+                                    ];
+                                } catch (err) {
+                                    return i.update({
+                                        content: '',
+                                        embeds: [buildDistributionEmbed('Smart Distribution', `تعذر تجهيز مدى الرومات.\n\n**الخطأ:** ${err.message}`)],
+                                        components: [new ActionRowBuilder().addComponents(
+                                            new ButtonBuilder().setCustomId(`stg_dist_${mid}_last_back`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+                                        )],
+                                    });
+                                }
 
-	                        const select = new StringSelectMenuBuilder()
-	                            .setCustomId(`stg_dist_${mid}_mode`)
-	                            .setPlaceholder('Select naming mode')
+                                const select = new StringSelectMenuBuilder()
+                                    .setCustomId(`stg_dist_${mid}_mode`)
+                                    .setPlaceholder('Select naming mode')
                             .addOptions([
                                 { label: 'Room Names', value: 'names', description: 'يسمي كل بوت باسم الروم (اختياري : مع أرقام)' },
                                 { label: 'Numbered Names', value: 'numbers', description: 'اسم مخصص + رقم: Ahmed1, Ahmed2 أو أرقام فقط: 1, 2, 3' },
@@ -1331,17 +1331,17 @@ module.exports = {
                             embeds: [buildDistributionEmbed(
                                 'Smart Distribution',
                                 [
-	                                    `النطاق: **${state.scope === 'idle' ? 'الخاملين' : state.scope === 'grouped' ? 'المتجمعين' : 'الكل'}**`,
-	                                    `الرومات: <#${state.firstChannelId}> → <#${state.lastChannelId}>`,
-	                                    '',
-	                                    '**خطة التوزيع:**',
-	                                    ...previewLines,
-	                                    '',
-	                                    '**قاعدة الأمان:** بوت واحد لكل روم، ولا يتم تكديس الزائد.',
-	                                    '',
-	                                    'اختر وضع التسمية.',
-	                                ].join('\n')
-	                            )],
+                                            `النطاق: **${state.scope === 'idle' ? 'الخاملين' : state.scope === 'grouped' ? 'المتجمعين' : 'الكل'}**`,
+                                            `الرومات: <#${state.firstChannelId}> → <#${state.lastChannelId}>`,
+                                            '',
+                                            '**خطة التوزيع:**',
+                                            ...previewLines,
+                                            '',
+                                            '**قاعدة الأمان:** بوت واحد لكل روم، ولا يتم تكديس الزائد.',
+                                            '',
+                                            'اختر وضع التسمية.',
+                                        ].join('\n')
+                                    )],
                             components: [row, back],
                         });
                     };
@@ -1368,10 +1368,10 @@ module.exports = {
                         });
                     };
 
-	                    const showNumbersModal = async (i) => {
-	                        const modal = new ModalBuilder()
-	                            .setCustomId(createSettingsModalId('dist_prefix', { code: state.code }))
-	                            .setTitle('Numbered Names — Bot Names');
+                            const showNumbersModal = async (i) => {
+                                const modal = new ModalBuilder()
+                                    .setCustomId(createSettingsModalId('dist_prefix', { code: state.code }))
+                                    .setTitle('Numbered Names — Bot Names');
                         modal.addComponents(new ActionRowBuilder().addComponents(
                             new TextInputBuilder()
                                 .setCustomId('prefix')
@@ -1386,12 +1386,12 @@ module.exports = {
 
                     await renderScope();
 
-	                    const distCollector = mainMsg.createMessageComponentCollector({
-	                        filter: i => i.user.id === userId && i.customId.startsWith(`stg_dist_${mid}_`),
-	                        time: 180000,
-	                    });
-	                    activeDistributionCollector = distCollector;
-	                    replaceChildCollector(distCollector);
+                            const distCollector = mainMsg.createMessageComponentCollector({
+                                filter: i => i.user.id === userId && i.customId.startsWith(`stg_dist_${mid}_`),
+                                time: 180000,
+                            });
+                            activeDistributionCollector = distCollector;
+                            replaceChildCollector(distCollector);
 
                     distCollector.on('collect', async i => {
                         if (i.customId === `stg_dist_${mid}_back_rooms`) {
@@ -1420,10 +1420,10 @@ module.exports = {
                             return renderFirstChannel(i);
                         }
 
-	                        if (i.customId === `stg_dist_${mid}_scope`) {
-	                            state.scope = i.values[0];
-	                            const buckets = distributionBuckets(state.code);
-	                            const targets = distributionTargets(state.scope, state.code);
+                                if (i.customId === `stg_dist_${mid}_scope`) {
+                                    state.scope = i.values[0];
+                                    const buckets = distributionBuckets(state.code);
+                                    const targets = distributionTargets(state.scope, state.code);
 
                             if (state.scope === 'idle' && targets.length === 0 && buckets.available.length > 0 && buckets.available.length === buckets.inRoom.length) {
                                 return renderNoIdleWarning(i);
@@ -1480,24 +1480,24 @@ module.exports = {
                         }
                     });
 
-	                    distCollector.on('end', (_, reason) => {
-	                        if (activeDistributionCollector === distCollector) activeDistributionCollector = null;
-	                        if (reason !== 'execute' && activeDistributionState === state) activeDistributionState = null;
-	                        if (reason === 'time') mainMsg.edit({ components: disableRows(mainMsg.components) }).catch(() => {});
-	                    });
-	                }
+                            distCollector.on('end', (_, reason) => {
+                                if (activeDistributionCollector === distCollector) activeDistributionCollector = null;
+                                if (reason !== 'execute' && activeDistributionState === state) activeDistributionState = null;
+                                if (reason === 'time') mainMsg.edit({ components: disableRows(mainMsg.components) }).catch(() => {});
+                            });
+                        }
 
-		                async function startPinRoom(interaction) {
-		                    stopChildCollector('replaced');
-		                    const code = selectedCode;
-		                    if (!(await requireSubscriptionGuild(interaction, 'تثبيت الروم', code))) return;
+                                async function startPinRoom(interaction) {
+                                    stopChildCollector('replaced');
+                                    const code = selectedCode;
+                                    if (!(await requireSubscriptionGuild(interaction, 'تثبيت الروم', code))) return;
 
-	                    const state = { code, scope: null, channelId: null };
+                            const state = { code, scope: null, channelId: null };
 
-	                    const renderScope = async (i = interaction) => {
-	                        const buckets = distributionBuckets(state.code);
-	                        const embed = buildDistributionEmbed(
-	                            `Pin Bots To Room — ${state.code}`,
+                            const renderScope = async (i = interaction) => {
+                                const buckets = distributionBuckets(state.code);
+                                const embed = buildDistributionEmbed(
+                                    `Pin Bots To Room — ${state.code}`,
                             'اختر مجموعة البوتات التي تريد تثبيتها كلها في روم واحد.',
                             [
                                 { name: 'Idle', value: `\`${buckets.idle.length}\``, inline: true },
@@ -1527,8 +1527,8 @@ module.exports = {
                         });
                     };
 
-	                    const renderChannel = async (i) => {
-	                        const targets = distributionTargets(state.scope, state.code);
+                            const renderChannel = async (i) => {
+                                const targets = distributionTargets(state.scope, state.code);
                         if (!targets.length) {
                             return i.update({
                                 content: '',
@@ -1561,11 +1561,11 @@ module.exports = {
 
                     await renderScope();
 
-	                    const pinCollector = mainMsg.createMessageComponentCollector({
-	                        filter: i => i.user.id === userId && i.customId.startsWith(`stg_pin_${mid}_`),
-	                        time: 120000,
-	                    });
-	                    replaceChildCollector(pinCollector);
+                            const pinCollector = mainMsg.createMessageComponentCollector({
+                                filter: i => i.user.id === userId && i.customId.startsWith(`stg_pin_${mid}_`),
+                                time: 120000,
+                            });
+                            replaceChildCollector(pinCollector);
 
                     pinCollector.on('collect', async i => {
                         if (i.customId === `stg_pin_${mid}_back`) {
@@ -1586,14 +1586,14 @@ module.exports = {
                             pinCollector.stop('execute');
                             await i.update({
                                 content: `<@${userId}>`,
-	                            embeds: [buildProcessEmbed('Pin Bots To Room', 0, distributionTargets(state.scope, state.code).length, 0, 0, [`⏳ Target room: <#${state.channelId}>`])],
+                                    embeds: [buildProcessEmbed('Pin Bots To Room', 0, distributionTargets(state.scope, state.code).length, 0, 0, [`⏳ Target room: <#${state.channelId}>`])],
                                 components: [],
                                 allowedMentions: { users: [userId] },
                             });
-	                            const targets = distributionTargets(state.scope, state.code);
-	                            await runBotProcess(`Pin Bots To Room — ${SCOPE_LABELS[state.scope] || state.scope}`, targets, async (t) => {
-	                                await moveTokenToVoice(t, state.channelId);
-	                            }, { code: state.code });
+                                    const targets = distributionTargets(state.scope, state.code);
+                                    await runBotProcess(`Pin Bots To Room — ${SCOPE_LABELS[state.scope] || state.scope}`, targets, async (t) => {
+                                        await moveTokenToVoice(t, state.channelId);
+                                    }, { code: state.code });
                             store.set('tokens', tokens);
                             setTimeout(() => updatePanel(), 3500);
                         }
@@ -1610,28 +1610,28 @@ module.exports = {
                 let components = [];
                 let content = '';
 
-	                if (currentPanel === 'SELECT') {
-	                    const totalPages = Math.max(1, Math.ceil(uniqueCodes.length / SETTINGS_SELECT_PAGE_SIZE));
-	                    selectPage = Math.max(0, Math.min(selectPage, totalPages - 1));
-	                    const pageCodes = uniqueCodes.slice(
-	                        selectPage * SETTINGS_SELECT_PAGE_SIZE,
-	                        (selectPage + 1) * SETTINGS_SELECT_PAGE_SIZE,
-	                    );
-	                    content = [
-	                        '**Select Subscription**',
-	                        'اختر الاشتراك الذي تريد التحكم به:',
-	                        '',
-	                        `Page: \`${selectPage + 1}/${totalPages}\` | Total: \`${uniqueCodes.length}\``,
-	                    ].join('\n');
-	                    const emojiData = store.get('emojis') || { emojis: [] };
-	                    const muEmojis = emojiData.emojis || [];
-	                    const selectMenu = new StringSelectMenuBuilder()
-	                        .setCustomId(`stg_${mid}_select_sub`)
-	                        .setPlaceholder('Select subscription')
-	                        .addOptions(pageCodes.map((code, index) => {
-	                            const isPrimary = primaryOwnerIdFor(code) === userId;
-	                            const timeData = store.get('time') || [];
-	                            const subInfo = timeData.find(t => t.code === code);
+                        if (currentPanel === 'SELECT') {
+                            const totalPages = Math.max(1, Math.ceil(uniqueCodes.length / SETTINGS_SELECT_PAGE_SIZE));
+                            selectPage = Math.max(0, Math.min(selectPage, totalPages - 1));
+                            const pageCodes = uniqueCodes.slice(
+                                selectPage * SETTINGS_SELECT_PAGE_SIZE,
+                                (selectPage + 1) * SETTINGS_SELECT_PAGE_SIZE,
+                            );
+                            content = [
+                                '**Select Subscription**',
+                                'اختر الاشتراك الذي تريد التحكم به:',
+                                '',
+                                `Page: \`${selectPage + 1}/${totalPages}\` | Total: \`${uniqueCodes.length}\``,
+                            ].join('\n');
+                            const emojiData = store.get('emojis') || { emojis: [] };
+                            const muEmojis = emojiData.emojis || [];
+                            const selectMenu = new StringSelectMenuBuilder()
+                                .setCustomId(`stg_${mid}_select_sub`)
+                                .setPlaceholder('Select subscription')
+                                .addOptions(pageCodes.map((code, index) => {
+                                    const isPrimary = primaryOwnerIdFor(code) === userId;
+                                    const timeData = store.get('time') || [];
+                                    const subInfo = timeData.find(t => t.code === code);
                             const botsCount = subInfo?.botsCount || (store.get('tokens') || []).filter(t => t.code === code).length;
                             const isSubOwnerAccess = !isPrimary && !isAdmin;
                             const opt = {
@@ -1644,25 +1644,25 @@ module.exports = {
                                 value: code,
                             };
                             const emoji = muEmojis[index];
-	                            if (emoji) opt.emoji = emoji;
-	                            return opt;
-	                        }));
-	                    components.push(new ActionRowBuilder().addComponents(selectMenu));
-	                    if (totalPages > 1) {
-	                        components.push(new ActionRowBuilder().addComponents(
-	                            new ButtonBuilder()
-	                                .setCustomId(`stg_${mid}_select_prev`)
-	                                .setLabel('Previous')
-	                                .setStyle(ButtonStyle.Secondary)
-	                                .setDisabled(selectPage === 0),
-	                            new ButtonBuilder()
-	                                .setCustomId(`stg_${mid}_select_next`)
-	                                .setLabel('Next')
-	                                .setStyle(ButtonStyle.Secondary)
-	                                .setDisabled(selectPage >= totalPages - 1),
-	                        ));
-	                    }
-	                }
+                                    if (emoji) opt.emoji = emoji;
+                                    return opt;
+                                }));
+                            components.push(new ActionRowBuilder().addComponents(selectMenu));
+                            if (totalPages > 1) {
+                                components.push(new ActionRowBuilder().addComponents(
+                                    new ButtonBuilder()
+                                        .setCustomId(`stg_${mid}_select_prev`)
+                                        .setLabel('Previous')
+                                        .setStyle(ButtonStyle.Secondary)
+                                        .setDisabled(selectPage === 0),
+                                    new ButtonBuilder()
+                                        .setCustomId(`stg_${mid}_select_next`)
+                                        .setLabel('Next')
+                                        .setStyle(ButtonStyle.Secondary)
+                                        .setDisabled(selectPage >= totalPages - 1),
+                                ));
+                            }
+                        }
                 else if (currentPanel === 'MAIN') {
                     const allSubTokens = getSelectedTokens({ includeWaiting: true });
                     const subTokens = getSelectedTokens();
@@ -1686,9 +1686,9 @@ module.exports = {
                     // Is the current user the primary owner or a bot admin?
                     const isPrimaryOrAdmin = isAdmin || (primaryOwnerId && primaryOwnerId === userId);
 
-	                    const panelTitle = isPrimaryOrAdmin
-	                        ? `Subscription Settings — ${selectedCode}`
-	                        : `Subscription Settings — ${selectedCode} *(Shared Access)*`;
+                            const panelTitle = isPrimaryOrAdmin
+                                ? `Subscription Settings — ${selectedCode}`
+                                : `Subscription Settings — ${selectedCode} *(Shared Access)*`;
 
                     const embedFields = [
                         {
@@ -1773,20 +1773,20 @@ module.exports = {
 
                     embeds.push(embed);
 
-	                    const row1 = new ActionRowBuilder().addComponents(
-	                        new StringSelectMenuBuilder()
-	                            .setCustomId(`stg_${mid}_main_menu`)
-	                            .setPlaceholder('Select section')
-	                            .addOptions([
-	                                settingsOption(client, { label: 'Appearance', value: 'APPEARANCE', description: 'تغيير الصورة، البنر، والحالة لكل البوتات' }, SETTINGS_APPEARANCE_EMOJI_ID),
-		                                settingsOption(client, { label: 'Rooms', value: 'ROOMS', description: 'الغرف، التوزيع الذكي، الروابط، وشات الأوامر' }, SETTINGS_ROOMS_EMOJI_ID),
-	                                settingsOption(client, { label: 'Display', value: 'DISPLAY', description: 'تفعيل أو تعطيل الأزرار والإيمبد' }, SETTINGS_DISPLAY_EMOJI_ID),
-	                                settingsOption(client, { label: 'Platform', value: 'PLATFORM', description: 'اختيار منصة البحث والتشغيل' }, SETTINGS_PLATFORM_EMOJI_ID),
-	                                ...(canManageSubscriptionOwners(selectedCode)
-		                                    ? [settingsOption(client, { label: 'Owners', value: 'OWNERS', description: 'إضافة وإزالة أونرز يتحكمون ببوتات الاشتراك' }, SETTINGS_OWNERS_EMOJI_ID)]
-	                                    : []),
-	                            ])
-	                    );
+                            const row1 = new ActionRowBuilder().addComponents(
+                                new StringSelectMenuBuilder()
+                                    .setCustomId(`stg_${mid}_main_menu`)
+                                    .setPlaceholder('Select section')
+                                    .addOptions([
+                                        settingsOption(client, { label: 'Appearance', value: 'APPEARANCE', description: 'تغيير الصورة، البنر، والحالة لكل البوتات' }, SETTINGS_APPEARANCE_EMOJI_ID),
+                                                settingsOption(client, { label: 'Rooms', value: 'ROOMS', description: 'الغرف، التوزيع الذكي، الروابط، وشات الأوامر' }, SETTINGS_ROOMS_EMOJI_ID),
+                                        settingsOption(client, { label: 'Display', value: 'DISPLAY', description: 'تفعيل أو تعطيل الأزرار والإيمبد' }, SETTINGS_DISPLAY_EMOJI_ID),
+                                        settingsOption(client, { label: 'Platform', value: 'PLATFORM', description: 'اختيار منصة البحث والتشغيل' }, SETTINGS_PLATFORM_EMOJI_ID),
+                                        ...(canManageSubscriptionOwners(selectedCode)
+                                                    ? [settingsOption(client, { label: 'Owners', value: 'OWNERS', description: 'إضافة وإزالة أونرز يتحكمون ببوتات الاشتراك' }, SETTINGS_OWNERS_EMOJI_ID)]
+                                            : []),
+                                    ])
+                            );
                     const row2 = new ActionRowBuilder().addComponents(
                         new ButtonBuilder().setCustomId(`stg_${mid}_close`).setLabel('Close').setStyle(ButtonStyle.Danger)
                     );
@@ -1830,26 +1830,26 @@ module.exports = {
                         .setColor(getEmbedColor(client));
                     embeds.push(embed);
 
-	                    components.push(new ActionRowBuilder().addComponents(
-		                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_owner_add`).setLabel('Add Owner').setStyle(ButtonStyle.Success), SETTINGS_OWNERS_EMOJI_ID),
-		                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_owner_remove`).setLabel('Remove Owner').setStyle(ButtonStyle.Danger).setDisabled(subOwnerIds.length === 0), SETTINGS_OWNERS_EMOJI_ID),
-	                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary),
-	                    ));
+                            components.push(new ActionRowBuilder().addComponents(
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_owner_add`).setLabel('Add Owner').setStyle(ButtonStyle.Success), SETTINGS_OWNERS_EMOJI_ID),
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_owner_remove`).setLabel('Remove Owner').setStyle(ButtonStyle.Danger).setDisabled(subOwnerIds.length === 0), SETTINGS_OWNERS_EMOJI_ID),
+                                new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary),
+                            ));
                 }
                 else if (currentPanel === 'APPEARANCE') {
-	                    const embed = new EmbedBuilder()
-	                        .setTitle(`Appearance Settings — ${selectedCode}`)
-	                        .setDescription('تحكم في الاسم، الصورة، البنر، وحالة الستريمنق لكل بوتات هذا الاشتراك.')
+                            const embed = new EmbedBuilder()
+                                .setTitle(`Appearance Settings — ${selectedCode}`)
+                                .setDescription('تحكم في الاسم، الصورة، البنر، وحالة الستريمنق لكل بوتات هذا الاشتراك.')
                         .setColor(getEmbedColor(client));
                     embeds.push(embed);
 
-		                    const row = new ActionRowBuilder().addComponents(
-		                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_name`).setLabel('Name').setStyle(ButtonStyle.Secondary), SETTINGS_APPEARANCE_EMOJI_ID),
-		                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_avatar`).setLabel('Avatar').setStyle(ButtonStyle.Secondary), SETTINGS_APPEARANCE_EMOJI_ID),
-		                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_banner`).setLabel('Banner').setStyle(ButtonStyle.Secondary), SETTINGS_APPEARANCE_EMOJI_ID),
-		                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_status`).setLabel('Status').setStyle(ButtonStyle.Secondary), SETTINGS_APPEARANCE_EMOJI_ID),
-	                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
-	                    );
+                                    const row = new ActionRowBuilder().addComponents(
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_name`).setLabel('Name').setStyle(ButtonStyle.Secondary), SETTINGS_APPEARANCE_EMOJI_ID),
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_avatar`).setLabel('Avatar').setStyle(ButtonStyle.Secondary), SETTINGS_APPEARANCE_EMOJI_ID),
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_banner`).setLabel('Banner').setStyle(ButtonStyle.Secondary), SETTINGS_APPEARANCE_EMOJI_ID),
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_status`).setLabel('Status').setStyle(ButtonStyle.Secondary), SETTINGS_APPEARANCE_EMOJI_ID),
+                                new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+                            );
                     components.push(row);
                 }
                         else if (currentPanel === 'DISPLAY') {
@@ -1860,17 +1860,17 @@ module.exports = {
                                 .setColor(getEmbedColor(client));
                     embeds.push(embed);
 
-	                    const row = new ActionRowBuilder().addComponents(
-	                                setSettingsEmoji(client, new ButtonBuilder()
-	                                    .setCustomId(`stg_${mid}_toggle_buttons`)
-	                                    .setLabel(`Buttons: ${display.buttons ? 'ON' : 'OFF'}`)
-	                                    .setStyle(display.buttons ? ButtonStyle.Success : ButtonStyle.Danger), SETTINGS_DISPLAY_EMOJI_ID),
-	                                setSettingsEmoji(client, new ButtonBuilder()
-	                                    .setCustomId(`stg_${mid}_toggle_embeds`)
-	                                    .setLabel(`Embeds: ${display.embeds ? 'ON' : 'OFF'}`)
-	                                    .setStyle(display.embeds ? ButtonStyle.Success : ButtonStyle.Danger), SETTINGS_DISPLAY_EMOJI_ID),
-	                        new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
-	                    );
+                            const row = new ActionRowBuilder().addComponents(
+                                        setSettingsEmoji(client, new ButtonBuilder()
+                                            .setCustomId(`stg_${mid}_toggle_buttons`)
+                                            .setLabel(`Buttons: ${display.buttons ? 'ON' : 'OFF'}`)
+                                            .setStyle(display.buttons ? ButtonStyle.Success : ButtonStyle.Danger), SETTINGS_DISPLAY_EMOJI_ID),
+                                        setSettingsEmoji(client, new ButtonBuilder()
+                                            .setCustomId(`stg_${mid}_toggle_embeds`)
+                                            .setLabel(`Embeds: ${display.embeds ? 'ON' : 'OFF'}`)
+                                            .setStyle(display.embeds ? ButtonStyle.Success : ButtonStyle.Danger), SETTINGS_DISPLAY_EMOJI_ID),
+                                new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+                            );
                     components.push(row);
                 }
                 else if (currentPanel === 'PLATFORM') {
@@ -1930,31 +1930,31 @@ module.exports = {
 
                                     const roomsMenu = new StringSelectMenuBuilder()
                                         .setCustomId(`stg_${mid}_rooms_menu`)
-	                                        .setPlaceholder('Select option')
-	                                        .addOptions([
-	                                            settingsOption(client, { label: 'Voice Status', value: 'voice_status', description: 'عرض مكان كل بوت في الرومات' }, SETTINGS_ROOMS_EMOJI_ID),
-	                                            settingsOption(client, { label: 'Smart Distribution', value: 'distribute', description: 'توزيع البوتات على نطاق رومات' }, SETTINGS_ROOMS_EMOJI_ID),
-	                                            settingsOption(client, { label: 'Move Idle', value: 'moveidle', description: 'تحريك البوتات الخاملة إلى روم' }, SETTINGS_ROOMS_EMOJI_ID),
-	                                            settingsOption(client, { label: `Back to Voice : ${backVoice.enabled ? 'ON' : 'OFF'}`, value: 'toggle_back_voice', description: 'تفعيل أو تعطيل الرجوع التلقائي للروم' }, SETTINGS_ROOMS_EMOJI_ID),
-	                                            settingsOption(client, { label: `Voice Status : ${display.voiceStatus ? 'ON' : 'OFF'}`, value: 'toggle_voice_status', description: 'تفعيل أو تعطيل كتابة اسم الأغنية على Status' }, SETTINGS_ROOMS_EMOJI_ID),
-	                                            settingsOption(client, { label: 'Command Chat', value: 'panel_chat', description: 'تحديد الشات الذي يستقبل الأوامر' }, SETTINGS_ROOMS_EMOJI_ID),
-	                                            settingsOption(client, { label: 'Status Emoji', value: 'voice_status_emoji', description: 'تغيير إيموجي Status الروم' }, SETTINGS_ROOMS_EMOJI_ID),
-	                                            settingsOption(client, { label: 'Pin Room', value: 'pin_room', description: 'تثبيت كل البوتات في روم واحد' }, SETTINGS_ROOMS_EMOJI_ID),
-	                                            settingsOption(client, { label: 'All Links', value: 'links_all', description: 'روابط دعوة كل البوتات' }, SETTINGS_ROOMS_EMOJI_ID),
-	                                            settingsOption(client, { label: 'Outside Server', value: 'links_out', description: 'روابط البوتات الموجودة خارج السيرفر' }, SETTINGS_ROOMS_EMOJI_ID),
-	                                        ]);
+                                                .setPlaceholder('Select option')
+                                                .addOptions([
+                                                    settingsOption(client, { label: 'Voice Status', value: 'voice_status', description: 'عرض مكان كل بوت في الرومات' }, SETTINGS_ROOMS_EMOJI_ID),
+                                                    settingsOption(client, { label: 'Smart Distribution', value: 'distribute', description: 'توزيع البوتات على نطاق رومات' }, SETTINGS_ROOMS_EMOJI_ID),
+                                                    settingsOption(client, { label: 'Move Idle', value: 'moveidle', description: 'تحريك البوتات الخاملة إلى روم' }, SETTINGS_ROOMS_EMOJI_ID),
+                                                    settingsOption(client, { label: `Back to Voice : ${backVoice.enabled ? 'ON' : 'OFF'}`, value: 'toggle_back_voice', description: 'تفعيل أو تعطيل الرجوع التلقائي للروم' }, SETTINGS_ROOMS_EMOJI_ID),
+                                                    settingsOption(client, { label: `Voice Status : ${display.voiceStatus ? 'ON' : 'OFF'}`, value: 'toggle_voice_status', description: 'تفعيل أو تعطيل كتابة اسم الأغنية على Status' }, SETTINGS_ROOMS_EMOJI_ID),
+                                                    settingsOption(client, { label: 'Command Chat', value: 'panel_chat', description: 'تحديد الشات الذي يستقبل الأوامر' }, SETTINGS_ROOMS_EMOJI_ID),
+                                                    settingsOption(client, { label: 'Status Emoji', value: 'voice_status_emoji', description: 'تغيير إيموجي Status الروم' }, SETTINGS_ROOMS_EMOJI_ID),
+                                                    settingsOption(client, { label: 'Pin Room', value: 'pin_room', description: 'تثبيت كل البوتات في روم واحد' }, SETTINGS_ROOMS_EMOJI_ID),
+                                                    settingsOption(client, { label: 'All Links', value: 'links_all', description: 'روابط دعوة كل البوتات' }, SETTINGS_ROOMS_EMOJI_ID),
+                                                    settingsOption(client, { label: 'Outside Server', value: 'links_out', description: 'روابط البوتات الموجودة خارج السيرفر' }, SETTINGS_ROOMS_EMOJI_ID),
+                                                ]);
                                     const roomsRow1 = new ActionRowBuilder().addComponents(roomsMenu);
                                     const roomsRow2 = new ActionRowBuilder().addComponents(
                                         new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
                                     );
                                     components.push(roomsRow1, roomsRow2);
                         }
-	                        else if (currentPanel === 'CHAT') {
-	                            const chat = chatSummary();
-	                            const serverId = subscriptionServerIdFor(selectedCode);
-	                            const embed = new EmbedBuilder()
-	                                .setTitle(`Command Chat — ${selectedCode}`)
-	                                .addFields(
+                                else if (currentPanel === 'CHAT') {
+                                    const chat = chatSummary();
+                                    const serverId = subscriptionServerIdFor(selectedCode);
+                                    const embed = new EmbedBuilder()
+                                        .setTitle(`Command Chat — ${selectedCode}`)
+                                        .addFields(
                                     {
                                         name: 'Current Chat',
                                         value: [
@@ -1968,32 +1968,32 @@ module.exports = {
                                         value: '**Info :** *عند تحديد شات استقبال، أوامر كل البوتات تعمل فقط في شات الاستقبال أو شات الفويس الخاص بكل بوت.*',
                                         inline: false,
                                     },
-	                                )
-	                                .setColor(getEmbedColor(client));
-	                            embeds.push(embed);
+                                        )
+                                        .setColor(getEmbedColor(client));
+                                    embeds.push(embed);
 
-	                            if (serverId && message.guild?.id !== serverId) {
-	                                embed.addFields({
-	                                    name: 'Server Check',
-	                                    value: `افتح هذا الخيار داخل سيرفر الاشتراك حتى تختار الشات الصحيح.\n**Server ID :** \`${serverId}\``,
-	                                    inline: false,
-	                                });
-	                                components.push(new ActionRowBuilder().addComponents(
-	                                    new ButtonBuilder().setCustomId(`stg_${mid}_panel_rooms`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
-	                                ));
-	                            } else {
-	                                const select = new ChannelSelectMenuBuilder()
-	                                    .setCustomId(`stg_${mid}_chat_select_all`)
-	                                    .setPlaceholder('Select command chat')
-	                                    .setChannelTypes(ChannelType.GuildText);
-	                                const row1 = new ActionRowBuilder().addComponents(select);
-	                                const row2 = new ActionRowBuilder().addComponents(
-	                                    new ButtonBuilder().setCustomId(`stg_${mid}_chat_clear_all`).setLabel('Clear Command Chat').setStyle(ButtonStyle.Danger),
-	                                    new ButtonBuilder().setCustomId(`stg_${mid}_panel_rooms`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
-	                                );
-	                                components.push(row1, row2);
-	                            }
-	                        }
+                                    if (serverId && message.guild?.id !== serverId) {
+                                        embed.addFields({
+                                            name: 'Server Check',
+                                            value: `افتح هذا الخيار داخل سيرفر الاشتراك حتى تختار الشات الصحيح.\n**Server ID :** \`${serverId}\``,
+                                            inline: false,
+                                        });
+                                        components.push(new ActionRowBuilder().addComponents(
+                                            new ButtonBuilder().setCustomId(`stg_${mid}_panel_rooms`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+                                        ));
+                                    } else {
+                                        const select = new ChannelSelectMenuBuilder()
+                                            .setCustomId(`stg_${mid}_chat_select_all`)
+                                            .setPlaceholder('Select command chat')
+                                            .setChannelTypes(ChannelType.GuildText);
+                                        const row1 = new ActionRowBuilder().addComponents(select);
+                                        const row2 = new ActionRowBuilder().addComponents(
+                                            new ButtonBuilder().setCustomId(`stg_${mid}_chat_clear_all`).setLabel('Clear Command Chat').setStyle(ButtonStyle.Danger),
+                                            new ButtonBuilder().setCustomId(`stg_${mid}_panel_rooms`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+                                        );
+                                        components.push(row1, row2);
+                                    }
+                                }
 
                 const options = { content, embeds, components };
                 if (interaction && !interaction.replied && !interaction.deferred) {
@@ -2001,90 +2001,90 @@ module.exports = {
                 } else {
                     await mainMsg.edit(options);
                 }
-	            } catch (err) {
-	                console.error(err);
-	                await mainMsg.edit({
-	                    content: `❌ فشل تحميل settings: ${String(err?.message || err).slice(0, 180)}`,
-	                    embeds: [],
-	                    components: [],
-	                }).catch(() => {});
-	            }
-	        }
+                    } catch (err) {
+                        console.error(err);
+                        await mainMsg.edit({
+                            content: `❌ فشل تحميل settings: ${String(err?.message || err).slice(0, 180)}`,
+                            embeds: [],
+                            components: [],
+                        }).catch(() => {});
+                    }
+                }
 
         await updatePanel();
 
-	        collector.on('collect', async i => {
-		            if (i.customId === `stg_${mid}_select_sub`) {
-		                stopChildCollector('replaced');
-		                selectedCode = i.values[0];
-		                currentPanel = 'MAIN';
-		                return updatePanel(i);
-		            }
+                collector.on('collect', async i => {
+                            if (i.customId === `stg_${mid}_select_sub`) {
+                                stopChildCollector('replaced');
+                                selectedCode = i.values[0];
+                                currentPanel = 'MAIN';
+                                return updatePanel(i);
+                            }
 
-		            if (i.customId === `stg_${mid}_select_prev`) {
-		                selectPage = Math.max(0, selectPage - 1);
-		                return updatePanel(i);
-		            }
+                            if (i.customId === `stg_${mid}_select_prev`) {
+                                selectPage = Math.max(0, selectPage - 1);
+                                return updatePanel(i);
+                            }
 
-		            if (i.customId === `stg_${mid}_select_next`) {
-		                const totalPages = Math.max(1, Math.ceil(uniqueCodes.length / SETTINGS_SELECT_PAGE_SIZE));
-		                selectPage = Math.min(totalPages - 1, selectPage + 1);
-		                return updatePanel(i);
-		            }
+                            if (i.customId === `stg_${mid}_select_next`) {
+                                const totalPages = Math.max(1, Math.ceil(uniqueCodes.length / SETTINGS_SELECT_PAGE_SIZE));
+                                selectPage = Math.min(totalPages - 1, selectPage + 1);
+                                return updatePanel(i);
+                            }
 
-	            if (i.customId === `stg_${mid}_main_menu`) {
-	                stopChildCollector('replaced');
-	                currentPanel = i.values[0];
-	                return updatePanel(i);
-	            }
+                    if (i.customId === `stg_${mid}_main_menu`) {
+                        stopChildCollector('replaced');
+                        currentPanel = i.values[0];
+                        return updatePanel(i);
+                    }
 
-	            if (i.customId === `stg_${mid}_close`) {
-	                stopChildCollector('closed');
-	                collector.stop('closed');
-	                return i.update({ content: '✅ تم إغلاق القائمة.', embeds: [], components: [] });
-	            }
+                    if (i.customId === `stg_${mid}_close`) {
+                        stopChildCollector('closed');
+                        collector.stop('closed');
+                        return i.update({ content: '✅ تم إغلاق القائمة.', embeds: [], components: [] });
+                    }
 
-	            if (i.customId === `stg_${mid}_back_to_select`) {
-	                stopChildCollector('replaced');
-	                currentPanel = 'SELECT';
-	                return updatePanel(i);
-	            }
+                    if (i.customId === `stg_${mid}_back_to_select`) {
+                        stopChildCollector('replaced');
+                        currentPanel = 'SELECT';
+                        return updatePanel(i);
+                    }
 
-	            if (i.customId === `stg_${mid}_back_to_main`) {
-	                stopChildCollector('replaced');
-	                currentPanel = 'MAIN';
-	                return updatePanel(i);
-	            }
+                    if (i.customId === `stg_${mid}_back_to_main`) {
+                        stopChildCollector('replaced');
+                        currentPanel = 'MAIN';
+                        return updatePanel(i);
+                    }
 
-	            if (i.customId === `stg_${mid}_panel_appearance`) {
-	                stopChildCollector('replaced');
-	                currentPanel = 'APPEARANCE';
-	                return updatePanel(i);
-	            }
+                    if (i.customId === `stg_${mid}_panel_appearance`) {
+                        stopChildCollector('replaced');
+                        currentPanel = 'APPEARANCE';
+                        return updatePanel(i);
+                    }
 
-	            if (i.customId === `stg_${mid}_panel_display`) {
-	                stopChildCollector('replaced');
-	                currentPanel = 'DISPLAY';
-	                return updatePanel(i);
-	            }
+                    if (i.customId === `stg_${mid}_panel_display`) {
+                        stopChildCollector('replaced');
+                        currentPanel = 'DISPLAY';
+                        return updatePanel(i);
+                    }
 
-	            if (i.customId === `stg_${mid}_panel_platform`) {
-	                stopChildCollector('replaced');
-	                currentPanel = 'PLATFORM';
-	                return updatePanel(i);
-	            }
+                    if (i.customId === `stg_${mid}_panel_platform`) {
+                        stopChildCollector('replaced');
+                        currentPanel = 'PLATFORM';
+                        return updatePanel(i);
+                    }
 
-	            if (i.customId === `stg_${mid}_panel_rooms`) {
-	                stopChildCollector('replaced');
-	                currentPanel = 'ROOMS';
-	                return updatePanel(i);
-	            }
+                    if (i.customId === `stg_${mid}_panel_rooms`) {
+                        stopChildCollector('replaced');
+                        currentPanel = 'ROOMS';
+                        return updatePanel(i);
+                    }
 
-	            if (i.customId === `stg_${mid}_panel_chat`) {
-	                stopChildCollector('replaced');
-	                currentPanel = 'CHAT';
-	                return updatePanel(i);
-	            }
+                    if (i.customId === `stg_${mid}_panel_chat`) {
+                        stopChildCollector('replaced');
+                        currentPanel = 'CHAT';
+                        return updatePanel(i);
+                    }
 
             // Toggles
             if (i.customId === `stg_${mid}_toggle_buttons`) {
@@ -2127,89 +2127,89 @@ module.exports = {
                 return updatePanel(i);
             }
 
-	            // Appearance prompts
-			            if (i.customId === `stg_${mid}_set_name`) {
-			                const text = await promptForUserMessage(i, 'اكتب اسم البوتات الجديد خلال دقيقتين.\nمثال: `Music Pro`');
-			                if (!text) return;
-			                const safeName = text.slice(0, 32);
-			                await runBotProcess('Change Names', getSelectedTokens({ code: selectedCode }), async (t, bot) => {
-			                    if (!bot?.user) throw new Error('bot offline');
-			                    await bot.user.setUsername(safeName);
-			                    await patchCurrentApplication(t.token, { name: safeName }).catch(() => bot.application?.edit?.({ name: safeName }).catch(() => {}));
-			                }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: selectedCode });
-			                setTimeout(() => updatePanel(), 3000);
-			                return;
-			            }
+                    // Appearance prompts
+                                    if (i.customId === `stg_${mid}_set_name`) {
+                                        const text = await promptForUserMessage(i, 'اكتب اسم البوتات الجديد خلال دقيقتين.\nمثال: `Music Pro`');
+                                        if (!text) return;
+                                        const safeName = text.slice(0, 32);
+                                        await runBotProcess('Change Names', getSelectedTokens({ code: selectedCode }), async (t, bot) => {
+                                            if (!bot?.user) throw new Error('bot offline');
+                                            await bot.user.setUsername(safeName);
+                                            await patchCurrentApplication(t.token, { name: safeName }).catch(() => bot.application?.edit?.({ name: safeName }).catch(() => {}));
+                                        }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: selectedCode });
+                                        setTimeout(() => updatePanel(), 3000);
+                                        return;
+                                    }
 
-			            if (i.customId === `stg_${mid}_set_avatar`) {
-			                const url = await promptForUserMessage(i, 'ارسل رابط الصورة أو ارفق الصورة هنا خلال دقيقتين لتغيير Avatar كل البوتات.', { allowAttachment: true });
-			                if (!url) return;
-			                let imageData;
-			                try {
-			                    imageData = await fetchImageDataUri(url, 'Avatar');
-			                } catch (err) {
-			                    await mainMsg.edit({ content: `❌ ${err.message}`, embeds: [], components: [] });
-			                    setTimeout(() => updatePanel(), 3000);
-			                    return;
-			                }
-			                await runBotProcess('Change Avatars', getSelectedTokens({ code: selectedCode }), async (t, bot) => {
-			                    if (!bot?.user) throw new Error('bot offline');
-			                    await bot.user.setAvatar(imageData);
-			                    await patchCurrentApplication(t.token, { icon: imageData }).catch(() => bot.application?.edit?.({ icon: imageData }).catch(() => {}));
-			                    refreshEmbedColor(bot).catch(() => {});
-			                }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: selectedCode });
-			                setTimeout(() => updatePanel(), 3000);
-			                return;
-			            }
+                                    if (i.customId === `stg_${mid}_set_avatar`) {
+                                        const url = await promptForUserMessage(i, 'ارسل رابط الصورة أو ارفق الصورة هنا خلال دقيقتين لتغيير Avatar كل البوتات.', { allowAttachment: true });
+                                        if (!url) return;
+                                        let imageData;
+                                        try {
+                                            imageData = await fetchImageDataUri(url, 'Avatar');
+                                        } catch (err) {
+                                            await mainMsg.edit({ content: `❌ ${err.message}`, embeds: [], components: [] });
+                                            setTimeout(() => updatePanel(), 3000);
+                                            return;
+                                        }
+                                        await runBotProcess('Change Avatars', getSelectedTokens({ code: selectedCode }), async (t, bot) => {
+                                            if (!bot?.user) throw new Error('bot offline');
+                                            await bot.user.setAvatar(imageData);
+                                            await patchCurrentApplication(t.token, { icon: imageData }).catch(() => bot.application?.edit?.({ icon: imageData }).catch(() => {}));
+                                            refreshEmbedColor(bot).catch(() => {});
+                                        }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: selectedCode });
+                                        setTimeout(() => updatePanel(), 3000);
+                                        return;
+                                    }
 
-			            if (i.customId === `stg_${mid}_set_status`) {
-			                const text = await promptForUserMessage(i, 'اكتب حالة الستريمنق الجديدة خلال دقيقتين.');
-			                if (!text) return;
-			                tokens = store.get('tokens') || [];
-			                tokens.forEach(t => { if (t.code === selectedCode) t.status = text; });
-			                store.set('tokens', tokens);
-			                await runBotProcess('Change Streaming Status', getSelectedTokens({ code: selectedCode }), async (t, bot) => {
-			                    if (!bot?.user) throw new Error('bot offline');
-			                    bot.user.setPresence({
-			                        activities: [{
-			                            name: text,
-			                            type: ActivityType.Streaming,
-			                            url: getTwitchUrl() || 'https://www.twitch.tv/tnbeh',
-			                        }],
-			                        status: 'online',
-			                    });
-			                }, { code: selectedCode });
-			                setTimeout(() => updatePanel(), 3000);
-			                return;
-			            }
+                                    if (i.customId === `stg_${mid}_set_status`) {
+                                        const text = await promptForUserMessage(i, 'اكتب حالة الستريمنق الجديدة خلال دقيقتين.');
+                                        if (!text) return;
+                                        tokens = store.get('tokens') || [];
+                                        tokens.forEach(t => { if (t.code === selectedCode) t.status = text; });
+                                        store.set('tokens', tokens);
+                                        await runBotProcess('Change Streaming Status', getSelectedTokens({ code: selectedCode }), async (t, bot) => {
+                                            if (!bot?.user) throw new Error('bot offline');
+                                            bot.user.setPresence({
+                                                activities: [{
+                                                    name: text,
+                                                    type: ActivityType.Streaming,
+                                                    url: getTwitchUrl() || 'https://www.twitch.tv/tnbeh',
+                                                }],
+                                                status: 'online',
+                                            });
+                                        }, { code: selectedCode });
+                                        setTimeout(() => updatePanel(), 3000);
+                                        return;
+                                    }
 
-			            if (i.customId === `stg_${mid}_set_banner`) {
-			                const url = await promptForUserMessage(i, 'ارسل رابط البنر أو ارفق الصورة هنا خلال دقيقتين لتغيير Banner كل البوتات.', { allowAttachment: true });
-			                if (!url) return;
-			                let data;
-			                try {
-			                    data = await fetchImageDataUri(url, 'Banner');
-			                } catch (err) {
-			                    await mainMsg.edit({ content: `❌ ${err.message}`, embeds: [], components: [] });
-			                    setTimeout(() => updatePanel(), 3000);
-			                    return;
-			                }
-			                await runBotProcess('Change Banners', getSelectedTokens({ code: selectedCode }), async (t) => {
-			                    await axios.patch('https://discord.com/api/v10/users/@me', { banner: data }, {
-			                        headers: { Authorization: `Bot ${t.token}`, 'Content-Type': 'application/json' },
-			                        timeout: SETTINGS_IMAGE_TIMEOUT_MS,
-			                    });
-			                    await patchCurrentApplication(t.token, { cover_image: data }).catch(() => {});
-			                }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: selectedCode });
-			                setTimeout(() => updatePanel(), 3000);
-			                return;
-			            }
+                                    if (i.customId === `stg_${mid}_set_banner`) {
+                                        const url = await promptForUserMessage(i, 'ارسل رابط البنر أو ارفق الصورة هنا خلال دقيقتين لتغيير Banner كل البوتات.', { allowAttachment: true });
+                                        if (!url) return;
+                                        let data;
+                                        try {
+                                            data = await fetchImageDataUri(url, 'Banner');
+                                        } catch (err) {
+                                            await mainMsg.edit({ content: `❌ ${err.message}`, embeds: [], components: [] });
+                                            setTimeout(() => updatePanel(), 3000);
+                                            return;
+                                        }
+                                        await runBotProcess('Change Banners', getSelectedTokens({ code: selectedCode }), async (t) => {
+                                            await axios.patch('https://discord.com/api/v10/users/@me', { banner: data }, {
+                                                headers: { Authorization: `Bot ${t.token}`, 'Content-Type': 'application/json' },
+                                                timeout: SETTINGS_IMAGE_TIMEOUT_MS,
+                                            });
+                                            await patchCurrentApplication(t.token, { cover_image: data }).catch(() => {});
+                                        }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: selectedCode });
+                                        setTimeout(() => updatePanel(), 3000);
+                                        return;
+                                    }
 
             if (i.customId === `stg_${mid}_owner_add`) {
                 if (!canManageSubscriptionOwners(selectedCode)) {
                     return i.reply({ content: '❌ إدارة الأونرز متاحة لمالك الاشتراك فقط.', flags: MessageFlags.Ephemeral });
                 }
-	                const modal = new ModalBuilder().setCustomId(createSettingsModalId('owner_add')).setTitle('Add Subscribe Owner');
+                        const modal = new ModalBuilder().setCustomId(createSettingsModalId('owner_add')).setTitle('Add Subscribe Owner');
                 modal.addComponents(new ActionRowBuilder().addComponents(
                     new TextInputBuilder()
                         .setCustomId('user')
@@ -2226,7 +2226,7 @@ module.exports = {
                 if (!canManageSubscriptionOwners(selectedCode)) {
                     return i.reply({ content: '❌ إدارة الأونرز متاحة لمالك الاشتراك فقط.', flags: MessageFlags.Ephemeral });
                 }
-	                const modal = new ModalBuilder().setCustomId(createSettingsModalId('owner_remove')).setTitle('Remove Subscribe Owner');
+                        const modal = new ModalBuilder().setCustomId(createSettingsModalId('owner_remove')).setTitle('Remove Subscribe Owner');
                 modal.addComponents(new ActionRowBuilder().addComponents(
                     new TextInputBuilder()
                         .setCustomId('user')
@@ -2275,8 +2275,8 @@ module.exports = {
                     }
                     return updatePanel(i);
                 }
-	                if (val === 'voice_status_emoji') {
-	                    const modal = new ModalBuilder().setCustomId(createSettingsModalId('voice_status_emoji')).setTitle('Voice Status Emoji');
+                        if (val === 'voice_status_emoji') {
+                            const modal = new ModalBuilder().setCustomId(createSettingsModalId('voice_status_emoji')).setTitle('Voice Status Emoji');
                     modal.addComponents(new ActionRowBuilder().addComponents(
                         new TextInputBuilder()
                             .setCustomId('emoji')
@@ -2299,9 +2299,9 @@ module.exports = {
                 return startPinRoom(i);
             }
 
-	            if (i.customId === `stg_${mid}_chat_select_all`) {
-	                if (!(await requireSubscriptionGuild(i, 'Command Chat'))) return;
-	                const channelId = i.values[0];
+                    if (i.customId === `stg_${mid}_chat_select_all`) {
+                        if (!(await requireSubscriptionGuild(i, 'Command Chat'))) return;
+                        const channelId = i.values[0];
                 tokens = store.get('tokens') || [];
                 tokens.forEach(t => {
                     if (t.code === selectedCode) t.chat = channelId;
@@ -2339,43 +2339,43 @@ module.exports = {
                 return;
             }
 
-	                });
+                        });
 
                 // Handle Modal Submits
-	                const modalHandler = async (interaction) => {
-	                    if (!interaction.isModalSubmit()) return;
-	                    if (!interaction.customId.startsWith(`stg_mod_${mid}_`)) return;
+                        const modalHandler = async (interaction) => {
+                            if (!interaction.isModalSubmit()) return;
+                            if (!interaction.customId.startsWith(`stg_mod_${mid}_`)) return;
 
-		                    await interaction.deferUpdate();
-		                    const modalContext = consumeSettingsModalContext(interaction.customId);
-		                    if (!modalContext) return;
-		                    const modalCode = modalContext.code || selectedCode;
+                                    await interaction.deferUpdate();
+                                    const modalContext = consumeSettingsModalContext(interaction.customId);
+                                    if (!modalContext) return;
+                                    const modalCode = modalContext.code || selectedCode;
 
-	                    // ── توزيع ذكي: modal اسم الترقيم ─────────────────────────────
-	                    if (modalContext.type === 'dist_prefix') {
-	                        if (!activeDistributionState || activeDistributionState.code !== modalCode) {
-	                            await mainMsg.edit({
-	                                content: 'انتهت جلسة التوزيع الذكي أو تغير الاشتراك. افتح التوزيع مرة أخرى.',
-	                                embeds: [],
-	                                components: [],
-	                            }).catch(() => {});
-	                            setTimeout(() => updatePanel(), 2500);
-	                            return;
-	                        }
-	                        const input = interaction.fields.getTextInputValue('prefix').trim();
-	                        activeDistributionState.namePrefix = input === '0' ? '' : input;
+                            // ── توزيع ذكي: modal اسم الترقيم ─────────────────────────────
+                            if (modalContext.type === 'dist_prefix') {
+                                if (!activeDistributionState || activeDistributionState.code !== modalCode) {
+                                    await mainMsg.edit({
+                                        content: 'انتهت جلسة التوزيع الذكي أو تغير الاشتراك. افتح التوزيع مرة أخرى.',
+                                        embeds: [],
+                                        components: [],
+                                    }).catch(() => {});
+                                    setTimeout(() => updatePanel(), 2500);
+                                    return;
+                                }
+                                const input = interaction.fields.getTextInputValue('prefix').trim();
+                                activeDistributionState.namePrefix = input === '0' ? '' : input;
                         if (activeDistributionCollector) activeDistributionCollector.stop('execute');
                         return executeSmartDistribution(interaction, activeDistributionState);
                     }
 
-	                    if (modalContext.type === 'owner_add') {
-	                        if (!canManageSubscriptionOwners(modalCode)) {
-	                            await mainMsg.edit({ content: '❌ إدارة الأونرز متاحة لمالك الاشتراك فقط.', embeds: [], components: [] });
-	                            setTimeout(() => updatePanel(), 2500);
-	                            return;
-	                        }
-	                        const targetId = parseUserId(interaction.fields.getTextInputValue('user'));
-	                        const primary = primaryOwnerIdFor(modalCode);
+                            if (modalContext.type === 'owner_add') {
+                                if (!canManageSubscriptionOwners(modalCode)) {
+                                    await mainMsg.edit({ content: '❌ إدارة الأونرز متاحة لمالك الاشتراك فقط.', embeds: [], components: [] });
+                                    setTimeout(() => updatePanel(), 2500);
+                                    return;
+                                }
+                                const targetId = parseUserId(interaction.fields.getTextInputValue('user'));
+                                const primary = primaryOwnerIdFor(modalCode);
                         if (!targetId) {
                             await mainMsg.edit({ content: '❌ اكتب منشن أو ID صحيح.', embeds: [], components: [] });
                             setTimeout(() => updatePanel(), 2500);
@@ -2386,8 +2386,8 @@ module.exports = {
                             setTimeout(() => updatePanel(), 2500);
                             return;
                         }
-	                        const current = subscriptionOwnerIdsFor(modalCode);
-	                        const next = setSubscriptionOwnersFor(modalCode, [...current, targetId]);
+                                const current = subscriptionOwnerIdsFor(modalCode);
+                                const next = setSubscriptionOwnersFor(modalCode, [...current, targetId]);
                         await mainMsg.edit({
                             content: '',
                             embeds: [new EmbedBuilder()
@@ -2400,14 +2400,14 @@ module.exports = {
                         return;
                     }
 
-	                    if (modalContext.type === 'owner_remove') {
-	                        if (!canManageSubscriptionOwners(modalCode)) {
-	                            await mainMsg.edit({ content: '❌ إدارة الأونرز متاحة لمالك الاشتراك فقط.', embeds: [], components: [] });
-	                            setTimeout(() => updatePanel(), 2500);
-	                            return;
-	                        }
-	                        const targetId = parseUserId(interaction.fields.getTextInputValue('user'));
-	                        const primary = primaryOwnerIdFor(modalCode);
+                            if (modalContext.type === 'owner_remove') {
+                                if (!canManageSubscriptionOwners(modalCode)) {
+                                    await mainMsg.edit({ content: '❌ إدارة الأونرز متاحة لمالك الاشتراك فقط.', embeds: [], components: [] });
+                                    setTimeout(() => updatePanel(), 2500);
+                                    return;
+                                }
+                                const targetId = parseUserId(interaction.fields.getTextInputValue('user'));
+                                const primary = primaryOwnerIdFor(modalCode);
                         if (!targetId) {
                             await mainMsg.edit({ content: '❌ اكتب منشن أو ID صحيح.', embeds: [], components: [] });
                             setTimeout(() => updatePanel(), 2500);
@@ -2418,8 +2418,8 @@ module.exports = {
                             setTimeout(() => updatePanel(), 2500);
                             return;
                         }
-	                        const current = subscriptionOwnerIdsFor(modalCode);
-	                        const next = setSubscriptionOwnersFor(modalCode, current.filter(id => id !== targetId));
+                                const current = subscriptionOwnerIdsFor(modalCode);
+                                const next = setSubscriptionOwnersFor(modalCode, current.filter(id => id !== targetId));
                         await mainMsg.edit({
                             content: '',
                             embeds: [new EmbedBuilder()
@@ -2432,89 +2432,89 @@ module.exports = {
                         return;
                     }
 
-		                    if (modalContext.type === 'avatar') {
-	                        const url = interaction.fields.getTextInputValue('url');
-	                        let imageData;
-	                        try {
-	                            imageData = await fetchImageDataUri(url, 'Avatar');
-	                        } catch (err) {
-	                            await mainMsg.edit({ content: `❌ ${err.message}`, embeds: [], components: [] });
-	                            setTimeout(() => updatePanel(), 3000);
-	                            return;
-	                        }
-			                        await runBotProcess('Change Avatars', getSelectedTokens({ code: modalCode }), async (t, bot) => {
-			                            if (!bot?.user) throw new Error('bot offline');
-			                            await bot.user.setAvatar(imageData);
-			                            await patchCurrentApplication(t.token, { icon: imageData }).catch(() => bot.application?.edit?.({ icon: imageData }).catch(() => {}));
-			                            refreshEmbedColor(bot).catch(() => {});
-			                        }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: modalCode });
-	                        setTimeout(() => updatePanel(), 3000);
-	                        return;
-	                    }
+                                    if (modalContext.type === 'avatar') {
+                                const url = interaction.fields.getTextInputValue('url');
+                                let imageData;
+                                try {
+                                    imageData = await fetchImageDataUri(url, 'Avatar');
+                                } catch (err) {
+                                    await mainMsg.edit({ content: `❌ ${err.message}`, embeds: [], components: [] });
+                                    setTimeout(() => updatePanel(), 3000);
+                                    return;
+                                }
+                                                await runBotProcess('Change Avatars', getSelectedTokens({ code: modalCode }), async (t, bot) => {
+                                                    if (!bot?.user) throw new Error('bot offline');
+                                                    await bot.user.setAvatar(imageData);
+                                                    await patchCurrentApplication(t.token, { icon: imageData }).catch(() => bot.application?.edit?.({ icon: imageData }).catch(() => {}));
+                                                    refreshEmbedColor(bot).catch(() => {});
+                                                }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: modalCode });
+                                setTimeout(() => updatePanel(), 3000);
+                                return;
+                            }
 
-	                    if (modalContext.type === 'status') {
-	                        const text = interaction.fields.getTextInputValue('text');
-	                        tokens = store.get('tokens') || [];
-	                        tokens.forEach(t => { if (t.code === modalCode) t.status = text; });
-	                        store.set('tokens', tokens);
+                            if (modalContext.type === 'status') {
+                                const text = interaction.fields.getTextInputValue('text');
+                                tokens = store.get('tokens') || [];
+                                tokens.forEach(t => { if (t.code === modalCode) t.status = text; });
+                                store.set('tokens', tokens);
 
-		                        await runBotProcess('Change Status', getSelectedTokens({ code: modalCode }), async (t, bot) => {
-		                            if (!bot?.user) throw new Error('bot offline');
-		                            bot.user.setPresence({
-		                                activities: [{
-		                                    name: text,
-		                                    type: ActivityType.Streaming,
-		                                    url: getTwitchUrl() || 'https://www.twitch.tv/tnbeh',
-		                                }],
-		                                status: 'online'
-		                            });
-		                        }, { code: modalCode });
-	                        setTimeout(() => updatePanel(), 3000);
-	                        return;
-	                    }
+                                        await runBotProcess('Change Status', getSelectedTokens({ code: modalCode }), async (t, bot) => {
+                                            if (!bot?.user) throw new Error('bot offline');
+                                            bot.user.setPresence({
+                                                activities: [{
+                                                    name: text,
+                                                    type: ActivityType.Streaming,
+                                                    url: getTwitchUrl() || 'https://www.twitch.tv/tnbeh',
+                                                }],
+                                                status: 'online'
+                                            });
+                                        }, { code: modalCode });
+                                setTimeout(() => updatePanel(), 3000);
+                                return;
+                            }
 
-	                    if (modalContext.type === 'voice_status_emoji') {
-	                        const emoji = interaction.fields.getTextInputValue('emoji').trim().slice(0, 128) || '🎵';
-	                        setDisplay(modalCode, { voiceStatusEmoji: emoji });
-	                        tokens = store.get('tokens') || [];
-	                        const selected = tokens.filter(t => t.code === modalCode);
-	                        if (parseCustomEmojiInput(emoji)) {
-	                            await runBotProcess('Sync Status Emoji', selected, async (t, bot) => {
-	                                if (!bot?.user) throw new Error('bot offline');
-	                                t.voiceStatusEmoji = await syncCustomEmojiToBotApplication(bot, emoji);
-	                            }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: modalCode });
-	                        } else {
-	                            selected.forEach(t => { t.voiceStatusEmoji = emoji; });
-	                        }
-	                        store.set('tokens', tokens);
-	                        await mainMsg.edit({ content: `✅ تم تحديث إيموجي Status الروم إلى ${emoji}.`, embeds: [], components: [] });
-	                        setTimeout(() => updatePanel(), 2500);
-	                        return;
-	                    }
+                            if (modalContext.type === 'voice_status_emoji') {
+                                const emoji = interaction.fields.getTextInputValue('emoji').trim().slice(0, 128) || '🎵';
+                                setDisplay(modalCode, { voiceStatusEmoji: emoji });
+                                tokens = store.get('tokens') || [];
+                                const selected = tokens.filter(t => t.code === modalCode);
+                                if (parseCustomEmojiInput(emoji)) {
+                                    await runBotProcess('Sync Status Emoji', selected, async (t, bot) => {
+                                        if (!bot?.user) throw new Error('bot offline');
+                                        t.voiceStatusEmoji = await syncCustomEmojiToBotApplication(bot, emoji);
+                                    }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: modalCode });
+                                } else {
+                                    selected.forEach(t => { t.voiceStatusEmoji = emoji; });
+                                }
+                                store.set('tokens', tokens);
+                                await mainMsg.edit({ content: `✅ تم تحديث إيموجي Status الروم إلى ${emoji}.`, embeds: [], components: [] });
+                                setTimeout(() => updatePanel(), 2500);
+                                return;
+                            }
 
-		                    if (modalContext.type === 'banner') {
-	                        const url = interaction.fields.getTextInputValue('url');
-	                        let data;
-	                        try {
-	                            data = await fetchImageDataUri(url, 'Banner');
+                                    if (modalContext.type === 'banner') {
+                                const url = interaction.fields.getTextInputValue('url');
+                                let data;
+                                try {
+                                    data = await fetchImageDataUri(url, 'Banner');
 
-		                            await runBotProcess('Change Banners', getSelectedTokens({ code: modalCode }), async (t) => {
-		                                await axios.patch('https://discord.com/api/v10/users/@me', { banner: data }, {
-		                                    headers: { Authorization: `Bot ${t.token}`, 'Content-Type': 'application/json' },
-		                                    timeout: SETTINGS_IMAGE_TIMEOUT_MS,
-		                                });
-		                                await patchCurrentApplication(t.token, { cover_image: data }).catch(() => {});
-		                            }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: modalCode });
-	                        } catch (e) {
-	                            await mainMsg.edit({ content: `❌ فشل تحديث البانر: ${e.message}` });
-	                        }
-	                        setTimeout(() => updatePanel(), 3000);
-	                        return;
-	                    }
+                                            await runBotProcess('Change Banners', getSelectedTokens({ code: modalCode }), async (t) => {
+                                                await axios.patch('https://discord.com/api/v10/users/@me', { banner: data }, {
+                                                    headers: { Authorization: `Bot ${t.token}`, 'Content-Type': 'application/json' },
+                                                    timeout: SETTINGS_IMAGE_TIMEOUT_MS,
+                                                });
+                                                await patchCurrentApplication(t.token, { cover_image: data }).catch(() => {});
+                                            }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: modalCode });
+                                } catch (e) {
+                                    await mainMsg.edit({ content: `❌ فشل تحديث البانر: ${e.message}` });
+                                }
+                                setTimeout(() => updatePanel(), 3000);
+                                return;
+                            }
 
-		                    if (modalContext.type === 'moveidle') {
-		                        stopChildCollector('modal_execute');
-	                        const input = interaction.fields.getTextInputValue('channelId');
+                                    if (modalContext.type === 'moveidle') {
+                                        stopChildCollector('modal_execute');
+                                const input = interaction.fields.getTextInputValue('channelId');
                         const channelIds = input.split(',').map(s => s.trim()).filter(Boolean);
 
                         if (channelIds.length === 0 || channelIds.some(id => !/^\d{17,20}$/.test(id))) {
@@ -2523,62 +2523,62 @@ module.exports = {
                             return;
                         }
 
-		                        const idleBots = getSelectedTokens({ code: modalCode }).filter(t => {
-	                            const info = getBotVoiceInfo(t);
-	                            return info.inServer && !info.inRoom;
-	                        });
+                                        const idleBots = getSelectedTokens({ code: modalCode }).filter(t => {
+                                    const info = getBotVoiceInfo(t);
+                                    return info.inServer && !info.inRoom;
+                                });
 
-	                        if (channelIds.length === 1) {
-		                            await runBotProcess('Move Idle Bots', idleBots, async (t) => {
-		                                await moveTokenToVoice(t, channelIds[0]);
-		                            }, { code: modalCode });
-	                        } else {
-	                            const resolvedChannels = [];
-	                            const seenChannels = new Set();
-	                            for (const id of channelIds) {
-	                                if (seenChannels.has(id)) continue;
-	                                seenChannels.add(id);
-	                                const channel = message.guild.channels.cache.get(id)
-	                                    || await message.guild.channels.fetch(id).catch(() => null);
-	                                if (!isVoiceChannel(channel)) {
-	                                    await mainMsg.edit({ content: `❌ الروم غير صحيح: \`${id}\``, embeds: [], components: [] });
-	                                    setTimeout(() => updatePanel(), 3000);
-	                                    return;
-	                                }
-	                                resolvedChannels.push(channel);
-	                            }
+                                if (channelIds.length === 1) {
+                                            await runBotProcess('Move Idle Bots', idleBots, async (t) => {
+                                                await moveTokenToVoice(t, channelIds[0]);
+                                            }, { code: modalCode });
+                                } else {
+                                    const resolvedChannels = [];
+                                    const seenChannels = new Set();
+                                    for (const id of channelIds) {
+                                        if (seenChannels.has(id)) continue;
+                                        seenChannels.add(id);
+                                        const channel = message.guild.channels.cache.get(id)
+                                            || await message.guild.channels.fetch(id).catch(() => null);
+                                        if (!isVoiceChannel(channel)) {
+                                            await mainMsg.edit({ content: `❌ الروم غير صحيح: \`${id}\``, embeds: [], components: [] });
+                                            setTimeout(() => updatePanel(), 3000);
+                                            return;
+                                        }
+                                        resolvedChannels.push(channel);
+                                    }
 
-	                            const plan = buildDistributionPlan(idleBots, resolvedChannels);
-	                            plan.assignments.forEach(assignment => {
-	                                assignment.token._targetChannelId = assignment.channel.id;
-	                            });
-	                            try {
-		                                await runBotProcess('Move Idle Bots', plan.assignments.map(assignment => assignment.token), async (t) => {
-		                                    await moveTokenToVoice(t, t._targetChannelId);
-		                                }, { code: modalCode });
-	                            } finally {
-	                                plan.assignments.forEach(assignment => {
-	                                    delete assignment.token._targetChannelId;
-	                                });
-	                            }
-	                        }
+                                    const plan = buildDistributionPlan(idleBots, resolvedChannels);
+                                    plan.assignments.forEach(assignment => {
+                                        assignment.token._targetChannelId = assignment.channel.id;
+                                    });
+                                    try {
+                                                await runBotProcess('Move Idle Bots', plan.assignments.map(assignment => assignment.token), async (t) => {
+                                                    await moveTokenToVoice(t, t._targetChannelId);
+                                                }, { code: modalCode });
+                                    } finally {
+                                        plan.assignments.forEach(assignment => {
+                                            delete assignment.token._targetChannelId;
+                                        });
+                                    }
+                                }
 
-	                        store.set('tokens', tokens);
-	                        setTimeout(() => updatePanel(), 3000);
-	                    }
+                                store.set('tokens', tokens);
+                                setTimeout(() => updatePanel(), 3000);
+                            }
                 };
                 client.on('interactionCreate', modalHandler);
-	                collector.on('end', (_, reason) => {
-	                    stopChildCollector('main_end');
-	                    client.off('interactionCreate', modalHandler);
-	                    if (reason !== 'closed') {
-	                        mainMsg.edit({ components: disableRows(mainMsg.components) }).catch(() => {});
-	                    }
-	                });
+                        collector.on('end', (_, reason) => {
+                            stopChildCollector('main_end');
+                            client.off('interactionCreate', modalHandler);
+                            if (reason !== 'closed') {
+                                mainMsg.edit({ components: disableRows(mainMsg.components) }).catch(() => {});
+                            }
+                        });
 
-	                async function handleVoiceStatus(interaction) {
-	                    stopChildCollector('replaced');
-	                    let page = 0;
+                        async function handleVoiceStatus(interaction) {
+                            stopChildCollector('replaced');
+                            let page = 0;
                     const subTokens = getSelectedTokens();
 
             async function renderVoicePanel(i = null) {
@@ -2623,13 +2623,13 @@ module.exports = {
 
             await renderVoicePanel(interaction);
 
-	            const vsCollector = mainMsg.createMessageComponentCollector({
-	                filter: i => i.user.id === userId && (
-	                    i.customId.startsWith(`stg_vs_${mid}_`) || i.customId.startsWith(`stg_vsc_${mid}_`)
-	                ),
-	                time: 120000
-	            });
-	            replaceChildCollector(vsCollector);
+                    const vsCollector = mainMsg.createMessageComponentCollector({
+                        filter: i => i.user.id === userId && (
+                            i.customId.startsWith(`stg_vs_${mid}_`) || i.customId.startsWith(`stg_vsc_${mid}_`)
+                        ),
+                        time: 120000
+                    });
+                    replaceChildCollector(vsCollector);
 
             vsCollector.on('collect', async i => {
                 // ── Pagination ─────────────────────────────────────────────
@@ -2658,14 +2658,14 @@ module.exports = {
 
                     await i.update({ content: `⏳ جاري إعادة تشغيل **${targets.length}** بوت...`, embeds: [], components: [] });
 
-	                    await runLimited(targets, SETTINGS_PROCESS_CONCURRENCY, async t => {
-	                        const bot = runningBots.get(t.token);
-	                        if (bot) {
-	                            await bot.destroy().catch(() => {});
-	                            runningBots.delete(t.token);
-	                            botLastActivity?.delete(t.token);
-	                        }
-	                    });
+                            await runLimited(targets, SETTINGS_PROCESS_CONCURRENCY, async t => {
+                                const bot = runningBots.get(t.token);
+                                if (bot) {
+                                    await bot.destroy().catch(() => {});
+                                    runningBots.delete(t.token);
+                                    botLastActivity?.delete(t.token);
+                                }
+                            });
 
                     await mainMsg.edit({ content: `✅ تم إعادة تشغيل **${targets.length}** بوت. سيُعاد تشغيلها خلال 10 ثوانٍ.` });
                     vsCollector.stop();
@@ -2701,9 +2701,9 @@ module.exports = {
         // ════════════════════════════════════════════════════════════════
         //  showLinksPanel — لوحة روابط البوتات بإيمبد + فلتر + صفحات
         // ════════════════════════════════════════════════════════════════
-	        async function showLinksPanel(triggerInteraction, allBots, code, initFilter = 'all', returnTo = 'voice_status') {
-	            stopChildCollector('replaced');
-	            let lpPage   = 0;
+                async function showLinksPanel(triggerInteraction, allBots, code, initFilter = 'all', returnTo = 'voice_status') {
+                    stopChildCollector('replaced');
+                    let lpPage   = 0;
             let lpFilter = initFilter;   // 'all' | 'in_room' | 'idle' | 'outside' | 'offline'
 
             const PAGE_SIZE = 10;
@@ -2822,11 +2822,11 @@ module.exports = {
             // أول عرض
             await renderLinks(triggerInteraction);
 
-	            const lpCollector = mainMsg.createMessageComponentCollector({
-	                filter: i => i.user.id === userId && i.customId.startsWith(`lp_${mid}_`),
-	                time: 180000
-	            });
-	            replaceChildCollector(lpCollector);
+                    const lpCollector = mainMsg.createMessageComponentCollector({
+                        filter: i => i.user.id === userId && i.customId.startsWith(`lp_${mid}_`),
+                        time: 180000
+                    });
+                    replaceChildCollector(lpCollector);
 
             lpCollector.on('collect', async i => {
                 if (i.customId === `lp_${mid}_prev`) { lpPage--; return renderLinks(i); }
