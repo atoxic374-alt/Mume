@@ -6,13 +6,15 @@ const {
   ButtonStyle,
   ModalBuilder,
   TextInputBuilder,
-  TextInputStyle
+  TextInputStyle,
+  MessageFlags
 } = require('discord.js');
 const ms = require('ms');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
 const { getEmbedColor } = require('../../utils/embedColor');
 const { buildSubscriptionActivatedDm } = require('../../utils/subscriptionDm');
+const { getSubBotProfile } = require('../../utils/subBotProfile');
 
 module.exports = {
   name: 'musicaddsub',
@@ -22,12 +24,15 @@ module.exports = {
     if (message.author.bot) return;
     if (!check(message.author.id, 'musicaddsub')) return;
 
-    const mention = message.mentions.members.first();
-    if (!mention) {
-      return message.reply({
-        embeds: [new EmbedBuilder().setDescription('> يرجى منشن الشخص.\n> مثال: `!madd-sub @user`').setColor(getEmbedColor(client))]
-      });
-    }
+	    const mention = message.mentions.members.first();
+	    if (!mention) {
+	      return message.reply({
+	        embeds: [new EmbedBuilder()
+	          .setTitle('Add Subscription')
+	          .setDescription('يرجى منشن المستخدم المطلوب إنشاء اشتراك له.\n\nمثال: `!madd-sub @user`')
+	          .setColor(getEmbedColor(client))]
+	      });
+	    }
 
     const userId = mention.id;
     const mid = message.id;
@@ -38,12 +43,12 @@ module.exports = {
     let selectedDurationLabel = null;
     let serverId = null;
 
-    const baseEmbed = () => new EmbedBuilder()
-      .setAuthor({ name: message.author.username, iconURL: message.author.displayAvatarURL({ dynamic: true }) })
-      .setThumbnail(mention.user.displayAvatarURL({ dynamic: true, size: 512 }))
-      .addFields({ name: '👤 المستخدم', value: `<@${userId}>`, inline: true })
-      .setFooter({ text: `${message.guild.name} | إضافة اشتراك`, iconURL: message.guild.iconURL({ dynamic: true }) })
-      .setColor(getEmbedColor(client));
+	    const baseEmbed = () => new EmbedBuilder()
+	      .setAuthor({ name: message.author.username, iconURL: message.author.displayAvatarURL({ dynamic: true }) })
+	      .setThumbnail(mention.user.displayAvatarURL({ dynamic: true, size: 512 }))
+	      .addFields({ name: 'User', value: `<@${userId}>`, inline: true })
+	      .setFooter({ text: `${message.guild.name} | Subscription`, iconURL: message.guild.iconURL({ dynamic: true }) })
+	      .setColor(getEmbedColor(client));
 
     const getBots = () => {
       return store.get('bots') || [];
@@ -56,10 +61,10 @@ module.exports = {
       const components = [];
 
       if (state === 'COUNT') {
-        const embed = baseEmbed()
-          .setTitle('➕ إضافة اشتراك — عدد البوتات')
-          .setDescription(`> اختر عدد البوتات المراد إضافتها.\n> المتاح حالياً: \`${bots.length}\` بوت`)
-          .addFields({ name: '🤖 المتاح', value: `\`${bots.length}\` بوت`, inline: true });
+	        const embed = baseEmbed()
+	          .setTitle('Add Subscription')
+	          .setDescription(`اختر عدد البوتات المراد إضافتها لهذا الاشتراك.\n\nالمتاح حالياً: \`${bots.length}\` بوت`)
+	          .addFields({ name: 'Available Bots', value: `\`${bots.length}\``, inline: true });
         embeds.push(embed);
 
         const countRow1 = new ActionRowBuilder();
@@ -71,49 +76,49 @@ module.exports = {
               .setStyle(ButtonStyle.Secondary)
           );
         }
-        const countRow2 = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`st_count_custom_${mid}`).setLabel('مخصص').setEmoji('✏️').setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId(`st_cancel_${mid}`).setLabel('إلغاء').setEmoji('✖️').setStyle(ButtonStyle.Danger)
-        );
+	        const countRow2 = new ActionRowBuilder().addComponents(
+	          new ButtonBuilder().setCustomId(`st_count_custom_${mid}`).setLabel('Custom').setStyle(ButtonStyle.Primary),
+	          new ButtonBuilder().setCustomId(`st_cancel_${mid}`).setLabel('Cancel').setStyle(ButtonStyle.Danger)
+	        );
         if (countRow1.components.length > 0) components.push(countRow1);
         components.push(countRow2);
       } else if (state === 'TIME') {
-        const embed = baseEmbed()
-          .setTitle('➕ إضافة اشتراك — مدة الاشتراك')
-          .setDescription('> اختر مدة الاشتراك.')
-          .addFields(
-            { name: '🤖 البوتات', value: `\`${selectedCount}\``, inline: true }
-          );
+	        const embed = baseEmbed()
+	          .setTitle('Subscription Duration')
+	          .setDescription('اختر مدة الاشتراك المناسبة لهذا المستخدم.')
+	          .addFields(
+	            { name: 'Bot Count', value: `\`${selectedCount}\``, inline: true }
+	          );
         embeds.push(embed);
 
-        const timeRow1 = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`st_time_1d_${mid}`).setLabel('يوم').setEmoji('📅').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`st_time_7d_${mid}`).setLabel('أسبوع').setEmoji('🗓️').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`st_time_30d_${mid}`).setLabel('شهر').setEmoji('📆').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`st_time_90d_${mid}`).setLabel('3 أشهر').setEmoji('🗃️').setStyle(ButtonStyle.Secondary)
-        );
-        const timeRow2 = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`st_time_custom_${mid}`).setLabel('مخصص').setEmoji('✏️').setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId(`st_back_COUNT_${mid}`).setLabel('رجوع').setEmoji('⬅️').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`st_cancel_${mid}`).setLabel('إلغاء').setEmoji('✖️').setStyle(ButtonStyle.Danger)
-        );
+	        const timeRow1 = new ActionRowBuilder().addComponents(
+	          new ButtonBuilder().setCustomId(`st_time_1d_${mid}`).setLabel('1 Day').setStyle(ButtonStyle.Secondary),
+	          new ButtonBuilder().setCustomId(`st_time_7d_${mid}`).setLabel('7 Days').setStyle(ButtonStyle.Secondary),
+	          new ButtonBuilder().setCustomId(`st_time_30d_${mid}`).setLabel('30 Days').setStyle(ButtonStyle.Secondary),
+	          new ButtonBuilder().setCustomId(`st_time_90d_${mid}`).setLabel('90 Days').setStyle(ButtonStyle.Secondary)
+	        );
+	        const timeRow2 = new ActionRowBuilder().addComponents(
+	          new ButtonBuilder().setCustomId(`st_time_custom_${mid}`).setLabel('Custom').setStyle(ButtonStyle.Primary),
+	          new ButtonBuilder().setCustomId(`st_back_COUNT_${mid}`).setLabel('Back').setStyle(ButtonStyle.Secondary),
+	          new ButtonBuilder().setCustomId(`st_cancel_${mid}`).setLabel('Cancel').setStyle(ButtonStyle.Danger)
+	        );
         components.push(timeRow1, timeRow2);
       } else if (state === 'SERVER') {
         const formattedDuration = formatDuration(selectedDuration);
-        const embed = baseEmbed()
-          .setTitle('➕ إضافة اشتراك — ايدي السيرفر')
-          .setDescription('> اضغط الزر لإدخال ايدي السيرفر.')
-          .addFields(
-            { name: '🤖 البوتات', value: `\`${selectedCount}\``, inline: true },
-            { name: '⏳ المدة', value: `\`${formattedDuration}\``, inline: true }
-          );
+	        const embed = baseEmbed()
+	          .setTitle('Subscription Server')
+	          .setDescription('أدخل ايدي السيرفر الذي سيتم ربط الاشتراك به.')
+	          .addFields(
+	            { name: 'Bot Count', value: `\`${selectedCount}\``, inline: true },
+	            { name: 'Duration', value: `\`${formattedDuration}\``, inline: true }
+	          );
         embeds.push(embed);
 
-        const serverRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`st_server_modal_${mid}`).setLabel('أدخل ايدي السيرفر').setEmoji('🖥️').setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId(`st_back_TIME_${mid}`).setLabel('رجوع').setEmoji('⬅️').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`st_cancel_${mid}`).setLabel('إلغاء').setEmoji('✖️').setStyle(ButtonStyle.Danger)
-        );
+	        const serverRow = new ActionRowBuilder().addComponents(
+	          new ButtonBuilder().setCustomId(`st_server_modal_${mid}`).setLabel('Set Server').setStyle(ButtonStyle.Primary),
+	          new ButtonBuilder().setCustomId(`st_back_TIME_${mid}`).setLabel('Back').setStyle(ButtonStyle.Secondary),
+	          new ButtonBuilder().setCustomId(`st_cancel_${mid}`).setLabel('Cancel').setStyle(ButtonStyle.Danger)
+	        );
         components.push(serverRow);
       }
 
@@ -126,10 +131,10 @@ module.exports = {
     collector.on('collect', async i => {
       const cid = i.customId;
 
-      if (cid === `st_cancel_${mid}`) {
-        await i.update({ embeds: [new EmbedBuilder().setDescription('> ✖️ تم الإلغاء.').setColor(getEmbedColor(client))], components: [] });
-        return collector.stop();
-      }
+	      if (cid === `st_cancel_${mid}`) {
+	        await i.update({ embeds: [new EmbedBuilder().setTitle('Cancelled').setDescription('تم إلغاء العملية.').setColor(getEmbedColor(client))], components: [] });
+	        return collector.stop();
+	      }
 
       if (cid.startsWith(`st_back_`)) {
         state = cid.split('_')[2];
@@ -140,7 +145,7 @@ module.exports = {
         if (cid.startsWith(`st_count_`)) {
           if (cid === `st_count_custom_${mid}`) {
             const bots = getBots();
-            const modal = new ModalBuilder().setCustomId(`st_modal_count_${mid}`).setTitle('عدد البوتات المخصص');
+	            const modal = new ModalBuilder().setCustomId(`st_modal_count_${mid}`).setTitle('Custom Bot Count');
             modal.addComponents(new ActionRowBuilder().addComponents(
               new TextInputBuilder().setCustomId('val').setLabel(`العدد (المتاح: ${bots.length})`).setPlaceholder(`1-${bots.length}`).setStyle(TextInputStyle.Short).setRequired(true)
             ));
@@ -149,7 +154,7 @@ module.exports = {
               const mSubmit = await i.awaitModalSubmit({ filter: mi => mi.customId === `st_modal_count_${mid}`, time: 60000 });
               const val = parseInt(mSubmit.fields.getTextInputValue('val').trim(), 10);
               if (isNaN(val) || val <= 0 || val > bots.length) {
-                return mSubmit.reply({ content: `❌ عدد غير صحيح. المتاح: ${bots.length}`, ephemeral: true });
+	                return mSubmit.reply({ content: `عدد غير صحيح. المتاح: ${bots.length}`, flags: MessageFlags.Ephemeral });
               }
               selectedCount = val;
               state = 'TIME';
@@ -165,7 +170,7 @@ module.exports = {
       } else if (state === 'TIME') {
         if (cid.startsWith(`st_time_`)) {
           if (cid === `st_time_custom_${mid}`) {
-            const modal = new ModalBuilder().setCustomId(`st_modal_time_${mid}`).setTitle('المدة المخصصة');
+	            const modal = new ModalBuilder().setCustomId(`st_modal_time_${mid}`).setTitle('Custom Duration');
             modal.addComponents(new ActionRowBuilder().addComponents(
               new TextInputBuilder().setCustomId('val').setLabel('المدة').setPlaceholder('مثال: 30d, 1h').setStyle(TextInputStyle.Short).setRequired(true)
             ));
@@ -174,7 +179,7 @@ module.exports = {
               const mSubmit = await i.awaitModalSubmit({ filter: mi => mi.customId === `st_modal_time_${mid}`, time: 60000 });
               const raw = mSubmit.fields.getTextInputValue('val').trim();
               const dur = ms(raw);
-              if (!dur || dur <= 0) return mSubmit.reply({ content: '❌ صيغة مدة غير صحيحة.', ephemeral: true });
+	              if (!dur || dur <= 0) return mSubmit.reply({ content: 'صيغة مدة غير صحيحة.', flags: MessageFlags.Ephemeral });
               selectedDuration = dur;
               selectedDurationLabel = raw;
               state = 'SERVER';
@@ -191,7 +196,7 @@ module.exports = {
         }
       } else if (state === 'SERVER') {
         if (cid === `st_server_modal_${mid}`) {
-          const modal = new ModalBuilder().setCustomId(`st_modal_server_${mid}`).setTitle('ايدي السيرفر');
+	          const modal = new ModalBuilder().setCustomId(`st_modal_server_${mid}`).setTitle('Server ID');
           modal.addComponents(new ActionRowBuilder().addComponents(
             new TextInputBuilder().setCustomId('val').setLabel('ايدي السيرفر').setPlaceholder('17-20 خانة').setStyle(TextInputStyle.Short).setRequired(true).setMinLength(17).setMaxLength(20)
           ));
@@ -199,7 +204,7 @@ module.exports = {
           try {
             const mSubmit = await i.awaitModalSubmit({ filter: mi => mi.customId === `st_modal_server_${mid}`, time: 60000 });
             const val = mSubmit.fields.getTextInputValue('val').trim();
-            if (!/^\d{17,20}$/.test(val)) return mSubmit.reply({ content: '❌ ايدي غير صحيح.', ephemeral: true });
+	            if (!/^\d{17,20}$/.test(val)) return mSubmit.reply({ content: 'ايدي السيرفر غير صحيح.', flags: MessageFlags.Ephemeral });
             serverId = val;
             await mSubmit.deferUpdate();
             collector.stop('FINISH');
@@ -211,10 +216,10 @@ module.exports = {
     collector.on('end', async (collected, reason) => {
       if (reason !== 'FINISH') return;
 
-      const bots = getBots();
-      if (bots.length < selectedCount) {
-        return prompt.edit({ embeds: [new EmbedBuilder().setDescription('> ❌ عذراً، لم يعد هناك بوتات كافية.').setColor(getEmbedColor(client))], components: [] });
-      }
+	      const bots = getBots();
+	      if (bots.length < selectedCount) {
+	        return prompt.edit({ embeds: [new EmbedBuilder().setTitle('Not Enough Bots').setDescription('لم يعد هناك عدد كاف من البوتات المتاحة لإكمال الاشتراك.').setColor(getEmbedColor(client))], components: [] });
+	      }
 
       const randomCode = generateRandomCode(5);
       const expirationTime = Date.now() + selectedDuration;
@@ -227,7 +232,8 @@ module.exports = {
       // Update tokens and bots
       const givenTokens = bots.splice(0, selectedCount);
       let tokens = store.get('tokens') || [];
-      givenTokens.forEach(t => tokens.push({ token: t.token, Server: serverId, channel: null, chat: null, status: null, client: userId, code: `#${randomCode}` }));
+	      const defaultStatus = getSubBotProfile().status || null;
+	      givenTokens.forEach(t => tokens.push({ token: t.token, Server: serverId, channel: null, chat: null, status: defaultStatus, client: userId, code: `#${randomCode}` }));
       store.set('tokens', tokens);
       store.set('bots', bots);
 
@@ -246,17 +252,40 @@ module.exports = {
 
       // Log
       const logChannel = client.channels.cache.get(logChannelId);
-      if (logChannel) {
-        logChannel.send({
-          embeds: [new EmbedBuilder().setTitle('إضافة اشتراك! ✅').addFields({ name: '👤 المستخدم', value: `<@${userId}>`, inline: true }, { name: '🖥️ السيرفر', value: `\`${serverId}\``, inline: true }, { name: '🤖 البوتات', value: `\`${selectedCount}\``, inline: true }, { name: '⏳ المدة', value: `\`${formattedDuration}\``, inline: true }, { name: '🔖 SuID', value: `\`#${randomCode}\``, inline: true }, { name: '🛠️ بواسطة', value: `<@${message.author.id}>`, inline: true }).setColor(getEmbedColor(client)).setFooter({ text: `${message.guild.name} | Timer`, iconURL: message.guild.iconURL({ dynamic: true }) })]
-        });
-      }
+	      if (logChannel) {
+	        logChannel.send({
+	          embeds: [new EmbedBuilder()
+	            .setTitle('Subscription Added')
+	            .setDescription('تم إنشاء اشتراك جديد وربطه بالمستخدم والسيرفر المحددين.')
+	            .addFields(
+	              { name: 'User', value: `<@${userId}>`, inline: true },
+	              { name: 'Server', value: `\`${serverId}\``, inline: true },
+	              { name: 'Bot Count', value: `\`${selectedCount}\``, inline: true },
+	              { name: 'Duration', value: `\`${formattedDuration}\``, inline: true },
+	              { name: 'Subscription ID', value: `\`#${randomCode}\``, inline: true },
+	              { name: 'Created By', value: `<@${message.author.id}>`, inline: true }
+	            )
+	            .setColor(getEmbedColor(client))
+	            .setFooter({ text: `${message.guild.name} | Subscription`, iconURL: message.guild.iconURL({ dynamic: true }) })]
+	        });
+	      }
 
       // Success
-      await prompt.edit({
-        embeds: [new EmbedBuilder().setTitle('✅ تمت إضافة الاشتراك بنجاح!').addFields({ name: '👤 المستخدم', value: `<@${userId}>`, inline: true }, { name: '🖥️ السيرفر', value: `\`${serverId}\``, inline: true }, { name: '🤖 البوتات', value: `\`${selectedCount}\``, inline: true }, { name: '⏳ المدة', value: `\`${formattedDuration}\``, inline: true }, { name: '🔖 SuID', value: `\`#${randomCode}\``, inline: true }).setColor(getEmbedColor(client)).setFooter({ text: `${message.guild.name} | Timer`, iconURL: message.guild.iconURL({ dynamic: true }) })],
-        components: []
-      });
+	      await prompt.edit({
+	        embeds: [new EmbedBuilder()
+	          .setTitle('Subscription Added')
+	          .setDescription('تمت إضافة الاشتراك بنجاح وإرسال التفاصيل للمستخدم في الخاص.')
+	          .addFields(
+	            { name: 'User', value: `<@${userId}>`, inline: true },
+	            { name: 'Server', value: `\`${serverId}\``, inline: true },
+	            { name: 'Bot Count', value: `\`${selectedCount}\``, inline: true },
+	            { name: 'Duration', value: `\`${formattedDuration}\``, inline: true },
+	            { name: 'Subscription ID', value: `\`#${randomCode}\``, inline: true }
+	          )
+	          .setColor(getEmbedColor(client))
+	          .setFooter({ text: `${message.guild.name} | Subscription`, iconURL: message.guild.iconURL({ dynamic: true }) })],
+	        components: []
+	      });
     });
   }
 };

@@ -1,6 +1,6 @@
 const fs = require('fs');
 const store = require('../../utils/store');
-const { Client, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, ComponentType, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { Client, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, ComponentType, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
 const { owners, prefix } = require('../../config');
 const { getEmbedColor } = require('../../utils/embedColor');
 const axios = require("axios");
@@ -234,7 +234,7 @@ module.exports = {
                         const minutes = Math.floor(remainingTime / 60000);
                         const seconds = Math.ceil((remainingTime % 60000) / 1000);
                         const formattedTime = `${minutes < 10 ? '0' : ''}${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
-                        return interaction.reply({ content: `**Cooldown :** *انتظر \`${formattedTime}\` قبل استخدام هذا الخيار مرة أخرى.*`, ephemeral: true }).catch(() => {});
+                        return interaction.reply({ content: `**Cooldown :** *انتظر \`${formattedTime}\` قبل استخدام هذا الخيار مرة أخرى.*`, flags: MessageFlags.Ephemeral }).catch(() => {});
                     }
 
                     await interaction.deferUpdate().catch(() => {});
@@ -251,7 +251,7 @@ module.exports = {
                             content: mode === 'outside'
                                 ? '**Bot Links :** *كل البوتات موجودة داخل السيرفر بالفعل.*'
                                 : '**Bot Links :** *لا توجد روابط جاهزة للإرسال.*',
-                            ephemeral: true,
+                            flags: MessageFlags.Ephemeral,
                         }).catch(() => {});
                         return interaction.message.edit({ components: disabledRowsFrom(interaction.message.components) }).catch(() => {});
                     }
@@ -393,9 +393,9 @@ module.exports = {
                     if (!submit) return;
 
                     const newUserId = parseUserId(submit.fields.getTextInputValue('newOwner'));
-                    if (!newUserId) return submit.reply({ content: '**Transfer Ownership :** *ارسل منشن أو ايدي مستخدم صحيح.*', ephemeral: true });
+                    if (!newUserId) return submit.reply({ content: '**Transfer Ownership :** *ارسل منشن أو ايدي مستخدم صحيح.*', flags: MessageFlags.Ephemeral });
                     const newOwner = await client.users.fetch(newUserId).catch(() => null);
-                    if (!newOwner) return submit.reply({ content: '**Transfer Ownership :** *لم أستطع العثور على المستخدم الجديد.*', ephemeral: true });
+                    if (!newOwner) return submit.reply({ content: '**Transfer Ownership :** *لم أستطع العثور على المستخدم الجديد.*', flags: MessageFlags.Ephemeral });
 
                     const timeArray = store.get('time') || [];
                     let movedBots = 0;
@@ -422,7 +422,7 @@ module.exports = {
                         botCount: movedBots,
                     });
 
-                    await submit.reply({ embeds: [successEmbed], ephemeral: true }).catch(() => {});
+                    await submit.reply({ embeds: [successEmbed], flags: MessageFlags.Ephemeral }).catch(() => {});
                     await newOwner.send({ embeds: [successEmbed] }).catch(() => {});
                     await targetUser.send({ embeds: [successEmbed] }).catch(() => {});
                 }
@@ -447,7 +447,7 @@ module.exports = {
                     if (!submit) return;
 
                     const newServerId = submit.fields.getTextInputValue('serverId').trim();
-                    if (!/^\d{15,20}$/.test(newServerId)) return submit.reply({ content: '**Move Server :** *اكتب ايدي سيرفر صحيح.*', ephemeral: true });
+                    if (!/^\d{15,20}$/.test(newServerId)) return submit.reply({ content: '**Move Server :** *اكتب ايدي سيرفر صحيح.*', flags: MessageFlags.Ephemeral });
 
                     const timeArray = store.get('time') || [];
                     timeArray.forEach(sub => {
@@ -489,7 +489,7 @@ module.exports = {
                         linksSent: true,
                     });
 
-                    await submit.reply({ embeds: [successEmbed], ephemeral: true }).catch(() => {});
+                    await submit.reply({ embeds: [successEmbed], flags: MessageFlags.Ephemeral }).catch(() => {});
                     await targetUser.send({ embeds: [successEmbed] }).catch(() => {});
                 }
 
@@ -1083,7 +1083,7 @@ module.exports = {
                                             const base64_banner_image = await axios.get(imageUrl, { responseType: 'arraybuffer' })
                                                 .then((res) => Buffer.from(res.data, 'binary').toString('base64'));
 
-                                            await axios.patch(`https://discord.com/api/v9/users/@me`, {
+                                            await axios.patch(`https://discord.com/api/v10/users/@me`, {
                                                 banner: `data:image/jpeg;base64,${base64_banner_image}`
                                             }, {
                                                 headers: {
@@ -1132,8 +1132,8 @@ module.exports = {
 
                                 const last = await db.get(`statustime_${userId}`) || 0, now = Date.now();
                                 if (now - last < 240000)
-                                    return interaction.followUp({ content: `⌛`, ephemeral: true });
-                                const sentMsg = await interaction.update({ content: `يَرجى أرفاق إسم الحالة الجديدة.`, ephemeral: false, components: [] });
+                                    return interaction.followUp({ content: `⌛`, flags: MessageFlags.Ephemeral });
+                                const sentMsg = await interaction.update({ content: `يَرجى أرفاق إسم الحالة الجديدة.`, components: [] });
                                 const msgCollector = message.channel.createMessageCollector({ filter: m => m.author.id === message.author.id, time: 60000 });
                                 msgCollector.on('collect', async (msg) => {
                                     const status = msg.content.trim();
@@ -1591,10 +1591,9 @@ module.exports = {
                         fs.copyFileSync('./settings/tokens.json', backupFile);
 
 
-                        const reply = await interaction.followUp({
-                            content: ` جاري إعادة تشغيل **${userTokens.length}** بوتات، الوقت المُقدر لتشغيلها (\`0:20\`) ثانيا تقريبًا`,
-                            ephemeral: false
-                        });
+	                        const reply = await interaction.followUp({
+	                            content: ` جاري إعادة تشغيل **${userTokens.length}** بوتات، الوقت المُقدر لتشغيلها (\`0:20\`) ثانيا تقريبًا`
+	                        });
 
                         const disabledComponents = interaction.message.components.map(row => {
                             return new ActionRowBuilder().addComponents(

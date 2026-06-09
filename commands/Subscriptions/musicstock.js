@@ -17,12 +17,18 @@ module.exports = {
     const botTokenCount = bots.length;
     
     const tokens = store.get('tokens') || [];
-    const userTokenCount = tokens.length;
-    
-    const embed = new EmbedBuilder()
-      .setColor(getEmbedColor(client))
-      .setDescription(`***Tokens Stock,***\n***works:*** ${userTokenCount} \`${userTokenCount === 0 ? '🔴' : '🟢'}\`\n***Available:*** ${botTokenCount} \`🟢\``)
-   
-    message.reply({ embeds: [embed] });
+	    const userTokenCount = tokens.length;
+	    
+	    const embed = new EmbedBuilder()
+	      .setTitle('Token Stock')
+	      .setColor(getEmbedColor(client))
+	      .setDescription('ملخص البوتات المتاحة في الستوك والبوتات المستخدمة حالياً في الاشتراكات.')
+	      .addFields(
+	        { name: 'Used Bots', value: `\`${userTokenCount}\``, inline: true },
+	        { name: 'Available Bots', value: `\`${botTokenCount}\``, inline: true },
+	        { name: 'Total Bots', value: `\`${userTokenCount + botTokenCount}\``, inline: true }
+	      );
+	   
+	    message.reply({ embeds: [embed] });
   }
 };

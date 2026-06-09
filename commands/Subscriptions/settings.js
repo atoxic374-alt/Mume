@@ -10,9 +10,11 @@ const {
     TextInputBuilder,
     TextInputStyle,
     ChannelType,
-    ComponentType
+    ComponentType,
+    ActivityType,
+    MessageFlags
 } = require('discord.js');
-const { owners } = require('../../config');
+const { owners, TwitchUrl } = require('../../config');
 const { runningBots, botLastActivity, restorePoruNodes } = require('../../music');
 const { getDisplay, setDisplay } = require('../../utils/display');
 const store = require('../../utils/store');
@@ -25,6 +27,9 @@ const SETTINGS_PROFILE_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PRO
 const SETTINGS_DISTRIBUTION_BATCH_SIZE = Math.max(1, Number(process.env.SETTINGS_DISTRIBUTION_BATCH_SIZE || 12));
 const SETTINGS_IMAGE_TIMEOUT_MS = Math.max(3000, Number(process.env.SETTINGS_IMAGE_TIMEOUT_MS || 10000));
 const SETTINGS_IMAGE_MAX_BYTES = Math.max(256 * 1024, Number(process.env.SETTINGS_IMAGE_MAX_BYTES || 8 * 1024 * 1024));
+const SETTINGS_SELECT_PAGE_SIZE = 25;
+const SETTINGS_ROOMS_EMOJI = { id: '1484364982094266428' };
+const SETTINGS_OWNERS_EMOJI = { id: '1485476329171320855' };
 const activeSmartDistributions = new Set();
 const activeSettingsProcesses = new Set();
 
@@ -176,8 +181,16 @@ module.exports = {
             return clean;
         }
 
+        const timeDataAtStart = store.get('time') || [];
         const mySubs = tokens.filter(t => isSubscriptionController(t));
-        const uniqueCodes = [...new Set(mySubs.map(t => t.code))];
+        const uniqueCodes = [...new Set((
+            isAdmin
+                ? [
+                    ...timeDataAtStart.map(t => t.code),
+                    ...tokens.map(t => t.code),
+                ]
+                : mySubs.map(t => t.code)
+        ).filter(Boolean))];
 
         if (uniqueCodes.length === 0) {
             return message.reply('❌ لا يوجد لديك اشتراكات نشطة.');
@@ -195,6 +208,7 @@ module.exports = {
 	        // Current panel state
 	        let currentPanel = 'SELECT';
 	        if (selectedCode) currentPanel = 'MAIN';
+		        let selectPage = 0;
 		        let activeDistributionCollector = null;
 		        let activeDistributionState = null;
 		        let activeChildCollector = null;
@@ -300,7 +314,7 @@ module.exports = {
 		                    if (interaction.replied || interaction.deferred) {
 		                        await mainMsg.edit({ content, embeds: [], components: [] }).catch(() => {});
 		                    } else {
-		                        await interaction.reply({ content, ephemeral: true }).catch(() => {});
+		                        await interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => {});
 		                    }
 		                    return false;
 		                }
@@ -356,7 +370,7 @@ module.exports = {
 	                    });
 
                     if (idleBots.length === 0) {
-                        return interaction.reply({ content: '✅ لا يوجد بوتات خاملة — كلها في رومات.', ephemeral: true });
+                        return interaction.reply({ content: '✅ لا يوجد بوتات خاملة — كلها في رومات.', flags: MessageFlags.Ephemeral });
                     }
 
 	                    const modal = new ModalBuilder()
@@ -698,10 +712,85 @@ module.exports = {
 	                                await renderProgress(true);
 
 	                                return { ok, failed, total: targets.length, lines };
-	                            } finally {
-	                                activeSettingsProcesses.delete(processKey);
-	                            }
-	                        }
+		                            } finally {
+		                                activeSettingsProcesses.delete(processKey);
+		                            }
+		                        }
+
+                        function getTwitchUrl() {
+                            return Array.isArray(TwitchUrl) ? TwitchUrl[0] : TwitchUrl;
+                        }
+
+                        async function promptForUserMessage(interaction, prompt, options = {}) {
+                            await interaction.reply({
+                                content: prompt,
+                                flags: MessageFlags.Ephemeral,
+                            }).catch(() => {});
+
+                            const collected = await message.channel.awaitMessages({
+                                filter: msg => msg.author.id === userId && !msg.author.bot,
+                                max: 1,
+                                time: options.time || 120000,
+                            }).catch(() => null);
+                            const replyMessage = collected?.first?.();
+                            if (!replyMessage) {
+                                await mainMsg.edit({ content: '❌ انتهى الوقت بدون إدخال.', embeds: [], components: [] }).catch(() => {});
+                                setTimeout(() => updatePanel(), 2500);
+                                return null;
+                            }
+
+                            const attachmentUrl = replyMessage.attachments?.first?.()?.url || null;
+                            const text = replyMessage.content?.trim() || '';
+                            if (options.delete !== false) replyMessage.delete().catch(() => {});
+                            return options.allowAttachment ? (attachmentUrl || text) : text;
+                        }
+
+                        async function patchCurrentApplication(token, payload) {
+                            const body = {};
+                            if (payload.name) body.name = String(payload.name).slice(0, 32);
+                            if (payload.icon) body.icon = payload.icon;
+                            if (payload.cover_image) body.cover_image = payload.cover_image;
+                            if (!Object.keys(body).length) return;
+                            await axios.patch('https://discord.com/api/v10/applications/@me', body, {
+                                headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' },
+                                timeout: SETTINGS_IMAGE_TIMEOUT_MS,
+                            });
+                        }
+
+                        function parseCustomEmojiInput(value) {
+                            const text = String(value || '').trim();
+                            const match = text.match(/^<(?<animated>a?):(?<name>[A-Za-z0-9_~.-]+):(?<id>\d{17,20})>$/);
+                            if (!match?.groups) return null;
+                            return {
+                                id: match.groups.id,
+                                name: match.groups.name,
+                                animated: match.groups.animated === 'a',
+                            };
+                        }
+
+                        async function syncCustomEmojiToBotApplication(bot, input) {
+                            const emoji = parseCustomEmojiInput(input);
+                            if (!emoji) return String(input || '').trim() || '🎵';
+                            if (!bot?.application?.emojis) throw new Error('application emojis unavailable');
+
+                            const current = await bot.application.emojis.fetch();
+                            const existing = [...current.values()].find(e => e.name === emoji.name);
+                            if (existing) {
+                                return `<${existing.animated ? 'a' : ''}:${existing.name}:${existing.id}>`;
+                            }
+
+                            const ext = emoji.animated ? 'gif' : 'png';
+                            const imageUrl = `https://cdn.discordapp.com/emojis/${emoji.id}.${ext}`;
+                            const response = await axios.get(imageUrl, {
+                                responseType: 'arraybuffer',
+                                timeout: SETTINGS_IMAGE_TIMEOUT_MS,
+                                maxContentLength: SETTINGS_IMAGE_MAX_BYTES,
+                                validateStatus: status => status >= 200 && status < 300,
+                            });
+                            const imageData = `data:image/${ext};base64,${Buffer.from(response.data).toString('base64')}`;
+                            const created = await bot.application.emojis.create({ name: emoji.name, attachment: imageData });
+                            return `<${created.animated ? 'a' : ''}:${created.name}:${created.id}>`;
+                        }
 
                         async function moveTokenToVoice(t, targetChannelId) {
                             const bot = runningBots.get(t.token);
@@ -1491,17 +1580,28 @@ module.exports = {
                 let components = [];
                 let content = '';
 
-                if (currentPanel === 'SELECT') {
-                    content = '**Select Subscription**\nاختر الاشتراك الذي تريد التحكم به:';
-                    const emojiData = store.get('emojis') || { emojis: [] };
-                    const muEmojis = emojiData.emojis || [];
-                    const selectMenu = new StringSelectMenuBuilder()
-                        .setCustomId(`stg_${mid}_select_sub`)
-                        .setPlaceholder('Select subscription')
-                        .addOptions(uniqueCodes.map((code, index) => {
-                            const isPrimary = primaryOwnerIdFor(code) === userId;
-                            const timeData = store.get('time') || [];
-                            const subInfo = timeData.find(t => t.code === code);
+	                if (currentPanel === 'SELECT') {
+	                    const totalPages = Math.max(1, Math.ceil(uniqueCodes.length / SETTINGS_SELECT_PAGE_SIZE));
+	                    selectPage = Math.max(0, Math.min(selectPage, totalPages - 1));
+	                    const pageCodes = uniqueCodes.slice(
+	                        selectPage * SETTINGS_SELECT_PAGE_SIZE,
+	                        (selectPage + 1) * SETTINGS_SELECT_PAGE_SIZE,
+	                    );
+	                    content = [
+	                        '**Select Subscription**',
+	                        'اختر الاشتراك الذي تريد التحكم به:',
+	                        '',
+	                        `Page: \`${selectPage + 1}/${totalPages}\` | Total: \`${uniqueCodes.length}\``,
+	                    ].join('\n');
+	                    const emojiData = store.get('emojis') || { emojis: [] };
+	                    const muEmojis = emojiData.emojis || [];
+	                    const selectMenu = new StringSelectMenuBuilder()
+	                        .setCustomId(`stg_${mid}_select_sub`)
+	                        .setPlaceholder('Select subscription')
+	                        .addOptions(pageCodes.map((code, index) => {
+	                            const isPrimary = primaryOwnerIdFor(code) === userId;
+	                            const timeData = store.get('time') || [];
+	                            const subInfo = timeData.find(t => t.code === code);
                             const botsCount = subInfo?.botsCount || (store.get('tokens') || []).filter(t => t.code === code).length;
                             const isSubOwnerAccess = !isPrimary && !isAdmin;
                             const opt = {
@@ -1514,11 +1614,25 @@ module.exports = {
                                 value: code,
                             };
                             const emoji = muEmojis[index];
-                            if (emoji) opt.emoji = emoji;
-                            return opt;
-                        }));
-                    components.push(new ActionRowBuilder().addComponents(selectMenu));
-                }
+	                            if (emoji) opt.emoji = emoji;
+	                            return opt;
+	                        }));
+	                    components.push(new ActionRowBuilder().addComponents(selectMenu));
+	                    if (totalPages > 1) {
+	                        components.push(new ActionRowBuilder().addComponents(
+	                            new ButtonBuilder()
+	                                .setCustomId(`stg_${mid}_select_prev`)
+	                                .setLabel('Previous')
+	                                .setStyle(ButtonStyle.Secondary)
+	                                .setDisabled(selectPage === 0),
+	                            new ButtonBuilder()
+	                                .setCustomId(`stg_${mid}_select_next`)
+	                                .setLabel('Next')
+	                                .setStyle(ButtonStyle.Secondary)
+	                                .setDisabled(selectPage >= totalPages - 1),
+	                        ));
+	                    }
+	                }
                 else if (currentPanel === 'MAIN') {
                     const allSubTokens = getSelectedTokens({ includeWaiting: true });
                     const subTokens = getSelectedTokens();
@@ -1635,11 +1749,11 @@ module.exports = {
                             .setPlaceholder('Select section')
                             .addOptions([
                                 { label: 'Appearance', value: 'APPEARANCE', description: 'تغيير الصورة، البنر، والحالة لكل البوتات', emoji: { id: '1512475944839942176' } },
-                                { label: 'Rooms', value: 'ROOMS', description: 'الغرف، التوزيع الذكي، الروابط، وشات الأوامر', emoji: { id: '1485476329171320855' } },
+	                                { label: 'Rooms', value: 'ROOMS', description: 'الغرف، التوزيع الذكي، الروابط، وشات الأوامر', emoji: SETTINGS_ROOMS_EMOJI },
                                 { label: 'Display', value: 'DISPLAY', description: 'تفعيل أو تعطيل الأزرار والإيمبد', emoji: { id: '1512475951844294867' } },
                                 { label: 'Platform', value: 'PLATFORM', description: 'اختيار منصة البحث والتشغيل', emoji: { id: '1512475949331906682' } },
                                 ...(canManageSubscriptionOwners(selectedCode)
-                                    ? [{ label: 'Owners', value: 'OWNERS', description: 'إضافة وإزالة أونرز يتحكمون ببوتات الاشتراك', emoji: { id: '1485476329171320855' } }]
+	                                    ? [{ label: 'Owners', value: 'OWNERS', description: 'إضافة وإزالة أونرز يتحكمون ببوتات الاشتراك', emoji: SETTINGS_OWNERS_EMOJI }]
                                     : []),
                             ])
                     );
@@ -1687,22 +1801,23 @@ module.exports = {
                     embeds.push(embed);
 
                     components.push(new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`stg_${mid}_owner_add`).setLabel('Add Owner').setEmoji({ id: '1485476329171320855' }).setStyle(ButtonStyle.Success),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_owner_remove`).setLabel('Remove Owner').setEmoji({ id: '1485476329171320855' }).setStyle(ButtonStyle.Danger).setDisabled(subOwnerIds.length === 0),
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_owner_add`).setLabel('Add Owner').setEmoji(SETTINGS_OWNERS_EMOJI).setStyle(ButtonStyle.Success),
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_owner_remove`).setLabel('Remove Owner').setEmoji(SETTINGS_OWNERS_EMOJI).setStyle(ButtonStyle.Danger).setDisabled(subOwnerIds.length === 0),
                         new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary),
                     ));
                 }
                 else if (currentPanel === 'APPEARANCE') {
-                    const embed = new EmbedBuilder()
-                        .setTitle(`Appearance Settings — ${selectedCode}`)
-                        .setDescription('تحكم في مظهر جميع بوتات هذا الاشتراك.')
+	                    const embed = new EmbedBuilder()
+	                        .setTitle(`Appearance Settings — ${selectedCode}`)
+	                        .setDescription('تحكم في الاسم، الصورة، البنر، وحالة الستريمنق لكل بوتات هذا الاشتراك.')
                         .setColor(getEmbedColor(client));
                     embeds.push(embed);
 
-                    const row = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`stg_${mid}_set_avatar`).setLabel('Avatar').setEmoji({ id: '1512475944839942176' }).setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_set_banner`).setLabel('Banner').setEmoji({ id: '1512475944839942176' }).setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder().setCustomId(`stg_${mid}_set_status`).setLabel('Status').setEmoji({ id: '1512475944839942176' }).setStyle(ButtonStyle.Secondary),
+	                    const row = new ActionRowBuilder().addComponents(
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_set_name`).setLabel('Name').setEmoji({ id: '1512475944839942176' }).setStyle(ButtonStyle.Secondary),
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_set_avatar`).setLabel('Avatar').setEmoji({ id: '1512475944839942176' }).setStyle(ButtonStyle.Secondary),
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_set_banner`).setLabel('Banner').setEmoji({ id: '1512475944839942176' }).setStyle(ButtonStyle.Secondary),
+	                        new ButtonBuilder().setCustomId(`stg_${mid}_set_status`).setLabel('Status').setEmoji({ id: '1512475944839942176' }).setStyle(ButtonStyle.Secondary),
                         new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
                     );
                     components.push(row);
@@ -1789,16 +1904,16 @@ module.exports = {
                                         .setCustomId(`stg_${mid}_rooms_menu`)
                                         .setPlaceholder('Select option')
                                         .addOptions([
-                                            { label: 'Voice Status', value: 'voice_status', description: 'عرض مكان كل بوت في الرومات', emoji: { id: '1485476329171320855' } },
-                                            { label: 'Smart Distribution', value: 'distribute', description: 'توزيع البوتات على نطاق رومات', emoji: { id: '1485476329171320855' } },
-                                            { label: 'Move Idle', value: 'moveidle', description: 'تحريك البوتات الخاملة إلى روم', emoji: { id: '1485476329171320855' } },
-                                            { label: `Back to Voice : ${backVoice.enabled ? 'ON' : 'OFF'}`, value: 'toggle_back_voice', description: 'تفعيل أو تعطيل الرجوع التلقائي للروم', emoji: { id: '1485476329171320855' } },
-                                            { label: `Voice Status : ${display.voiceStatus ? 'ON' : 'OFF'}`, value: 'toggle_voice_status', description: 'تفعيل أو تعطيل كتابة اسم الأغنية على Status', emoji: { id: '1485476329171320855' } },
-                                            { label: 'Command Chat', value: 'panel_chat', description: 'تحديد الشات الذي يستقبل الأوامر', emoji: { id: '1485476329171320855' } },
-                                            { label: 'Status Emoji', value: 'voice_status_emoji', description: 'تغيير إيموجي Status الروم', emoji: { id: '1485476329171320855' } },
-                                            { label: 'Pin Room', value: 'pin_room', description: 'تثبيت كل البوتات في روم واحد', emoji: { id: '1485476329171320855' } },
-                                            { label: 'All Links', value: 'links_all', description: 'روابط دعوة كل البوتات', emoji: { id: '1485476329171320855' } },
-                                            { label: 'Outside Server', value: 'links_out', description: 'روابط البوتات الموجودة خارج السيرفر', emoji: { id: '1485476329171320855' } },
+                                            { label: 'Voice Status', value: 'voice_status', description: 'عرض مكان كل بوت في الرومات', emoji: SETTINGS_ROOMS_EMOJI },
+                                            { label: 'Smart Distribution', value: 'distribute', description: 'توزيع البوتات على نطاق رومات', emoji: SETTINGS_ROOMS_EMOJI },
+                                            { label: 'Move Idle', value: 'moveidle', description: 'تحريك البوتات الخاملة إلى روم', emoji: SETTINGS_ROOMS_EMOJI },
+                                            { label: `Back to Voice : ${backVoice.enabled ? 'ON' : 'OFF'}`, value: 'toggle_back_voice', description: 'تفعيل أو تعطيل الرجوع التلقائي للروم', emoji: SETTINGS_ROOMS_EMOJI },
+                                            { label: `Voice Status : ${display.voiceStatus ? 'ON' : 'OFF'}`, value: 'toggle_voice_status', description: 'تفعيل أو تعطيل كتابة اسم الأغنية على Status', emoji: SETTINGS_ROOMS_EMOJI },
+                                            { label: 'Command Chat', value: 'panel_chat', description: 'تحديد الشات الذي يستقبل الأوامر', emoji: SETTINGS_ROOMS_EMOJI },
+                                            { label: 'Status Emoji', value: 'voice_status_emoji', description: 'تغيير إيموجي Status الروم', emoji: SETTINGS_ROOMS_EMOJI },
+                                            { label: 'Pin Room', value: 'pin_room', description: 'تثبيت كل البوتات في روم واحد', emoji: SETTINGS_ROOMS_EMOJI },
+                                            { label: 'All Links', value: 'links_all', description: 'روابط دعوة كل البوتات', emoji: SETTINGS_ROOMS_EMOJI },
+                                            { label: 'Outside Server', value: 'links_out', description: 'روابط البوتات الموجودة خارج السيرفر', emoji: SETTINGS_ROOMS_EMOJI },
                                         ]);
                                     const roomsRow1 = new ActionRowBuilder().addComponents(roomsMenu);
                                     const roomsRow2 = new ActionRowBuilder().addComponents(
@@ -1858,20 +1973,36 @@ module.exports = {
                 } else {
                     await mainMsg.edit(options);
                 }
-            } catch (err) {
-                console.error(err);
-            }
-        }
+	            } catch (err) {
+	                console.error(err);
+	                await mainMsg.edit({
+	                    content: `❌ فشل تحميل settings: ${String(err?.message || err).slice(0, 180)}`,
+	                    embeds: [],
+	                    components: [],
+	                }).catch(() => {});
+	            }
+	        }
 
         await updatePanel();
 
 	        collector.on('collect', async i => {
-	            if (i.customId === `stg_${mid}_select_sub`) {
-	                stopChildCollector('replaced');
-	                selectedCode = i.values[0];
-	                currentPanel = 'MAIN';
-	                return updatePanel(i);
-	            }
+		            if (i.customId === `stg_${mid}_select_sub`) {
+		                stopChildCollector('replaced');
+		                selectedCode = i.values[0];
+		                currentPanel = 'MAIN';
+		                return updatePanel(i);
+		            }
+
+		            if (i.customId === `stg_${mid}_select_prev`) {
+		                selectPage = Math.max(0, selectPage - 1);
+		                return updatePanel(i);
+		            }
+
+		            if (i.customId === `stg_${mid}_select_next`) {
+		                const totalPages = Math.max(1, Math.ceil(uniqueCodes.length / SETTINGS_SELECT_PAGE_SIZE));
+		                selectPage = Math.min(totalPages - 1, selectPage + 1);
+		                return updatePanel(i);
+		            }
 
 	            if (i.customId === `stg_${mid}_main_menu`) {
 	                stopChildCollector('replaced');
@@ -1968,31 +2099,87 @@ module.exports = {
                 return updatePanel(i);
             }
 
-            // Modals: Avatar, Banner, Status, Distribute
-		            if (i.customId === `stg_${mid}_set_avatar`) {
-		                const modal = new ModalBuilder().setCustomId(createSettingsModalId('avatar')).setTitle('Change Bot Avatars');
-		                modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('url').setLabel('Image URL').setRequired(true).setStyle(TextInputStyle.Short)));
-		                await i.showModal(modal);
-		                return;
-		            }
+	            // Appearance prompts
+			            if (i.customId === `stg_${mid}_set_name`) {
+			                const text = await promptForUserMessage(i, 'اكتب اسم البوتات الجديد خلال دقيقتين.\nمثال: `Music Pro`');
+			                if (!text) return;
+			                const safeName = text.slice(0, 32);
+			                await runBotProcess('Change Names', getSelectedTokens({ code: selectedCode }), async (t, bot) => {
+			                    if (!bot?.user) throw new Error('bot offline');
+			                    await bot.user.setUsername(safeName);
+			                    await patchCurrentApplication(t.token, { name: safeName }).catch(() => bot.application?.edit?.({ name: safeName }).catch(() => {}));
+			                }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: selectedCode });
+			                setTimeout(() => updatePanel(), 3000);
+			                return;
+			            }
 
-		            if (i.customId === `stg_${mid}_set_status`) {
-		                const modal = new ModalBuilder().setCustomId(createSettingsModalId('status')).setTitle('Change Bot Status');
-		                modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('text').setLabel('Status Text').setRequired(true).setStyle(TextInputStyle.Short)));
-		                await i.showModal(modal);
-		                return;
-		            }
+			            if (i.customId === `stg_${mid}_set_avatar`) {
+			                const url = await promptForUserMessage(i, 'ارسل رابط الصورة أو ارفق الصورة هنا خلال دقيقتين لتغيير Avatar كل البوتات.', { allowAttachment: true });
+			                if (!url) return;
+			                let imageData;
+			                try {
+			                    imageData = await fetchImageDataUri(url, 'Avatar');
+			                } catch (err) {
+			                    await mainMsg.edit({ content: `❌ ${err.message}`, embeds: [], components: [] });
+			                    setTimeout(() => updatePanel(), 3000);
+			                    return;
+			                }
+			                await runBotProcess('Change Avatars', getSelectedTokens({ code: selectedCode }), async (t, bot) => {
+			                    if (!bot?.user) throw new Error('bot offline');
+			                    await bot.user.setAvatar(imageData);
+			                    await patchCurrentApplication(t.token, { icon: imageData }).catch(() => bot.application?.edit?.({ icon: imageData }).catch(() => {}));
+			                    refreshEmbedColor(bot).catch(() => {});
+			                }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: selectedCode });
+			                setTimeout(() => updatePanel(), 3000);
+			                return;
+			            }
 
-		            if (i.customId === `stg_${mid}_set_banner`) {
-		                const modal = new ModalBuilder().setCustomId(createSettingsModalId('banner')).setTitle('Change Bot Banners');
-		                modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('url').setLabel('Image URL').setRequired(true).setStyle(TextInputStyle.Short)));
-		                await i.showModal(modal);
-		                return;
-		            }
+			            if (i.customId === `stg_${mid}_set_status`) {
+			                const text = await promptForUserMessage(i, 'اكتب حالة الستريمنق الجديدة خلال دقيقتين.');
+			                if (!text) return;
+			                tokens = store.get('tokens') || [];
+			                tokens.forEach(t => { if (t.code === selectedCode) t.status = text; });
+			                store.set('tokens', tokens);
+			                await runBotProcess('Change Streaming Status', getSelectedTokens({ code: selectedCode }), async (t, bot) => {
+			                    if (!bot?.user) throw new Error('bot offline');
+			                    bot.user.setPresence({
+			                        activities: [{
+			                            name: text,
+			                            type: ActivityType.Streaming,
+			                            url: getTwitchUrl() || 'https://www.twitch.tv/tnbeh',
+			                        }],
+			                        status: 'online',
+			                    });
+			                }, { code: selectedCode });
+			                setTimeout(() => updatePanel(), 3000);
+			                return;
+			            }
+
+			            if (i.customId === `stg_${mid}_set_banner`) {
+			                const url = await promptForUserMessage(i, 'ارسل رابط البنر أو ارفق الصورة هنا خلال دقيقتين لتغيير Banner كل البوتات.', { allowAttachment: true });
+			                if (!url) return;
+			                let data;
+			                try {
+			                    data = await fetchImageDataUri(url, 'Banner');
+			                } catch (err) {
+			                    await mainMsg.edit({ content: `❌ ${err.message}`, embeds: [], components: [] });
+			                    setTimeout(() => updatePanel(), 3000);
+			                    return;
+			                }
+			                await runBotProcess('Change Banners', getSelectedTokens({ code: selectedCode }), async (t) => {
+			                    await axios.patch('https://discord.com/api/v10/users/@me', { banner: data }, {
+			                        headers: { Authorization: `Bot ${t.token}`, 'Content-Type': 'application/json' },
+			                        timeout: SETTINGS_IMAGE_TIMEOUT_MS,
+			                    });
+			                    await patchCurrentApplication(t.token, { cover_image: data }).catch(() => {});
+			                }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: selectedCode });
+			                setTimeout(() => updatePanel(), 3000);
+			                return;
+			            }
 
             if (i.customId === `stg_${mid}_owner_add`) {
                 if (!canManageSubscriptionOwners(selectedCode)) {
-                    return i.reply({ content: '❌ إدارة الأونرز متاحة لمالك الاشتراك فقط.', ephemeral: true });
+                    return i.reply({ content: '❌ إدارة الأونرز متاحة لمالك الاشتراك فقط.', flags: MessageFlags.Ephemeral });
                 }
 	                const modal = new ModalBuilder().setCustomId(createSettingsModalId('owner_add')).setTitle('Add Subscribe Owner');
                 modal.addComponents(new ActionRowBuilder().addComponents(
@@ -2009,7 +2196,7 @@ module.exports = {
 
             if (i.customId === `stg_${mid}_owner_remove`) {
                 if (!canManageSubscriptionOwners(selectedCode)) {
-                    return i.reply({ content: '❌ إدارة الأونرز متاحة لمالك الاشتراك فقط.', ephemeral: true });
+                    return i.reply({ content: '❌ إدارة الأونرز متاحة لمالك الاشتراك فقط.', flags: MessageFlags.Ephemeral });
                 }
 	                const modal = new ModalBuilder().setCustomId(createSettingsModalId('owner_remove')).setTitle('Remove Subscribe Owner');
                 modal.addComponents(new ActionRowBuilder().addComponents(
@@ -2227,11 +2414,12 @@ module.exports = {
 	                            setTimeout(() => updatePanel(), 3000);
 	                            return;
 	                        }
-		                        await runBotProcess('Change Avatars', getSelectedTokens({ code: modalCode }), async (t, bot) => {
-		                            if (!bot?.user) throw new Error('bot offline');
-		                            await bot.user.setAvatar(imageData);
-		                            refreshEmbedColor(bot).catch(() => {});
-		                        }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: modalCode });
+			                        await runBotProcess('Change Avatars', getSelectedTokens({ code: modalCode }), async (t, bot) => {
+			                            if (!bot?.user) throw new Error('bot offline');
+			                            await bot.user.setAvatar(imageData);
+			                            await patchCurrentApplication(t.token, { icon: imageData }).catch(() => bot.application?.edit?.({ icon: imageData }).catch(() => {}));
+			                            refreshEmbedColor(bot).catch(() => {});
+			                        }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: modalCode });
 	                        setTimeout(() => updatePanel(), 3000);
 	                        return;
 	                    }
@@ -2245,7 +2433,11 @@ module.exports = {
 		                        await runBotProcess('Change Status', getSelectedTokens({ code: modalCode }), async (t, bot) => {
 		                            if (!bot?.user) throw new Error('bot offline');
 		                            bot.user.setPresence({
-		                                activities: [{ name: text, type: 3 }],
+		                                activities: [{
+		                                    name: text,
+		                                    type: ActivityType.Streaming,
+		                                    url: getTwitchUrl() || 'https://www.twitch.tv/tnbeh',
+		                                }],
 		                                status: 'online'
 		                            });
 		                        }, { code: modalCode });
@@ -2254,14 +2446,20 @@ module.exports = {
 	                    }
 
 	                    if (modalContext.type === 'voice_status_emoji') {
-	                        const emoji = interaction.fields.getTextInputValue('emoji').trim().slice(0, 64);
-	                        setDisplay(modalCode, { voiceStatusEmoji: emoji || '🎵' });
+	                        const emoji = interaction.fields.getTextInputValue('emoji').trim().slice(0, 128) || '🎵';
+	                        setDisplay(modalCode, { voiceStatusEmoji: emoji });
 	                        tokens = store.get('tokens') || [];
-	                        tokens.forEach(t => {
-	                            if (t.code === modalCode) t.voiceStatusEmoji = emoji || '🎵';
-	                        });
+	                        const selected = tokens.filter(t => t.code === modalCode);
+	                        if (parseCustomEmojiInput(emoji)) {
+	                            await runBotProcess('Sync Status Emoji', selected, async (t, bot) => {
+	                                if (!bot?.user) throw new Error('bot offline');
+	                                t.voiceStatusEmoji = await syncCustomEmojiToBotApplication(bot, emoji);
+	                            }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: modalCode });
+	                        } else {
+	                            selected.forEach(t => { t.voiceStatusEmoji = emoji; });
+	                        }
 	                        store.set('tokens', tokens);
-	                        await mainMsg.edit({ content: `✅ تم تحديث إيموجي Status الروم إلى ${emoji || '🎵'}.`, embeds: [], components: [] });
+	                        await mainMsg.edit({ content: `✅ تم تحديث إيموجي Status الروم إلى ${emoji}.`, embeds: [], components: [] });
 	                        setTimeout(() => updatePanel(), 2500);
 	                        return;
 	                    }
@@ -2273,10 +2471,11 @@ module.exports = {
 	                            data = await fetchImageDataUri(url, 'Banner');
 
 		                            await runBotProcess('Change Banners', getSelectedTokens({ code: modalCode }), async (t) => {
-		                                await axios.patch('https://discord.com/api/v9/users/@me', { banner: data }, {
+		                                await axios.patch('https://discord.com/api/v10/users/@me', { banner: data }, {
 		                                    headers: { Authorization: `Bot ${t.token}`, 'Content-Type': 'application/json' },
 		                                    timeout: SETTINGS_IMAGE_TIMEOUT_MS,
 		                                });
+		                                await patchCurrentApplication(t.token, { cover_image: data }).catch(() => {});
 		                            }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: modalCode });
 	                        } catch (e) {
 	                            await mainMsg.edit({ content: `❌ فشل تحديث البانر: ${e.message}` });

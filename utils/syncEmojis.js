@@ -8,14 +8,39 @@ const CDN_BASE = 'https://cdn.discordapp.com/emojis';
 
 // ── Persistence helpers ───────────────────────────────────────────────────────
 
-function loadMap() {
+function loadAllMaps() {
     try { return JSON.parse(fs.readFileSync(MAP_PATH, 'utf8')); }
     catch { return {}; }
 }
 
-function saveMap(map) {
+function saveAllMaps(map) {
     try { fs.writeFileSync(MAP_PATH, JSON.stringify(map, null, 2), 'utf8'); }
     catch (err) { console.warn('[EmojiSync] could not save map:', err?.message); }
+}
+
+function isLegacyFlatMap(map) {
+    return map
+        && typeof map === 'object'
+        && !Array.isArray(map)
+        && Object.values(map).every(value => typeof value === 'string');
+}
+
+function appKey(clientOrId) {
+    if (typeof clientOrId === 'string') return clientOrId;
+    return clientOrId?.application?.id || clientOrId?.user?.id || 'global';
+}
+
+function loadMap(clientOrId = null) {
+    const all = loadAllMaps();
+    if (isLegacyFlatMap(all)) return all;
+    return all[appKey(clientOrId)] || all.global || {};
+}
+
+function saveMap(clientOrId, map) {
+    const all = loadAllMaps();
+    const next = isLegacyFlatMap(all) ? { global: all } : (all && typeof all === 'object' ? all : {});
+    next[appKey(clientOrId)] = map;
+    saveAllMaps(next);
 }
 
 // ── CDN download ──────────────────────────────────────────────────────────────
@@ -66,7 +91,7 @@ function collectEmojis(MUSIC_EMOJIS) {
 async function syncMusicEmojis(client, MUSIC_EMOJIS) {
     if (!client?.application) {
         console.warn('[EmojiSync] client.application not available — skipping sync');
-        return loadMap();
+        return loadMap(client);
     }
 
     const emojis = collectEmojis(MUSIC_EMOJIS);
@@ -78,10 +103,10 @@ async function syncMusicEmojis(client, MUSIC_EMOJIS) {
         appCache = await client.application.emojis.fetch();
     } catch (err) {
         console.warn(`[EmojiSync] fetch failed: ${err?.message || err} — using saved map`);
-        return loadMap();
+        return loadMap(client);
     }
 
-    const map       = loadMap();
+    const map       = loadMap(client);
     const byName    = new Map([...appCache.values()].map(e => [e.name, e]));
     const byId      = new Map([...appCache.values()].map(e => [e.id,   e]));
 
@@ -128,7 +153,7 @@ async function syncMusicEmojis(client, MUSIC_EMOJIS) {
         }
     }
 
-    saveMap(map);
+    saveMap(client, map);
 
     const total = emojis.length;
     if (uploaded > 0 || failed > 0) {

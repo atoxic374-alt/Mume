@@ -5,6 +5,7 @@ const {
     ButtonStyle,
     StringSelectMenuBuilder,
     ComponentType,
+    MessageFlags,
 } = require('discord.js');
 const { getLikes, getAllLikes } = require('../../utils/likes');
 const { getEmbedColor } = require('../../utils/embedColor');
@@ -275,7 +276,7 @@ module.exports = {
             if (i.customId === `ml_close_${message.id}`) { col.stop('closed'); return i.update({ components: [] }); }
 
             if (i.customId === `ml_all_${message.id}`) {
-                await i.deferReply({ ephemeral: true });
+                await i.deferReply({ flags: MessageFlags.Ephemeral });
                 await i.editReply({ content: '> ⏳ Loading liked tracks...' }).catch(() => {});
                 await msg.edit({ components: disableComponents(msg.components) }).catch(() => {});
                 let player;
@@ -304,7 +305,7 @@ module.exports = {
             }
 
             if (i.customId === `ml_queue_${message.id}`) {
-                await i.deferReply({ ephemeral: true });
+                await i.deferReply({ flags: MessageFlags.Ephemeral });
                 await i.editReply({ content: '> ⏳ Loading selected tracks...' }).catch(() => {});
                 await msg.edit({ components: disableComponents(msg.components) }).catch(() => {});
                 let player;

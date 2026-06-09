@@ -32,9 +32,31 @@ const MUSIC_EMOJIS = {
 // the IDs of the application emojis that were actually uploaded to this bot,
 // allowing cachedEmoji() to find them in client.application.emojis.cache.
 let _emojiIdMap = {};
+const _emojiMapsByClientId = new Map();
 
-function setEmojiMap(map) {
-    _emojiIdMap = (map && typeof map === 'object') ? map : {};
+function clientKey(client = null) {
+    return client?.application?.id || client?.user?.id || 'global';
+}
+
+function setEmojiMap(map, client = null) {
+    const clean = (map && typeof map === 'object') ? map : {};
+    if (client) {
+        _emojiMapsByClientId.set(clientKey(client), clean);
+    } else {
+        _emojiIdMap = clean;
+    }
+}
+
+function emojiMapFor(client = null) {
+    if (client) {
+        const key = clientKey(client);
+        if (_emojiMapsByClientId.has(key)) return _emojiMapsByClientId.get(key);
+    }
+    return _emojiIdMap;
+}
+
+function reactionCacheKey(client, emojiId) {
+    return `${clientKey(client)}:${emojiId}`;
 }
 
 // ── Reaction cache (populated once at startup, zero API calls at runtime) ───
@@ -73,28 +95,13 @@ async function loadMusicEmojis(client) {
 
     // Working set: original ID → emoji data — removed as each ID is resolved
     const pending = new Map(entries.map(e => [e.emoji.id, e.emoji]));
+    const map = emojiMapFor(client);
 
-    let byGuild = 0;
     let byApp   = 0;
     let byStr   = 0;
+    let byGuild = 0;
 
-    // ── Method 1: Guild scan ──────────────────────────────────────────────────
-    const guilds = [...(client.guilds?.cache?.values() || [])];
-    for (const guild of guilds) {
-        if (pending.size === 0) break;
-        try {
-            const fetched = await guild.emojis.fetch();
-            for (const [id, guildEmoji] of fetched) {
-                if (pending.has(id)) {
-                    _reactionCache.set(id, guildEmoji);
-                    pending.delete(id);
-                    byGuild++;
-                }
-            }
-        } catch { /* guild fetch failed — try next */ }
-    }
-
-    // ── Method 2: Application emojis ─────────────────────────────────────────
+    // ── Method 1: Application emojis ─────────────────────────────────────────
     if (pending.size > 0) {
         try {
             const appEmojis = await client.application.emojis.fetch();
@@ -103,15 +110,15 @@ async function loadMusicEmojis(client) {
             for (const [origId, emojiData] of [...pending]) {
                 // Try the original ID directly (bot may own it as an app emoji)
                 if (byId.has(origId)) {
-                    _reactionCache.set(origId, byId.get(origId));
+                    _reactionCache.set(reactionCacheKey(client, origId), byId.get(origId));
                     pending.delete(origId);
                     byApp++;
                     continue;
                 }
                 // Try the mapped/re-uploaded ID from syncMusicEmojis
-                const mappedId = _emojiIdMap[origId];
+                const mappedId = map[origId];
                 if (mappedId && byId.has(mappedId)) {
-                    _reactionCache.set(origId, byId.get(mappedId));
+                    _reactionCache.set(reactionCacheKey(client, origId), byId.get(mappedId));
                     pending.delete(origId);
                     byApp++;
                 }
@@ -119,20 +126,38 @@ async function loadMusicEmojis(client) {
         } catch { /* application emoji fetch failed */ }
     }
 
-    // ── Method 3: Pre-built string cache ─────────────────────────────────────
-    // Anything still pending gets a pre-built 'name:id' string.
-    // react() will attempt this string once; failures are cached in
-    // _reactionFailedIds so the next call goes straight to unicode.
+    // ── Method 2: Pre-built string cache ─────────────────────────────────────
+    // Application emoji reactions often resolve correctly through name:id even
+    // before the app cache is available, so keep a per-application string too.
     for (const [origId, emojiData] of pending) {
         const name = emojiData.name || 'emoji';
-        _reactionCache.set(origId, `${name}:${origId}`);
+        const mappedId = map[origId];
+        _reactionCache.set(reactionCacheKey(client, origId), `${name}:${mappedId || origId}`);
         byStr++;
+    }
+
+    // ── Method 3: Guild scan ─────────────────────────────────────────────────
+    // If the bot can also see the original emoji in a guild, keep that object
+    // as a stronger fallback for clients that reject app-emoji reactions.
+    const guilds = [...(client.guilds?.cache?.values() || [])];
+    for (const guild of guilds) {
+        try {
+            const fetched = await guild.emojis.fetch();
+            for (const entry of entries) {
+                const guildEmoji = fetched.get(entry.emoji.id);
+                if (guildEmoji) {
+                    const key = reactionCacheKey(client, entry.emoji.id);
+                    if (!_reactionCache.has(key)) _reactionCache.set(key, guildEmoji);
+                    byGuild++;
+                }
+            }
+        } catch { /* guild fetch failed — try next */ }
     }
 
     const total = entries.length;
     console.log(
         `[MusicEmojis] startup load — ${total} emojis: ` +
-        `${byGuild} guild ✅  ${byApp} app ✅  ${byStr} string 🔤`
+        `${byApp} app ✅  ${byStr} string 🔤  ${byGuild} guild ✅`
     );
 }
 
@@ -190,7 +215,7 @@ function cachedEmoji(data, client = null) {
     if (byOriginal) return byOriginal;
 
     // 3: try mapped ID (emoji was re-uploaded to this bot's application)
-    const mappedId = _emojiIdMap[emoji.id];
+    const mappedId = emojiMapFor(client)[emoji.id];
     if (mappedId && mappedId !== emoji.id) {
         const byMapped = client?.emojis?.cache?.get?.(mappedId)
             || client?.application?.emojis?.cache?.get?.(mappedId);
@@ -207,7 +232,7 @@ function isApplicationOnlyEmoji(data, client = null) {
     if (inGuild) return false;
     const inApp = client?.application?.emojis?.cache?.get?.(emoji.id);
     if (inApp) return true;
-    const mappedId = _emojiIdMap[emoji.id];
+    const mappedId = emojiMapFor(client)[emoji.id];
     if (mappedId) {
         return !!(client?.application?.emojis?.cache?.get?.(mappedId));
     }
@@ -224,7 +249,8 @@ function componentEmoji(data, client = null, fallback = null) {
         return { id: cached.id, name: cached.name || emoji.name || 'emoji', animated: cached.animated === true };
     }
 
-    return { id: emoji.id, name: emoji.name || 'emoji', animated: emoji.animated === true };
+    const mappedId = emojiMapFor(client)[emoji.id];
+    return { id: mappedId || emoji.id, name: emoji.name || 'emoji', animated: emoji.animated === true };
 }
 
 function messageEmoji(data, client = null, fallback = '') {
@@ -242,7 +268,7 @@ function messageEmoji(data, client = null, fallback = '') {
     // Some bots have emojis as application-emojis that are not in the guild
     // cache yet (slow startup) — the <:name:id> string is resolved server-side
     // by Discord and renders correctly as long as the bot owns the emoji.
-    const mappedId = _emojiIdMap[emoji.id];
+    const mappedId = emojiMapFor(client)[emoji.id];
     const resolvedId = (mappedId && mappedId !== emoji.id) ? mappedId : emoji.id;
     const resolvedName = emoji.name || 'emoji';
     if (resolvedId && resolvedName) {
@@ -262,6 +288,13 @@ function emojiResolvable(data, client = null) {
 
     const appEmoji = client?.application?.emojis?.cache?.get?.(emoji.id);
     if (appEmoji) return appEmoji;
+
+    const mappedId = emojiMapFor(client)[emoji.id];
+    if (mappedId) {
+        const mappedAppEmoji = client?.application?.emojis?.cache?.get?.(mappedId);
+        if (mappedAppEmoji) return mappedAppEmoji;
+        return { id: mappedId, name: emoji.name || 'emoji', animated: emoji.animated === true };
+    }
 
     return { id: emoji.id, name: emoji.name || 'emoji', animated: emoji.animated === true };
 }
@@ -288,7 +321,8 @@ function customEmojiEntries() {
 }
 
 function validateCustomEmojis(client = null) {
-    return customEmojiEntries().filter(entry => !cachedEmoji(entry.emoji, client));
+    const map = emojiMapFor(client);
+    return customEmojiEntries().filter(entry => !cachedEmoji(entry.emoji, client) && !map[entry.emoji.id]);
 }
 
 // ── react() — universal emoji reaction ───────────────────────────────────────
@@ -314,8 +348,9 @@ async function react(message, emojiData, fallback = null, client = null) {
 
     if (emoji?.id) {
         // ── Fast path: startup cache hit ─────────────────────────────────────
-        if (_reactionCache.has(emoji.id)) {
-            const cached = _reactionCache.get(emoji.id);
+        const cacheKey = reactionCacheKey(client, emoji.id);
+        if (_reactionCache.has(cacheKey)) {
+            const cached = _reactionCache.get(cacheKey);
             try {
                 return await message.react(cached);
             } catch {
@@ -329,7 +364,7 @@ async function react(message, emojiData, fallback = null, client = null) {
                         // String form also failed — evict cache entry
                     }
                 }
-                _reactionCache.delete(emoji.id);
+                _reactionCache.delete(cacheKey);
                 _reactionFailedIds.add(emoji.id);
             }
         }
@@ -338,7 +373,7 @@ async function react(message, emojiData, fallback = null, client = null) {
         if (!_reactionFailedIds.has(emoji.id)) {
             const name = emoji.name || 'emoji';
             // Prefer the mapped application emoji ID so Discord can resolve it
-            const mappedId = _emojiIdMap[emoji.id];
+            const mappedId = emojiMapFor(client)[emoji.id];
             if (mappedId && mappedId !== emoji.id) {
                 try {
                     return await message.react(`${name}:${mappedId}`);

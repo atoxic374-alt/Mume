@@ -40,6 +40,7 @@ const { getEmbedColor, refreshEmbedColor } = require('./utils/embedColor');
 const statusStore = require('./statusStore');
 const { tintAttachmentPayload, warmTintCache } = require('./utils/tintedThumbnail');
 const { buildProgressBarAttachment, normalizeColorNumber } = require('./utils/progressBar');
+const { liftDiscordClientLimits } = require('./utils/discordClientTuning');
 
 const runningBots = new Collection();
 const warnedMissingMusicEmojiIds = new Set();
@@ -171,7 +172,7 @@ function warnUnavailableMusicEmojis(client) {
         });
 
     if (!freshMissing.length) return;
-    console.log(`[MusicEmoji] ${freshMissing.length} emoji(s) not in bot cache — buttons/menus work fine, reactions will use unicode fallback: ${freshMissing.map(({ key, emoji }) => `${key}(${emoji.name || 'emoji'}:${emoji.id})`).join(', ')}`);
+    console.log(`[MusicEmoji] ${freshMissing.length} emoji(s) not available in this bot app/guild yet: ${freshMissing.map(({ key, emoji }) => `${key}(${emoji.name || 'emoji'}:${emoji.id})`).join(', ')}`);
 }
 
 const BASE_FILTERS = {
@@ -2666,6 +2667,7 @@ module.exports = {
             rest: { timeout: 15000, retries: 2 },
             failIfNotExists: false,
         });
+        liftDiscordClientLimits(TrueMusic);
 
 
         runningBots.set(token, TrueMusic);
@@ -3185,7 +3187,7 @@ module.exports = {
             // Sync custom emojis to this bot's application so react() can use them
             syncMusicEmojis(TrueMusic, MUSIC_EMOJIS)
                 .then(map => {
-                    MUSIC_EMOJIS.setEmojiMap(map);
+                    MUSIC_EMOJIS.setEmojiMap(map, TrueMusic);
                     // Load + cache emojis for reactions using 3 methods (guild → app → string).
                     // Runs once at startup; react() becomes a pure Map lookup afterwards.
                     return MUSIC_EMOJIS.loadMusicEmojis(TrueMusic);
@@ -4970,7 +4972,7 @@ module.exports = {
 
                             if (interaction.customId === `queue_${message.id}_reorder`) {
                                 if (typeof player.queue.splice !== 'function' || typeof player.queue.unshift !== 'function') {
-                                    return interaction.reply({ content: 'تعذر ترتيب الطابور في هذا الإصدار.', ephemeral: true });
+                                    return interaction.reply({ content: 'تعذر ترتيب الطابور في هذا الإصدار.', flags: MessageFlags.Ephemeral });
                                 }
                                 const indexes = [...new Set(interaction.values.map(Number))]
                                     .filter(index => index >= 0 && index < player.queue.length);
@@ -5655,9 +5657,9 @@ module.exports = {
 
                     const replyEphemeral = async (content) => {
                         if (interaction.deferred || interaction.replied) {
-                            return interaction.followUp({ content, ephemeral: true }).catch(() => {});
+                            return interaction.followUp({ content, flags: MessageFlags.Ephemeral }).catch(() => {});
                         }
-                        return interaction.reply({ content, ephemeral: true }).catch(() => {});
+                        return interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => {});
                     };
 
                     const memberVoice = interaction.member?.voice?.channel;
@@ -5899,7 +5901,7 @@ module.exports = {
                                     files: ['./assets/image/icons/Queue.png'],
                                     footer: buildQueueFooter(player, qPage, qItemsPerPage),
                                 }),
-                                ephemeral: true,
+                                flags: MessageFlags.Ephemeral,
                             }).catch(() => null);
                             if (queueMsg) {
                                 let qVersion = ensurePlayerData(player).queueVersion;
@@ -5934,7 +5936,7 @@ module.exports = {
                                     }
                                     if (i.customId === `queue_${refId}_close`) { qCollector.stop('closed'); return i.update({ components: disableComponents(queueMsg.components) }); }
                                     if (i.customId === `queue_${refId}_reorder`) {
-                                        if (typeof player.queue.splice !== 'function' || typeof player.queue.unshift !== 'function') return i.reply({ content: 'تعذر ترتيب الطابور.', ephemeral: true });
+                                        if (typeof player.queue.splice !== 'function' || typeof player.queue.unshift !== 'function') return i.reply({ content: 'تعذر ترتيب الطابور.', flags: MessageFlags.Ephemeral });
                                         const idxs = [...new Set(i.values.map(Number))].filter(x => x >= 0 && x < player.queue.length);
                                         const sel = idxs.map(x => player.queue[x]).filter(Boolean);
                                         idxs.sort((a, b) => b - a).forEach(x => player.queue.splice(x, 1));

@@ -23,6 +23,7 @@ const fs = require('fs');
 const store = require('./utils/store');
 const config = require(`${process.cwd()}/config`);
 const { getEmbedColor, refreshEmbedColor } = require('./utils/embedColor');
+const { liftDiscordClientLimits } = require('./utils/discordClientTuning');
 
 const { prefix, Token, logChannelId } = config;
 
@@ -54,6 +55,7 @@ const client = new Client({
     rest: { timeout: 15000, retries: 2 },
     failIfNotExists: false,
 });
+liftDiscordClientLimits(client);
 
 client.prefix = prefix;
 module.exports = client;

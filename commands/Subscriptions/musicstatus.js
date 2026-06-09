@@ -32,13 +32,13 @@ function fmtAgo(ts) {
 function nodeStatus(botClient) {
     try {
         const nodes = [...(botClient.poru?.nodes?.values() || [])];
-        if (!nodes.length) return { icon: '⚫', text: 'No Nodes' };
+        if (!nodes.length) return { text: 'No Nodes' };
         const online = nodes.filter(n => n.isConnected).length;
-        if (online === nodes.length) return { icon: '🟢', text: `Lavalink ${online}/${nodes.length}` };
-        if (online > 0) return { icon: '🟡', text: `Lavalink ${online}/${nodes.length}` };
-        return { icon: '🔴', text: `Lavalink 0/${nodes.length}` };
+        if (online === nodes.length) return { text: `Lavalink ${online}/${nodes.length}` };
+        if (online > 0) return { text: `Lavalink ${online}/${nodes.length}` };
+        return { text: `Lavalink 0/${nodes.length}` };
     } catch {
-        return { icon: '⚫', text: 'Unknown' };
+        return { text: 'Unknown' };
     }
 }
 
@@ -47,12 +47,12 @@ function playerStatus(botClient) {
         const players = [...(botClient.poru?.players?.values() || [])];
         const playing = players.filter(p => p.isPlaying && !p.isPaused);
         const paused = players.filter(p => p.isPaused);
-        if (playing.length) return { icon: '🎵', text: `يغني (${playing.length})` };
-        if (paused.length) return { icon: '⏸', text: `مُوقف (${paused.length})` };
-        if (players.length) return { icon: '🔇', text: 'متصل بدون تشغيل' };
-        return { icon: '💤', text: 'خامل' };
+        if (playing.length) return { text: `Playing (${playing.length})` };
+        if (paused.length) return { text: `Paused (${paused.length})` };
+        if (players.length) return { text: 'Connected without playback' };
+        return { text: 'Idle' };
     } catch {
-        return { icon: '❓', text: 'Unknown' };
+        return { text: 'Unknown' };
     }
 }
 
@@ -84,19 +84,20 @@ function buildEmbed(client, page, perPage) {
 
     const embed = new EmbedBuilder()
         .setColor(getEmbedColor(client))
-        .setTitle('📊 Music Bots Status')
+        .setTitle('Music Bots Status')
+        .setDescription('عرض مختصر لحالة بوتات الاشتراكات، الاتصال، التشغيل، وآخر نشاط.')
         .setFooter({
-            text: `الصفحة ${safePageNum}/${totalPages} • ${allTokens.length} اشتراك نشط • ${bots.length} توكن متاح`,
+            text: `Page ${safePageNum}/${totalPages} | Active: ${allTokens.length} | Stock: ${bots.length}`,
             iconURL: client.user.displayAvatarURL(),
         })
         .setTimestamp();
 
     // ── Summary bar ──────────────────────────────────────────────────────────
     embed.addFields({
-        name: '📈 إحصائيات عامة',
+        name: 'Summary',
         value: [
-            `> 🤖 **شغّالة:** \`${totalRunning}\` | 🎵 **تُغني:** \`${totalPlaying}\` | 🔊 **في روم:** \`${totalInVC}\``,
-            `> 🌐 **Lavalink:** \`${totalNodes_online}/${totalNodes_all}\` nodes متصلة`,
+            `Running: \`${totalRunning}\` | Playing: \`${totalPlaying}\` | In Voice: \`${totalInVC}\``,
+            `Lavalink: \`${totalNodes_online}/${totalNodes_all}\` nodes متصلة`,
         ].join('\n'),
         inline: false,
     });
@@ -112,7 +113,7 @@ function buildEmbed(client, page, perPage) {
         const botClient = runningBots.get(tokenObj.token);
         const isRunning = !!botClient && botClient.readyAt;
 
-        const runIcon = isRunning ? '🟢' : '🔴';
+        const runStatus = isRunning ? 'Running' : 'Offline';
         const botName = isRunning
             ? (botClient.user?.username || 'Unknown')
             : `توكن …${tokenObj.token.slice(-6)}`;
@@ -120,7 +121,7 @@ function buildEmbed(client, page, perPage) {
         const lastActive = botLastActivity?.get(tokenObj.token);
         const agoText = fmtAgo(lastActive);
 
-        let lines = `**${runIcon} ${botName}**`;
+        let lines = `**${runStatus} | ${botName}**`;
 
         if (isRunning) {
             const nd = nodeStatus(botClient);
@@ -128,11 +129,11 @@ function buildEmbed(client, page, perPage) {
             const vcLine = (() => {
                 const guild = botClient.guilds?.cache?.get(tokenObj.Server);
                 const vc = guild?.members?.me?.voice?.channel;
-                return vc ? `🔊 ${vc.name}` : (tokenObj.channel ? '🔇 خارج الروم' : '—');
+                return vc ? `Voice: ${vc.name}` : (tokenObj.channel ? 'خارج الروم' : '—');
             })();
-            lines += `\n> ${nd.icon} ${nd.text} • ${ps.icon} ${ps.text}\n> ⏱ ${agoText} • ${vcLine}`;
+            lines += `\n> ${nd.text} | ${ps.text}\n> آخر نشاط: ${agoText} | ${vcLine}`;
         } else {
-            lines += `\n> 🔴 غير مشغّل • الاشتراك: \`${tokenObj.code || '—'}\``;
+            lines += `\n> غير مشغّل | الاشتراك: \`${tokenObj.code || '—'}\``;
         }
 
         desc += lines + '\n\n';
@@ -156,16 +157,16 @@ module.exports = {
         const makeButtons = (currentPage, total) => new ActionRowBuilder().addComponents(
             new ButtonBuilder()
                 .setCustomId('status_prev')
-                .setEmoji('⬅️')
+                .setLabel('Previous')
                 .setStyle(ButtonStyle.Secondary)
                 .setDisabled(currentPage <= 1),
             new ButtonBuilder()
                 .setCustomId('status_refresh')
-                .setEmoji('🔄')
+                .setLabel('Refresh')
                 .setStyle(ButtonStyle.Primary),
             new ButtonBuilder()
                 .setCustomId('status_next')
-                .setEmoji('➡️')
+                .setLabel('Next')
                 .setStyle(ButtonStyle.Secondary)
                 .setDisabled(currentPage >= total),
         );

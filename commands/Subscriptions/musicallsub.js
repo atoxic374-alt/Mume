@@ -11,11 +11,16 @@ module.exports = {
     if (!check(message.author.id, 'musicallsub')) return;
 
     try {
-      const logsArray = store.get('time') || [];
-
-      if (logsArray.length === 0) {
-        return message.reply('**لا توجد اشتراكات مسجلة حاليًا.**');
-      }
+	      const logsArray = store.get('time') || [];
+	
+	      if (logsArray.length === 0) {
+	        return message.reply({
+	          embeds: [new EmbedBuilder()
+	            .setTitle('All Subscriptions')
+	            .setDescription('لا توجد اشتراكات مسجلة حالياً.')
+	            .setColor(getEmbedColor(client))]
+	        });
+	      }
 
       logsArray.sort((a, b) => b.expirationTime - a.expirationTime);
 
@@ -28,34 +33,36 @@ module.exports = {
         const end = start + subscriptionsPerPage;
         const subs = logsArray.slice(start, end);
 
-        const embed = new EmbedBuilder()
-          .setTitle('📋 جميع الاشتراكات')
-          .setColor(getEmbedColor(client))
-          .setFooter({ text: `الصفحة ${page}/${totalPages} | الإجمالي: ${logsArray.length}`, iconURL: client.user.displayAvatarURL() });
+	        const embed = new EmbedBuilder()
+	          .setTitle('All Subscriptions')
+	          .setDescription('قائمة الاشتراكات الحالية مرتبة حسب تاريخ الانتهاء.')
+	          .setColor(getEmbedColor(client))
+	          .setFooter({ text: `Page ${page}/${totalPages} | Total: ${logsArray.length}`, iconURL: client.user.displayAvatarURL() });
+	
+	        let description = '';
+	        subs.forEach((sub, i) => {
+	          const remaining = sub.expirationTime - Date.now();
+	          let status = 'Active';
+	          if (remaining <= 0) status = 'Expired';
+	          else if (remaining < 86400000) status = 'Ending Soon';
+	          else if (remaining < 604800000) status = 'This Week';
+	
+	          const timeStr = formatDuration(remaining);
+	          description += `**${start + i + 1}.** \`SuID: ${sub.code}\` | ${status}\n`;
+	          description += `المستخدم: <@${sub.user}> | البوتات: \`${sub.botsCount}\` | المتبقي: \`${timeStr}\`\n\n`;
+	        });
+	
+	        embed.setDescription(description || 'لا يوجد');
+	        return embed;
+	      };
 
-        let description = '';
-        subs.forEach((sub, i) => {
-          const remaining = sub.expirationTime - Date.now();
-          let statusEmoji = '🟢';
-          if (remaining < 86400000) statusEmoji = '🔴';
-          else if (remaining < 604800000) statusEmoji = '🟡';
-
-          const timeStr = formatDuration(remaining);
-          description += `**${start + i + 1}.** ${statusEmoji} \`SuID: ${sub.code}\` | <@${sub.user}>\n`;
-          description += `┕ 🤖 \`${sub.botsCount}\` بوتات | ⏳ \`${timeStr}\` متبقي\n\n`;
-        });
-
-        embed.setDescription(description || 'لا يوجد');
-        return embed;
-      };
-
-      const generateButtons = () => {
-        return new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('prev').setEmoji('⬅️').setStyle(ButtonStyle.Secondary).setDisabled(currentPage === 1),
-          new ButtonBuilder().setCustomId('del').setEmoji('🗑️').setStyle(ButtonStyle.Danger),
-          new ButtonBuilder().setCustomId('next').setEmoji('➡️').setStyle(ButtonStyle.Secondary).setDisabled(currentPage === totalPages)
-        );
-      };
+	      const generateButtons = () => {
+	        return new ActionRowBuilder().addComponents(
+	          new ButtonBuilder().setCustomId('prev').setLabel('Previous').setStyle(ButtonStyle.Secondary).setDisabled(currentPage === 1),
+	          new ButtonBuilder().setCustomId('del').setLabel('Close').setStyle(ButtonStyle.Danger),
+	          new ButtonBuilder().setCustomId('next').setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(currentPage === totalPages)
+	        );
+	      };
 
       const msg = await message.reply({ embeds: [generateEmbed(currentPage)], components: [generateButtons()] });
       const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === message.author.id, time: 120000 });
@@ -71,10 +78,10 @@ module.exports = {
 
       collector.on('end', (_, r) => { if (r !== 'messageDelete') msg.edit({ components: [] }).catch(() => {}); });
 
-    } catch (error) {
-      console.error(error);
-      message.reply('حدث خطأ أثناء جلب الاشتراكات.');
-    }
+	    } catch (error) {
+	      console.error(error);
+	      message.reply('**All Subscriptions Failed**\nحدث خطأ أثناء جلب الاشتراكات.');
+	    }
   }
 };
 

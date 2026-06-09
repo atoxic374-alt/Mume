@@ -3,7 +3,6 @@ const path = require('path');
 const ms = require('ms');
 const {
   ActionRowBuilder,
-  ActivityType,
   ButtonBuilder,
   ButtonStyle,
   ChannelSelectMenuBuilder,
@@ -11,6 +10,7 @@ const {
   Client,
   EmbedBuilder,
   GatewayIntentBits,
+  MessageFlags,
   ModalBuilder,
   StringSelectMenuBuilder,
   TextInputBuilder,
@@ -22,6 +22,11 @@ const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
 const { getEmbedColor } = require('../../utils/embedColor');
 const {
+  applyProfileToToken: applyProfileToTokenHelper,
+  resolveProfileAssets,
+} = require('../../utils/subBotProfile');
+const {
+  buildSubscriptionActivatedDm,
   buildOwnershipTransferredDm,
   buildServerUpdatedDm,
   buildSubscriptionBotsAddedDm,
@@ -79,28 +84,8 @@ function subBotProfile() {
   };
 }
 
-async function applyProfileToToken(token, profile) {
-  const { Client: DClient, GatewayIntentBits: GI } = require('discord.js');
-  const axios = require('axios');
-  const bc = new DClient({ intents: [GI.Guilds] });
-  try {
-    await bc.login(token);
-    const num = Math.floor(1000 + Math.random() * 9000);
-    await bc.user.setUsername(`${profile.prefix}-${num}`).catch(() => {});
-    if (profile.avatar) await bc.user.setAvatar(profile.avatar).catch(() => {});
-    if (profile.banner) {
-      try {
-        const resp = await axios.get(profile.banner, { responseType: 'arraybuffer' });
-        const b64 = Buffer.from(resp.data).toString('base64');
-        await axios.patch('https://discord.com/api/v9/users/@me',
-          { banner: `data:image/png;base64,${b64}` },
-          { headers: { Authorization: `Bot ${token}` } }
-        );
-      } catch {}
-    }
-  } finally {
-    bc.destroy().catch(() => {});
-  }
+async function applyProfileToToken(token, profile, options = {}) {
+  return applyProfileToTokenHelper(token, { profile, leaveGuilds: true, ...options });
 }
 
 function saveAutomaticSettings(next) {
@@ -286,6 +271,10 @@ function publicPanelEmbed(client) {
     .setColor(getEmbedColor(client))
     .setTitle('Automatic Purchase | الشراء التلقائي')
     .setDescription([
+      '**Buy Subscription | شراء اشتراك**',
+      '*Choose bot count, send invoice in DM, then wait for owner approval.*',
+      '*حدد عدد البوتات وارسل الفاتورة في الخاص ثم انتظر قبول الإدارة.*',
+      '',
       '**My Subscription | اشتراكي**',
       '*View and manage your active subscriptions.*',
       '*عرض وإدارة اشتراكاتك الحالية.*',
@@ -309,6 +298,7 @@ function publicPanelEmbed(client) {
 function publicPanelRows() {
   return [
     new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('auto_user_buy').setLabel('Buy | شراء').setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId('auto_user_my').setLabel('My Sub | اشتراكي').setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId('auto_user_renew').setLabel('Renew | تجديد').setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId('auto_user_links').setLabel('Links | روابط').setStyle(ButtonStyle.Secondary),
@@ -504,6 +494,46 @@ function buildRenewRequestEmbed(client, req) {
     .setTimestamp();
 }
 
+function buildPurchaseRequestEmbed(client, req) {
+  const stock = (store.get('bots') || []).length;
+  const settings = automaticSettings();
+  const unitPrice = req.unitPrice ?? settings.botPrice;
+  const currency = req.currency || settings.currency;
+  const totalPrice = req.totalPrice ?? (Number(unitPrice || 0) * Number(req.count || 0));
+  return new EmbedBuilder()
+    .setColor(getEmbedColor(client))
+    .setTitle('Purchase Request | طلب شراء')
+    .setDescription([
+      `**Customer :** *<@${req.userId}>*`,
+      '',
+      `**Requested Bots :** *\`${req.count}\` بوت*`,
+      '',
+      `**Server ID :** *\`${req.serverId || 'غير محدد'}\`*`,
+      '',
+      `**Unit Price :** *${formatMoney(unitPrice, currency)}*`,
+      '',
+      `**Total Price :** *${formatMoney(totalPrice, currency)}*`,
+      '',
+      `**Current Stock :** *\`${stock}\` بوت متوفر في المخزون*`,
+      '',
+      `**Invoice :** *${req.invoiceUrl ? `[فتح الصورة](${req.invoiceUrl})` : 'بانتظار الصورة'}*`,
+      '',
+      `**Status :** *${req.status || 'pending'}*`,
+      req.code ? `\n**Subscription :** *\`${req.code}\`*` : null,
+    ].filter(Boolean).join('\n'))
+    .setImage(req.invoiceUrl || null)
+    .setTimestamp();
+}
+
+function purchaseRequestRows(reqId, disabled = false) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`auto_purchase_accept_${reqId}`).setLabel('Accept Purchase | قبول').setStyle(ButtonStyle.Success).setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`auto_purchase_reject_${reqId}`).setLabel('Reject | رفض').setStyle(ButtonStyle.Danger).setDisabled(disabled),
+    ),
+  ];
+}
+
 function renewRequestRows(reqId, disabled = false) {
   return [
     new ActionRowBuilder().addComponents(
@@ -513,10 +543,77 @@ function renewRequestRows(reqId, disabled = false) {
   ];
 }
 
+async function startPurchase(interaction, count, serverId) {
+  const stock = (store.get('bots') || []).length;
+  if (stock < count) {
+    return interaction.reply({
+      content: `**Stock :** *المخزون غير كافي. المتاح الآن: \`${stock}\` بوت.*`,
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => {});
+  }
+
+  const existing = readRequests().find(r =>
+    r.type === 'purchase' &&
+    r.userId === interaction.user.id &&
+    ['awaiting_invoice', 'pending_owner'].includes(r.status) &&
+    Date.now() - Number(r.createdAt || 0) < 24 * 60 * 60 * 1000,
+  );
+  if (existing) {
+    return interaction.reply({
+      content: '**Purchase :** *لديك طلب شراء معلق بالفعل. ارسل الفاتورة أو انتظر رد الإدارة.*',
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => {});
+  }
+
+  const settings = automaticSettings();
+  const unitPrice = Number(settings.botPrice || 0);
+  const currency = settings.currency || 'SAR';
+  const totalPrice = unitPrice * count;
+  const req = {
+    id: randomId(10),
+    type: 'purchase',
+    status: 'awaiting_invoice',
+    userId: interaction.user.id,
+    count,
+    serverId,
+    unitPrice,
+    totalPrice,
+    currency,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + RENEWAL_TTL_MS,
+  };
+  const requests = readRequests().filter(item => !(item.type === 'purchase' && item.userId === req.userId && item.status === 'awaiting_invoice'));
+  requests.push(req);
+  saveRequests(requests);
+
+  const dmEmbed = new EmbedBuilder()
+    .setColor(getEmbedColor(interaction.client))
+    .setTitle('Purchase Invoice | فاتورة الشراء')
+    .setDescription([
+      `**Bot Count :** *\`${count}\`*`,
+      '',
+      `**Server ID :** *\`${serverId}\`*`,
+      '',
+      `**Total Price :** *${formatMoney(totalPrice, currency)}*`,
+      '',
+      '**Required :** *ارسل صورة الفاتورة هنا في الخاص حتى تصل للإدارة*',
+      '',
+      '**Timeout :** *لديك 12 ساعة قبل حذف الطلب تلقائيا*',
+    ].join('\n'));
+
+  const dmOk = await interaction.user.send({ embeds: [dmEmbed] }).then(() => true).catch(() => false);
+  return interaction.reply({
+    content: dmOk
+      ? '**Purchase :** *تم إرسال تعليمات الفاتورة في الخاص. ارسل صورة الفاتورة هناك خلال 12 ساعة.*'
+      : '**DM :** *لم أستطع إرسال الخاص. افتح رسائل الخاص ثم اضغط Buy مرة أخرى.*',
+    flags: MessageFlags.Ephemeral,
+  }).catch(() => {});
+}
+
 async function showSubscription(interaction, code) {
   const entry = findSubscription(code, interaction.user.id);
   if (!entry) {
-    return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', ephemeral: true }).catch(() => {});
+    return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', flags: MessageFlags.Ephemeral }).catch(() => {});
   }
   const payload = {
     embeds: [subscriptionEmbed(interaction.client, interaction.user, entry)],
@@ -524,13 +621,13 @@ async function showSubscription(interaction, code) {
   };
   if (interaction.replied || interaction.deferred) return interaction.editReply(payload).catch(() => {});
   if (interaction.isStringSelectMenu()) return interaction.update(payload).catch(() => {});
-  return interaction.reply({ ...payload, ephemeral: true }).catch(() => {});
+  return interaction.reply({ ...payload, flags: MessageFlags.Ephemeral }).catch(() => {});
 }
 
 async function showControlPanel(interaction, code) {
   const entry = findSubscription(code, interaction.user.id);
   if (!entry) {
-    return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', ephemeral: true }).catch(() => {});
+    return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', flags: MessageFlags.Ephemeral }).catch(() => {});
   }
   const payload = {
     embeds: [controlEmbed(interaction.client, interaction.user, entry)],
@@ -538,12 +635,12 @@ async function showControlPanel(interaction, code) {
   };
   if (interaction.replied || interaction.deferred) return interaction.editReply(payload).catch(() => {});
   if (interaction.isStringSelectMenu() || interaction.isButton()) return interaction.update(payload).catch(() => {});
-  return interaction.reply({ ...payload, ephemeral: true }).catch(() => {});
+  return interaction.reply({ ...payload, flags: MessageFlags.Ephemeral }).catch(() => {});
 }
 
 async function showSubscriptionPicker(interaction, action) {
   const subs = userSubscriptions(interaction.user.id);
-  if (!subs.length) return interaction.reply({ content: '**Subscription :** *لا يوجد لديك اشتراك حاليا.*', ephemeral: true }).catch(() => {});
+  if (!subs.length) return interaction.reply({ content: '**Subscription :** *لا يوجد لديك اشتراك حاليا.*', flags: MessageFlags.Ephemeral }).catch(() => {});
   if (subs.length === 1) {
     if (action === 'renew') return startRenewal(interaction, subs[0].code);
     if (action === 'pause') return togglePause(interaction, subs[0].code);
@@ -556,13 +653,13 @@ async function showSubscriptionPicker(interaction, action) {
   return interaction.reply({
     content: '**Subscription :** *اختر الاشتراك المطلوب من القائمة.*',
     components: [subscriptionSelect(customId, subs)],
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   }).catch(() => {});
 }
 
 async function requestAddBots(interaction, code, count) {
   const entry = findSubscription(code, interaction.user.id);
-  if (!entry) return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', ephemeral: true }).catch(() => {});
+  if (!entry) return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', flags: MessageFlags.Ephemeral }).catch(() => {});
 
   // Anti-spam: block duplicate pending add_bots requests within 24 hours
   const existing = readRequests().find(r =>
@@ -575,7 +672,7 @@ async function requestAddBots(interaction, code, count) {
   if (existing) {
     return interaction.reply({
       content: '**Add Bots :** *لديك طلب إضافة بوتات معلق بالفعل. انتظر قبوله أو رفضه قبل إرسال طلب جديد.*',
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     }).catch(() => {});
   }
 
@@ -620,7 +717,7 @@ async function requestAddBots(interaction, code, count) {
       '',
       `**Total Price :** *${formatMoney(totalPrice, currency)}*`,
     ].join('\n'),
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   }).catch(() => {});
 }
 
@@ -629,44 +726,63 @@ async function addTokensToStock(raw) {
     .split(/[\s,]+/)
     .map(t => t.trim())
     .filter(Boolean);
-  if (!inputTokens.length) return 0;
+  if (!inputTokens.length) return { added: 0, invalid: 0, duplicate: 0 };
 
   const bots = store.get('bots') || [];
   const tokens = store.get('tokens') || [];
   const known = new Set([...bots.map(b => b.token), ...tokens.map(t => t.token)].filter(Boolean));
   let added = 0;
+  let invalid = 0;
+  let duplicate = 0;
+  const profile = subBotProfile();
+  let assets = null;
+  try {
+    assets = await resolveProfileAssets(profile);
+  } catch {
+    assets = { avatarData: null, bannerData: null };
+  }
   for (const token of inputTokens) {
-    if (known.has(token)) continue;
+    if (known.has(token)) {
+      duplicate++;
+      continue;
+    }
+    try {
+      await applyProfileToTokenHelper(token, { profile, assets, leaveGuilds: true });
+    } catch {
+      invalid++;
+      continue;
+    }
     bots.push({ token });
     known.add(token);
     added++;
   }
   store.set('bots', bots);
-  return added;
+  return { added, invalid, duplicate };
 }
 
 async function approveAddBots(interaction, reqId) {
-  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
   const req = readRequests().find(item => item.id === reqId);
-  if (!req || req.status !== 'pending') return interaction.reply({ content: '**Request :** *الطلب غير موجود أو تم التعامل معه.*', ephemeral: true });
+  if (!req || req.status !== 'pending') return interaction.reply({ content: '**Request :** *الطلب غير موجود أو تم التعامل معه.*', flags: MessageFlags.Ephemeral });
 
   const entry = findSubscription(req.code, req.userId);
-  if (!entry) return interaction.reply({ content: '**Subscription :** *الاشتراك غير موجود.*', ephemeral: true });
+  if (!entry) return interaction.reply({ content: '**Subscription :** *الاشتراك غير موجود.*', flags: MessageFlags.Ephemeral });
 
   const bots = store.get('bots') || [];
   if (bots.length < req.count) {
-    return interaction.reply({ content: `**Stock :** *المخزون غير كافي. المتاح الآن: \`${bots.length}\` بوت.*`, ephemeral: true });
+    return interaction.reply({ content: `**Stock :** *المخزون غير كافي. المتاح الآن: \`${bots.length}\` بوت.*`, flags: MessageFlags.Ephemeral });
   }
 
   const given = bots.splice(0, req.count);
   const tokens = store.get('tokens') || [];
+  const defaultStatus = automaticSettings().subBotStatus || null;
   const paused = !!entry.pausedAt;
   given.forEach(bot => tokens.push({
     token: bot.token,
     Server: entry.server,
     channel: null,
     chat: null,
-    status: null,
+    status: defaultStatus,
     client: req.userId,
     code: req.code,
     paused,
@@ -695,11 +811,19 @@ async function approveAddBots(interaction, reqId) {
 }
 
 async function rejectRequest(interaction, reqId, type = 'add') {
-  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
   const req = updateRequest(reqId, { status: 'rejected' });
-  if (!req) return interaction.reply({ content: '**Request :** *الطلب غير موجود.*', ephemeral: true });
-  const embed = type === 'renew' ? buildRenewRequestEmbed(interaction.client, req) : buildAddBotsRequestEmbed(interaction.client, req);
-  const rows = type === 'renew' ? renewRequestRows(reqId, true) : addBotsRequestRows(reqId, true);
+  if (!req) return interaction.reply({ content: '**Request :** *الطلب غير موجود.*', flags: MessageFlags.Ephemeral });
+  const embed = type === 'renew'
+    ? buildRenewRequestEmbed(interaction.client, req)
+    : type === 'purchase'
+      ? buildPurchaseRequestEmbed(interaction.client, req)
+      : buildAddBotsRequestEmbed(interaction.client, req);
+  const rows = type === 'renew'
+    ? renewRequestRows(reqId, true)
+    : type === 'purchase'
+      ? purchaseRequestRows(reqId, true)
+      : addBotsRequestRows(reqId, true);
   await interaction.update({ embeds: [embed], components: rows }).catch(() => {});
   const user = await interaction.client.users.fetch(req.userId).catch(() => null);
   if (user) user.send(`**Request :** *تم رفض طلبك للاشتراك \`${req.code}\`.*`).catch(() => {});
@@ -707,7 +831,7 @@ async function rejectRequest(interaction, reqId, type = 'add') {
 
 async function startRenewal(interaction, code) {
   const entry = findSubscription(code, interaction.user.id);
-  if (!entry) return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', ephemeral: true }).catch(() => {});
+  if (!entry) return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', flags: MessageFlags.Ephemeral }).catch(() => {});
 
   const req = {
     id: randomId(10),
@@ -738,7 +862,7 @@ async function startRenewal(interaction, code) {
     content: dmOk
       ? '**Renewal :** *تم إرسال تعليمات التجديد في الخاص. ارسل صورة الفاتورة هناك خلال 12 ساعة.*'
       : '**DM :** *لم أستطع إرسال الخاص. افتح رسائل الخاص ثم اضغط Renew مرة أخرى.*',
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   }).catch(() => {});
 }
 
@@ -749,7 +873,7 @@ async function handleInvoiceDm(client, message) {
 
   const requests = readRequests();
   const req = requests
-    .filter(item => item.type === 'renewal' && item.userId === message.author.id && item.status === 'awaiting_invoice' && Number(item.expiresAt || 0) > Date.now())
+    .filter(item => ['renewal', 'purchase'].includes(item.type) && item.userId === message.author.id && item.status === 'awaiting_invoice' && Number(item.expiresAt || 0) > Date.now())
     .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))[0];
   if (!req) return;
 
@@ -759,10 +883,15 @@ async function handleInvoiceDm(client, message) {
   req.updatedAt = Date.now();
   saveRequests(requests);
 
-  const sent = await sendToRequestTarget(client, {
-    embeds: [buildRenewRequestEmbed(client, req)],
-    components: renewRequestRows(req.id),
-  });
+  const sent = await sendToRequestTarget(client, req.type === 'purchase'
+    ? {
+        embeds: [buildPurchaseRequestEmbed(client, req)],
+        components: purchaseRequestRows(req.id),
+      }
+    : {
+        embeds: [buildRenewRequestEmbed(client, req)],
+        components: renewRequestRows(req.id),
+      });
   if (sent?.id) {
     updateRequest(req.id, {
       requestMessageId: sent.id,
@@ -774,10 +903,93 @@ async function handleInvoiceDm(client, message) {
   await message.reply('**Invoice :** *تم استلام الفاتورة وإرسالها للإدارة.*').catch(() => {});
 }
 
-async function acceptRenewal(interaction, reqId) {
-  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+async function acceptPurchase(interaction, reqId) {
+  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
   const req = readRequests().find(item => item.id === reqId);
-  if (!req || req.status !== 'pending_owner') return interaction.reply({ content: '**Request :** *الطلب غير موجود أو غير جاهز.*', ephemeral: true });
+  if (!req || req.status !== 'pending_owner' || req.type !== 'purchase') {
+    return interaction.reply({ content: '**Request :** *الطلب غير موجود أو غير جاهز.*', flags: MessageFlags.Ephemeral });
+  }
+
+  const modal = new ModalBuilder().setCustomId(`auto_purchase_accept_modal_${reqId}`).setTitle('Purchase Duration');
+  modal.addComponents(new ActionRowBuilder().addComponents(
+    new TextInputBuilder()
+      .setCustomId('duration')
+      .setLabel('Duration')
+      .setPlaceholder('Example: 30d, 90d, 12h')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true),
+  ));
+  await interaction.showModal(modal);
+
+  const submit = await interaction.awaitModalSubmit({
+    filter: i => i.customId === `auto_purchase_accept_modal_${reqId}` && i.user.id === interaction.user.id,
+    time: 60000,
+  }).catch(() => null);
+  if (!submit) return;
+
+  const raw = submit.fields.getTextInputValue('duration').trim();
+  const durationMs = ms(raw);
+  if (!durationMs || durationMs <= 0) return submit.reply({ content: '**Duration :** *اكتب مدة صحيحة مثل `30d` أو `12h`.*', flags: MessageFlags.Ephemeral });
+
+  const bots = store.get('bots') || [];
+  if (bots.length < req.count) {
+    return submit.reply({ content: `**Stock :** *المخزون غير كافي. المتاح الآن: \`${bots.length}\` بوت.*`, flags: MessageFlags.Ephemeral });
+  }
+
+  const code = `#${randomId(5)}`;
+  const expirationTime = Date.now() + durationMs;
+  const timeArray = store.get('time') || [];
+  timeArray.push({
+    user: req.userId,
+    server: req.serverId,
+    botsCount: req.count,
+    subscriptionTime: raw,
+    expirationTime,
+    code,
+  });
+
+  const given = bots.splice(0, req.count);
+  const tokens = store.get('tokens') || [];
+  const defaultStatus = automaticSettings().subBotStatus || null;
+  given.forEach(bot => tokens.push({
+    token: bot.token,
+    Server: req.serverId,
+    channel: null,
+    chat: null,
+    status: defaultStatus,
+    client: req.userId,
+    code,
+  }));
+
+  store.set('time', timeArray);
+  store.set('tokens', tokens);
+  store.set('bots', bots);
+
+  const updated = updateRequest(reqId, { status: 'approved', duration: raw, code });
+  await submit.reply({ content: '**Purchase :** *تم قبول الشراء وتفعيل الاشتراك.*', flags: MessageFlags.Ephemeral }).catch(() => {});
+  await interaction.message.edit({
+    embeds: [buildPurchaseRequestEmbed(interaction.client, updated)],
+    components: purchaseRequestRows(reqId, true),
+  }).catch(() => {});
+
+  const user = await interaction.client.users.fetch(req.userId).catch(() => null);
+  if (user) {
+    user.send({
+      embeds: [buildSubscriptionActivatedDm(interaction.client, {
+        code,
+        botCount: req.count,
+        duration: formatDuration(durationMs),
+        serverId: req.serverId,
+        expiresAt: expirationTime,
+      })],
+    }).catch(() => {});
+  }
+}
+
+async function acceptRenewal(interaction, reqId) {
+  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
+  const req = readRequests().find(item => item.id === reqId);
+  if (!req || req.status !== 'pending_owner') return interaction.reply({ content: '**Request :** *الطلب غير موجود أو غير جاهز.*', flags: MessageFlags.Ephemeral });
 
   const modal = new ModalBuilder().setCustomId(`auto_renew_accept_modal_${reqId}`).setTitle('Renew Duration');
   modal.addComponents(new ActionRowBuilder().addComponents(
@@ -798,16 +1010,16 @@ async function acceptRenewal(interaction, reqId) {
 
   const raw = submit.fields.getTextInputValue('duration').trim();
   const durationMs = ms(raw);
-  if (!durationMs || durationMs <= 0) return submit.reply({ content: '**Duration :** *اكتب مدة صحيحة مثل `30d` أو `12h`.*', ephemeral: true });
+  if (!durationMs || durationMs <= 0) return submit.reply({ content: '**Duration :** *اكتب مدة صحيحة مثل `30d` أو `12h`.*', flags: MessageFlags.Ephemeral });
 
   const timeArray = store.get('time') || [];
   const entry = timeArray.find(item => item.code === req.code && item.user === req.userId);
-  if (!entry) return submit.reply({ content: '**Subscription :** *الاشتراك غير موجود.*', ephemeral: true });
+  if (!entry) return submit.reply({ content: '**Subscription :** *الاشتراك غير موجود.*', flags: MessageFlags.Ephemeral });
   entry.expirationTime += durationMs;
   store.set('time', timeArray);
 
   const updated = updateRequest(reqId, { status: 'approved', duration: raw });
-  await submit.reply({ content: '**Renewal :** *تم قبول التجديد وتحديث مدة الاشتراك.*', ephemeral: true }).catch(() => {});
+  await submit.reply({ content: '**Renewal :** *تم قبول التجديد وتحديث مدة الاشتراك.*', flags: MessageFlags.Ephemeral }).catch(() => {});
   await interaction.message.edit({
     embeds: [buildRenewRequestEmbed(interaction.client, updated)],
     components: renewRequestRows(reqId, true),
@@ -829,7 +1041,7 @@ async function acceptRenewal(interaction, reqId) {
 async function togglePause(interaction, code) {
   const timeArray = store.get('time') || [];
   const entry = timeArray.find(item => item.code === code && item.user === interaction.user.id);
-  if (!entry) return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', ephemeral: true }).catch(() => {});
+  if (!entry) return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', flags: MessageFlags.Ephemeral }).catch(() => {});
 
   const tokens = store.get('tokens') || [];
   const subTokens = tokens.filter(token => token.code === code && token.client === interaction.user.id);
@@ -841,7 +1053,7 @@ async function togglePause(interaction, code) {
     subTokens.forEach(token => { delete token.paused; });
     store.set('time', timeArray);
     store.set('tokens', tokens);
-    return interaction.reply({ content: `**Pause :** *تم استئناف الاشتراك \`${code}\`.*`, ephemeral: true }).catch(() => {});
+    return interaction.reply({ content: `**Pause :** *تم استئناف الاشتراك \`${code}\`.*`, flags: MessageFlags.Ephemeral }).catch(() => {});
   }
 
   entry.pausedAt = Date.now();
@@ -860,7 +1072,7 @@ async function togglePause(interaction, code) {
     }
   } catch {}
 
-  return interaction.reply({ content: `**Pause :** *تم إيقاف الاشتراك \`${code}\` مؤقتا، وتم فصل البوتات.*`, ephemeral: true }).catch(() => {});
+  return interaction.reply({ content: `**Pause :** *تم إيقاف الاشتراك \`${code}\` مؤقتا، وتم فصل البوتات.*`, flags: MessageFlags.Ephemeral }).catch(() => {});
 }
 
 async function botInviteInfo(tokenData, mode) {
@@ -916,9 +1128,9 @@ async function sendSubscriptionLinksToUser(client, user, code, infos, mode = 'al
 
 async function sendLinks(interaction, code, mode = 'all') {
   const entry = findSubscription(code, interaction.user.id);
-  if (!entry) return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', ephemeral: true }).catch(() => {});
+  if (!entry) return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', flags: MessageFlags.Ephemeral }).catch(() => {});
 
-  await interaction.deferReply({ ephemeral: true }).catch(() => {});
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
   const infos = await collectSubscriptionLinks(code, interaction.user.id, mode);
 
   if (!infos.length) {
@@ -946,19 +1158,19 @@ async function disconnectSubscriptionBots(subTokens) {
 async function transferSubscriptionOwnership(interaction, code, rawUser) {
   const newUserId = parseUserId(rawUser);
   if (!newUserId) {
-    return interaction.reply({ content: '**Transfer Ownership :** *ارسل منشن أو ايدي مستخدم صحيح.*', ephemeral: true }).catch(() => {});
+    return interaction.reply({ content: '**Transfer Ownership :** *ارسل منشن أو ايدي مستخدم صحيح.*', flags: MessageFlags.Ephemeral }).catch(() => {});
   }
   if (newUserId === interaction.user.id) {
-    return interaction.reply({ content: '**Transfer Ownership :** *الاشتراك مملوك لك بالفعل.*', ephemeral: true }).catch(() => {});
+    return interaction.reply({ content: '**Transfer Ownership :** *الاشتراك مملوك لك بالفعل.*', flags: MessageFlags.Ephemeral }).catch(() => {});
   }
 
   const timeArray = store.get('time') || [];
   const entry = timeArray.find(item => item.code === code && item.user === interaction.user.id);
-  if (!entry) return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', ephemeral: true }).catch(() => {});
+  if (!entry) return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', flags: MessageFlags.Ephemeral }).catch(() => {});
 
   const newUser = await interaction.client.users.fetch(newUserId).catch(() => null);
   if (!newUser) {
-    return interaction.reply({ content: '**Transfer Ownership :** *لم أستطع العثور على المستخدم الجديد.*', ephemeral: true }).catch(() => {});
+    return interaction.reply({ content: '**Transfer Ownership :** *لم أستطع العثور على المستخدم الجديد.*', flags: MessageFlags.Ephemeral }).catch(() => {});
   }
 
   entry.user = newUserId;
@@ -970,7 +1182,7 @@ async function transferSubscriptionOwnership(interaction, code, rawUser) {
 
   await interaction.reply({
     content: `**Transfer Ownership :** *تم نقل ملكية الاشتراك \`${code}\` إلى <@${newUserId}>.*`,
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   }).catch(() => {});
 
   await newUser.send({
@@ -986,14 +1198,14 @@ async function transferSubscriptionOwnership(interaction, code, rawUser) {
 async function moveSubscriptionServer(interaction, code, rawServerId) {
   const newServerId = String(rawServerId || '').trim();
   if (!/^\d{15,20}$/.test(newServerId)) {
-    return interaction.reply({ content: '**Move Server :** *اكتب ايدي سيرفر صحيح.*', ephemeral: true }).catch(() => {});
+    return interaction.reply({ content: '**Move Server :** *اكتب ايدي سيرفر صحيح.*', flags: MessageFlags.Ephemeral }).catch(() => {});
   }
 
   const timeArray = store.get('time') || [];
   const entry = timeArray.find(item => item.code === code && item.user === interaction.user.id);
-  if (!entry) return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', ephemeral: true }).catch(() => {});
+  if (!entry) return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', flags: MessageFlags.Ephemeral }).catch(() => {});
 
-  await interaction.deferReply({ ephemeral: true }).catch(() => {});
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
   const oldServerId = entry.server;
   entry.server = newServerId;
 
@@ -1033,7 +1245,7 @@ async function moveSubscriptionServer(interaction, code, rawServerId) {
 }
 
 async function handleAdminTarget(interaction) {
-  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
   const modal = new ModalBuilder().setCustomId('auto_target_modal').setTitle('Request Target');
   modal.addComponents(
     new ActionRowBuilder().addComponents(
@@ -1063,11 +1275,11 @@ async function handleAdminTarget(interaction) {
 
   const mode = submit.fields.getTextInputValue('mode').trim().toLowerCase();
   const channelId = submit.fields.getTextInputValue('channel').trim();
-  if (!['dm', 'channel'].includes(mode)) return submit.reply({ content: '**Mode :** *اكتب `dm` أو `channel` فقط.*', ephemeral: true });
-  if (mode === 'channel' && !/^\d{17,20}$/.test(channelId)) return submit.reply({ content: '**Channel ID :** *ايدي الروم غير صحيح.*', ephemeral: true });
+  if (!['dm', 'channel'].includes(mode)) return submit.reply({ content: '**Mode :** *اكتب `dm` أو `channel` فقط.*', flags: MessageFlags.Ephemeral });
+  if (mode === 'channel' && !/^\d{17,20}$/.test(channelId)) return submit.reply({ content: '**Channel ID :** *ايدي الروم غير صحيح.*', flags: MessageFlags.Ephemeral });
 
   saveAutomaticSettings({ requestMode: mode, requestChannelId: mode === 'channel' ? channelId : null });
-  await submit.reply({ content: '**Request Target :** *تم تحديث مكان استقبال الطلبات بنجاح.*', ephemeral: true });
+  await submit.reply({ content: '**Request Target :** *تم تحديث مكان استقبال الطلبات بنجاح.*', flags: MessageFlags.Ephemeral });
   await interaction.message?.edit({
     ...autoImagePayload(buildOwnerEmbed(interaction.client, interaction.user)),
     components: ownerRows(),
@@ -1075,7 +1287,7 @@ async function handleAdminTarget(interaction) {
 }
 
 async function handleAdminPricing(interaction) {
-  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
   const settings = automaticSettings();
   const modal = new ModalBuilder().setCustomId('auto_pricing_modal').setTitle('Pricing Settings');
   modal.addComponents(
@@ -1108,12 +1320,12 @@ async function handleAdminPricing(interaction) {
 
   const price = parsePrice(submit.fields.getTextInputValue('price'));
   const currency = submit.fields.getTextInputValue('currency').trim().slice(0, 12) || 'SAR';
-  if (price === null) return submit.reply({ content: '**Bot Price :** *اكتب سعر صحيح مثل `15` أو `15.5`.*', ephemeral: true });
+  if (price === null) return submit.reply({ content: '**Bot Price :** *اكتب سعر صحيح مثل `15` أو `15.5`.*', flags: MessageFlags.Ephemeral });
 
   saveAutomaticSettings({ botPrice: price, currency });
   await submit.reply({
     content: `**Bot Price :** *تم حفظ سعر البوت الواحد: ${formatMoney(price, currency)}.*`,
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   });
   await interaction.message?.edit({
     ...autoImagePayload(buildOwnerEmbed(interaction.client, interaction.user)),
@@ -1123,7 +1335,7 @@ async function handleAdminPricing(interaction) {
 }
 
 async function sendPublicPanel(interaction) {
-  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
 
   // Step 1: Ask owner which channel to send the panel to
   const selectRow = new ActionRowBuilder().addComponents(
@@ -1145,7 +1357,7 @@ async function sendPublicPanel(interaction) {
 }
 
 async function handlePanelChannelSelect(interaction) {
-  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
 
   const targetChannelId = interaction.values[0];
   const targetChannel = await interaction.client.channels.fetch(targetChannelId).catch(() => null);
@@ -1175,7 +1387,7 @@ async function handlePanelChannelSelect(interaction) {
 }
 
 async function handleAdminImage(interaction) {
-  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
 
   const settings = automaticSettings();
   const modal = new ModalBuilder().setCustomId('auto_image_modal').setTitle('Panel Image');
@@ -1205,7 +1417,7 @@ async function handleAdminImage(interaction) {
     content: url
       ? `**Panel Image :** *تم حفظ رابط الصورة الجديد.*`
       : `**Panel Image :** *تم المسح — سيتم استخدام الصورة الافتراضية.*`,
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   });
   await interaction.message?.edit({
     embeds: [],
@@ -1217,7 +1429,7 @@ async function handleAdminImage(interaction) {
 }
 
 async function handleAdminProfile(interaction) {
-  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
 
   const profile = subBotProfile();
   const allBots = store.get('bots') || [];
@@ -1261,7 +1473,7 @@ async function handleAdminProfile(interaction) {
 }
 
 async function handleProfileAction(interaction, action) {
-  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
 
   if (action === 'botsname') {
     const profile = subBotProfile();
@@ -1281,7 +1493,7 @@ async function handleProfileAction(interaction, action) {
     if (!submit) return;
     const val = submit.fields.getTextInputValue('botsname').trim();
     saveAutomaticSettings({ subBotPrefix: val });
-    return submit.reply({ content: `**Prefix :** *تم حفظ البادئة \`${val}\` — ستُطبَّق على البوتات الجديدة عند إضافتها.*`, ephemeral: true });
+    return submit.reply({ content: `**Prefix :** *تم حفظ البادئة \`${val}\` — ستُطبَّق على البوتات الجديدة عند إضافتها.*`, flags: MessageFlags.Ephemeral });
   }
 
   if (action === 'avatar') {
@@ -1301,7 +1513,7 @@ async function handleProfileAction(interaction, action) {
     if (!submit) return;
     const val = submit.fields.getTextInputValue('url').trim();
     saveAutomaticSettings({ subBotAvatar: val });
-    return submit.reply({ content: `**Avatar :** *تم حفظ رابط الصورة — ستُطبَّق على البوتات الجديدة عند إضافتها.*`, ephemeral: true });
+    return submit.reply({ content: `**Avatar :** *تم حفظ رابط الصورة — ستُطبَّق على البوتات الجديدة عند إضافتها.*`, flags: MessageFlags.Ephemeral });
   }
 
   if (action === 'banner') {
@@ -1321,7 +1533,7 @@ async function handleProfileAction(interaction, action) {
     if (!submit) return;
     const val = submit.fields.getTextInputValue('url').trim();
     saveAutomaticSettings({ subBotBanner: val });
-    return submit.reply({ content: `**Banner :** *تم حفظ رابط البنر — سيُطبَّق على البوتات الجديدة عند إضافتها.*`, ephemeral: true });
+    return submit.reply({ content: `**Banner :** *تم حفظ رابط البنر — سيُطبَّق على البوتات الجديدة عند إضافتها.*`, flags: MessageFlags.Ephemeral });
   }
 
   if (action === 'streaming') {
@@ -1341,7 +1553,7 @@ async function handleProfileAction(interaction, action) {
     if (!submit) return;
     const val = submit.fields.getTextInputValue('status').trim();
     saveAutomaticSettings({ subBotStatus: val || null });
-    return submit.reply({ content: `**Streaming :** *تم حفظ الحالة \`${val || '(فارغة)'}\` — ستُطبَّق على البوتات الجديدة.*`, ephemeral: true });
+    return submit.reply({ content: `**Streaming :** *تم حفظ الحالة \`${val || '(فارغة)'}\` — ستُطبَّق على البوتات الجديدة.*`, flags: MessageFlags.Ephemeral });
   }
 
   if (action === 'applyall') {
@@ -1349,25 +1561,31 @@ async function handleProfileAction(interaction, action) {
     const activeSubs = new Set((store.get('tokens') || []).map(t => t.token));
     const stockBots = allBots.filter(b => !activeSubs.has(b.token));
 
-    if (stockBots.length === 0) return interaction.reply({ content: '**Apply :** *لا توجد بوتات حرة في الستوك (كلهم في اشتراكات).*', ephemeral: true });
+    if (stockBots.length === 0) return interaction.reply({ content: '**Apply :** *لا توجد بوتات حرة في الستوك (كلهم في اشتراكات).*', flags: MessageFlags.Ephemeral });
 
     const secs = stockBots.length * 5;
     const timeStr = `${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, '0')}`;
-    await interaction.reply({ content: `**Apply :** *جاري تطبيق الإعدادات على \`${stockBots.length}\` بوت حر في الستوك — الوقت المتوقع ~${timeStr} دقيقة.*`, ephemeral: true });
+    await interaction.reply({ content: `**Apply :** *جاري تطبيق الإعدادات على \`${stockBots.length}\` بوت حر في الستوك — الوقت المتوقع ~${timeStr} دقيقة.*`, flags: MessageFlags.Ephemeral });
 
     const profile = subBotProfile();
+    let assets = null;
+    try {
+      assets = await resolveProfileAssets(profile);
+    } catch {
+      assets = { avatarData: null, bannerData: null };
+    }
     let done = 0;
     let failed = 0;
     for (const bot of stockBots) {
       try {
-        await applyProfileToToken(bot.token, profile);
+        await applyProfileToToken(bot.token, profile, { assets });
         done++;
       } catch {
         failed++;
       }
       await new Promise(r => setTimeout(r, 5000));
     }
-    return interaction.followUp({ content: `**Apply Done | تم التطبيق**\nSuccess: \`${done}\`\nFailed: \`${failed}\`\nالبوتات الموجودة داخل اشتراكات لم يتم تعديلها.`, ephemeral: true }).catch(() => {});
+    return interaction.followUp({ content: `**Apply Done | تم التطبيق**\nSuccess: \`${done}\`\nFailed: \`${failed}\`\nالبوتات الموجودة داخل اشتراكات لم يتم تعديلها.`, flags: MessageFlags.Ephemeral }).catch(() => {});
   }
 }
 
@@ -1382,7 +1600,7 @@ async function handleInteraction(interaction) {
     if (id === 'auto_admin_send') return sendPublicPanel(interaction);
     if (id === 'auto_admin_image') return handleAdminImage(interaction);
     if (id === 'auto_panel_cancel') {
-      if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+      if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
       return interaction.update({
         content: '',
         ...autoImagePayload(buildOwnerEmbed(interaction.client, interaction.user)),
@@ -1391,7 +1609,7 @@ async function handleInteraction(interaction) {
     }
     if (id === 'auto_admin_profile') return handleAdminProfile(interaction);
     if (id === 'auto_profile_back') {
-      if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+      if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
       return interaction.update({ ...autoImagePayload(buildOwnerEmbed(interaction.client, interaction.user)), components: ownerRows() });
     }
     if (id === 'auto_profile_botsname') return handleProfileAction(interaction, 'botsname');
@@ -1399,6 +1617,40 @@ async function handleInteraction(interaction) {
     if (id === 'auto_profile_banner') return handleProfileAction(interaction, 'banner');
     if (id === 'auto_profile_streaming') return handleProfileAction(interaction, 'streaming');
     if (id === 'auto_profile_applyall') return handleProfileAction(interaction, 'applyall');
+    if (id === 'auto_user_buy') {
+      const modal = new ModalBuilder().setCustomId(`auto_buy_modal_${interaction.id}`).setTitle('Buy Subscription');
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('count')
+            .setLabel('Bot Count')
+            .setPlaceholder('Example: 2')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true),
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('server_id')
+            .setLabel('Server ID')
+            .setPlaceholder('Example: 123456789012345678')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setMinLength(15)
+            .setMaxLength(20),
+        ),
+      );
+      await interaction.showModal(modal);
+      const submit = await interaction.awaitModalSubmit({
+        filter: i => i.customId === `auto_buy_modal_${interaction.id}` && i.user.id === interaction.user.id,
+        time: 60000,
+      }).catch(() => null);
+      if (!submit) return;
+      const count = parseInt(submit.fields.getTextInputValue('count').trim(), 10);
+      const serverId = submit.fields.getTextInputValue('server_id').trim();
+      if (!Number.isInteger(count) || count <= 0) return submit.reply({ content: '**Bot Count :** *اكتب عدد صحيح أكبر من صفر.*', flags: MessageFlags.Ephemeral });
+      if (!/^\d{15,20}$/.test(serverId)) return submit.reply({ content: '**Server ID :** *اكتب ايدي سيرفر صحيح.*', flags: MessageFlags.Ephemeral });
+      return startPurchase(submit, count, serverId);
+    }
     if (id === 'auto_user_my') return showSubscriptionPicker(interaction, 'my');
     if (id === 'auto_user_renew') return showSubscriptionPicker(interaction, 'renew');
     if (id === 'auto_user_links') return showSubscriptionPicker(interaction, 'links_all');
@@ -1463,7 +1715,7 @@ async function handleInteraction(interaction) {
       }).catch(() => null);
       if (!submit) return;
       const count = parseInt(submit.fields.getTextInputValue('count').trim(), 10);
-      if (!Number.isInteger(count) || count <= 0) return submit.reply({ content: '**Bot Count :** *اكتب عدد صحيح أكبر من صفر.*', ephemeral: true });
+      if (!Number.isInteger(count) || count <= 0) return submit.reply({ content: '**Bot Count :** *اكتب عدد صحيح أكبر من صفر.*', flags: MessageFlags.Ephemeral });
       return requestAddBots(submit, code, count);
     }
 
@@ -1473,7 +1725,7 @@ async function handleInteraction(interaction) {
     if (id.startsWith('auto_sub_links_off_')) return sendLinks(interaction, id.slice('auto_sub_links_off_'.length), 'off');
 
     if (id.startsWith('auto_req_tokens_')) {
-      if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', ephemeral: true });
+      if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
       const reqId = id.slice('auto_req_tokens_'.length);
       const modal = new ModalBuilder().setCustomId(`auto_addtokens_modal_${reqId}`).setTitle('Add Tokens');
       modal.addComponents(new ActionRowBuilder().addComponents(
@@ -1485,9 +1737,16 @@ async function handleInteraction(interaction) {
         time: 120000,
       }).catch(() => null);
       if (!submit) return;
-      const added = await addTokensToStock(submit.fields.getTextInputValue('tokens'));
+      const result = await addTokensToStock(submit.fields.getTextInputValue('tokens'));
       const req = readRequests().find(item => item.id === reqId);
-      await submit.reply({ content: `**Stock :** *تم إضافة \`${added}\` توكن للمخزون.*`, ephemeral: true });
+      await submit.reply({
+        content: [
+          `**Stock :** *تم إضافة \`${result.added}\` توكن للمخزون.*`,
+          `**Invalid :** *\`${result.invalid}\`*`,
+          `**Duplicate :** *\`${result.duplicate}\`*`,
+        ].join('\n'),
+        flags: MessageFlags.Ephemeral,
+      });
       if (req) {
         await interaction.message.edit({
           embeds: [buildAddBotsRequestEmbed(interaction.client, req)],
@@ -1501,6 +1760,8 @@ async function handleInteraction(interaction) {
     if (id.startsWith('auto_req_reject_')) return rejectRequest(interaction, id.slice('auto_req_reject_'.length), 'add');
     if (id.startsWith('auto_renew_accept_')) return acceptRenewal(interaction, id.slice('auto_renew_accept_'.length));
     if (id.startsWith('auto_renew_reject_')) return rejectRequest(interaction, id.slice('auto_renew_reject_'.length), 'renew');
+    if (id.startsWith('auto_purchase_accept_')) return acceptPurchase(interaction, id.slice('auto_purchase_accept_'.length));
+    if (id.startsWith('auto_purchase_reject_')) return rejectRequest(interaction, id.slice('auto_purchase_reject_'.length), 'purchase');
   }
 
   if (interaction.isStringSelectMenu()) {

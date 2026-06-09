@@ -1,15 +1,6 @@
-const path = require('path');
-const fs = require('fs');
 const { owners, logChannelId } = require('../../config');
-
-function getSubBotProfile() {
-  const file = path.join(process.cwd(), 'settings', 'automatic.json');
-  try {
-    const saved = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
-    return { prefix: saved.subBotPrefix || 'music', avatar: saved.subBotAvatar || null };
-  } catch { return { prefix: 'music', avatar: null }; }
-}
-const { EmbedBuilder, Client, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { applyProfileToToken, getSubBotProfile } = require('../../utils/subBotProfile');
+const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
 const { getEmbedColor } = require('../../utils/embedColor');
@@ -29,22 +20,22 @@ module.exports = {
     let selectedCode = args[0];
 
     const confirmRemoval = async (code, interaction = null) => {
-      const entry = timeData.find(e => e.code === code);
-      if (!entry) {
-        const msg = "**لا يوجد اشتراك مرتبط بهذا الايدي.**";
-        return interaction ? interaction.update({ content: msg, embeds: [], components: [] }) : message.reply(msg);
-      }
-
-      const embed = new EmbedBuilder()
-        .setTitle('⚠️ تأكيد الحذف')
-        .setDescription(`هل أنت متأكد من رغبتك في حذف الاشتراك التالي؟`)
-        .addFields(
-          { name: '🔖 SuID', value: `\`${entry.code}\``, inline: true },
-          { name: '👤 المستخدم', value: `<@${entry.user}>`, inline: true },
-          { name: '🤖 البوتات', value: `\`${entry.botsCount}\``, inline: true },
-          { name: '🖥️ السيرفر', value: `\`${entry.server}\``, inline: true }
-        )
-        .setColor(getEmbedColor(client));
+	      const entry = timeData.find(e => e.code === code);
+	      if (!entry) {
+	        const msg = "**Subscription Not Found**\nلا يوجد اشتراك مرتبط بهذا الايدي.";
+	        return interaction ? interaction.update({ content: msg, embeds: [], components: [] }) : message.reply(msg);
+	      }
+	
+	      const embed = new EmbedBuilder()
+	        .setTitle('Confirm Subscription Removal')
+	        .setDescription('راجع بيانات الاشتراك قبل تأكيد الحذف. عند التأكيد سيتم إرجاع البوتات للستوك وتنظيف إعداداتها.')
+	        .addFields(
+	          { name: 'Subscription ID', value: `\`${entry.code}\``, inline: true },
+	          { name: 'User', value: `<@${entry.user}>`, inline: true },
+	          { name: 'Bot Count', value: `\`${entry.botsCount}\``, inline: true },
+	          { name: 'Server', value: `\`${entry.server}\``, inline: true }
+	        )
+	        .setColor(getEmbedColor(client));
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`confirm_rem_${code}_${mid}`).setLabel('تأكيد الحذف').setStyle(ButtonStyle.Danger),
@@ -56,11 +47,11 @@ module.exports = {
 
       const collector = (interaction ? interaction.message : prompt).createMessageComponentCollector({ filter: i => i.user.id === message.author.id, time: 60000 });
 
-      collector.on('collect', async i => {
-        if (i.customId === `cancel_rem_${mid}`) {
-          await i.update({ content: '❌ تم إلغاء العملية.', embeds: [], components: [] });
-          return collector.stop();
-        }
+	      collector.on('collect', async i => {
+	        if (i.customId === `cancel_rem_${mid}`) {
+	          await i.update({ content: '**Cancelled**\nتم إلغاء العملية.', embeds: [], components: [] });
+	          return collector.stop();
+	        }
 
         if (i.customId === `confirm_rem_${code}_${mid}`) {
           await i.deferUpdate();
@@ -70,12 +61,12 @@ module.exports = {
       });
     };
 
-    if (!selectedCode) {
-      if (timeData.length === 0) return message.reply("**لا توجد اشتراكات نشطة حالياً.**");
+	    if (!selectedCode) {
+	      if (timeData.length === 0) return message.reply("**No Active Subscriptions**\nلا توجد اشتراكات نشطة حالياً.");
 
       const select = new StringSelectMenuBuilder()
         .setCustomId(`rem_select_${mid}`)
-        .setPlaceholder('اختر الاشتراك المراد حذفه')
+	        .setPlaceholder('Select subscription to remove')
         .addOptions(timeData.slice(0, 25).map(e => ({
           label: `SuID: ${e.code}`,
           description: `User: ${e.user} | Bots: ${e.botsCount}`,
@@ -83,7 +74,7 @@ module.exports = {
         })));
 
       const row = new ActionRowBuilder().addComponents(select);
-      const prompt = await message.reply({ content: 'اختر الاشتراك:', components: [row] });
+	      const prompt = await message.reply({ content: '**Remove Subscription**\nاختر الاشتراك المراد حذفه:', components: [row] });
 
       const collector = prompt.createMessageComponentCollector({ filter: i => i.user.id === message.author.id, time: 60000 });
       collector.on('collect', async i => {
@@ -101,9 +92,9 @@ module.exports = {
 
 async function executeRemoval(code, message, client) {
   try {
-    let timeArray = store.get('time') || [];
-    const subIdx = timeArray.findIndex(e => e.code === code);
-    if (subIdx === -1) return message.reply("خطأ: لم يتم العثور على الاشتراك.");
+	    let timeArray = store.get('time') || [];
+	    const subIdx = timeArray.findIndex(e => e.code === code);
+	    if (subIdx === -1) return message.reply("**Subscription Not Found**\nلم يتم العثور على الاشتراك.");
     const sub = timeArray[subIdx];
     const userId = sub.user;
     timeArray.splice(subIdx, 1);
@@ -118,7 +109,7 @@ async function executeRemoval(code, message, client) {
     tokensToRemove.forEach(t => botsArray.push({ token: t.token }));
     store.set('bots', botsArray);
 
-    message.channel.send(`✅ تم حذف الاشتراك \`${code}\` بنجاح. سيتم تنظيف البوتات الآن.`);
+	    message.channel.send(`**Subscription Removed**\nتم حذف الاشتراك \`${code}\` بنجاح. سيتم تنظيف البوتات الآن.`);
 
     // DM Owner
     client.users.fetch(userId).then(u => {
@@ -132,35 +123,30 @@ async function executeRemoval(code, message, client) {
     // Log
     const logChannel = client.channels.cache.get(logChannelId);
     if (logChannel) {
-      logChannel.send({
-        embeds: [new EmbedBuilder()
-          .setTitle('إزالة اشتراك 🔴')
-          .addFields(
-            { name: '👤 المستخدم', value: `<@${userId}>`, inline: true },
-            { name: '🔖 SuID', value: `\`${code}\``, inline: true },
-            { name: '🤖 البوتات', value: `\`${tokensToRemove.length}\``, inline: true },
-            { name: '🛠️ بواسطة', value: `<@${message.author.id}>`, inline: true }
-          )
-          .setColor(getEmbedColor(client))
-          .setTimestamp()]
+	      logChannel.send({
+	        embeds: [new EmbedBuilder()
+	          .setTitle('Subscription Removed')
+	          .setDescription('تم حذف الاشتراك وإرجاع بوتاته إلى الستوك.')
+	          .addFields(
+	            { name: 'User', value: `<@${userId}>`, inline: true },
+	            { name: 'Subscription ID', value: `\`${code}\``, inline: true },
+	            { name: 'Bot Count', value: `\`${tokensToRemove.length}\``, inline: true },
+	            { name: 'Removed By', value: `<@${message.author.id}>`, inline: true }
+	          )
+	          .setColor(getEmbedColor(client))
+	          .setTimestamp()]
       });
     }
 
     // Clean bots
     for (const t of tokensToRemove) {
       try {
-        const botClient = new Client({ intents: [GatewayIntentBits.Guilds] });
-        await botClient.login(t.token);
-        for (const [id, guild] of botClient.guilds.cache) { await guild.leave(); }
         const profile = getSubBotProfile();
-        if (profile.avatar) await botClient.user.setAvatar(profile.avatar).catch(() => {});
-        const randomName = `${profile.prefix}-${Math.floor(Math.random() * 9000) + 1000}`;
-        await botClient.user.setUsername(randomName);
-        await botClient.destroy();
+        await applyProfileToToken(t.token, { profile, leaveGuilds: true });
       } catch (e) { console.error(`Error cleaning bot ${t.token.slice(0,10)}...:`, e); }
     }
-  } catch (e) {
-    console.error(e);
-    message.reply("حدث خطأ أثناء التنفيذ.");
-  }
-}
+	  } catch (e) {
+	    console.error(e);
+	    message.reply("**Removal Failed**\nحدث خطأ أثناء التنفيذ.");
+	  }
+	}
