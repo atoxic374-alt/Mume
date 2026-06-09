@@ -1416,36 +1416,86 @@ async function handleAdminPricing(interaction) {
 
 async function handleAdminPaymentMethods(interaction) {
   if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
+
   const settings = automaticSettings();
-  const modal = new ModalBuilder().setCustomId('auto_payment_methods_modal').setTitle('Payment Methods | طرق الدفع');
-  modal.addComponents(
-    new ActionRowBuilder().addComponents(
-      new TextInputBuilder()
-        .setCustomId('methods')
-        .setLabel('طرق الدفع | Payment Methods')
-        .setPlaceholder('مثال:\nSTCPay: 0500000000\nPayPal: example@email.com\nBank Transfer: SA00...')
-        .setValue(settings.paymentMethods || '')
-        .setStyle(TextInputStyle.Paragraph)
-        .setRequired(true)
-        .setMaxLength(1000),
-    ),
-  );
-  await interaction.showModal(modal);
+  const current = settings.paymentMethods;
 
-  const submit = await interaction.awaitModalSubmit({
-    filter: i => i.customId === 'auto_payment_methods_modal' && i.user.id === interaction.user.id,
-    time: 120000,
+  // أرسل رسالة مؤقتة في نفس الشات تطلب منه الكتابة
+  const prompt = await interaction.reply({
+    content: [
+      '**Payment Methods | طرق الدفع**',
+      '*اكتب طرق الدفع في رسالة واحدة وأرسلها الآن.*',
+      '',
+      current
+        ? `**الحالي الآن :**\n\`\`\`\n${current}\n\`\`\``
+        : '*لا توجد طرق دفع محفوظة حالياً.*',
+      '',
+      '**مثال على الشكل الصحيح :**',
+      '```',
+      'STCPay: 0500000000',
+      'PayPal: example@email.com',
+      'Bank Transfer: SA0000000000000',
+      '```',
+      '',
+      '*لإلغاء العملية أرسل: `cancel`*',
+      '*لديك 2 دقيقة.*',
+    ].join('\n'),
+    fetchReply: true,
   }).catch(() => null);
-  if (!submit) return;
 
-  const methods = submit.fields.getTextInputValue('methods').trim();
-  if (!methods) return submit.reply({ content: '**Payment Methods :** *لم يتم إدخال أي طرق دفع.*', flags: MessageFlags.Ephemeral });
+  if (!prompt) return;
 
-  saveAutomaticSettings({ paymentMethods: methods });
-  await submit.reply({
-    content: '**Payment Methods :** *تم حفظ طرق الدفع بنجاح. ستظهر في رسائل الفاتورة للعملاء.*',
+  // انتظر رسالة من نفس الشخص في نفس الشات
+  const collected = await interaction.channel.awaitMessages({
+    filter: m => m.author.id === interaction.user.id,
+    max: 1,
+    time: 2 * 60 * 1000,
+    errors: ['time'],
+  }).catch(() => null);
+
+  // احذف رسالة الطلب بعد الرد
+  prompt.delete?.().catch(() => {});
+
+  if (!collected || collected.size === 0) {
+    return interaction.followUp({ content: '**Payment Methods :** *انتهى الوقت. لم يتم حفظ أي تغييرات.*', flags: MessageFlags.Ephemeral }).catch(() => {});
+  }
+
+  const msg = collected.first();
+  const raw = msg.content.trim();
+
+  // احذف رسالة المستخدم تنظيفاً للشات
+  msg.delete?.().catch(() => {});
+
+  // تحقق من الإلغاء
+  if (raw.toLowerCase() === 'cancel') {
+    return interaction.followUp({ content: '**Payment Methods :** *تم الإلغاء. لم يتم حفظ أي تغييرات.*', flags: MessageFlags.Ephemeral }).catch(() => {});
+  }
+
+  // فحص أن النص ليس فارغاً
+  if (!raw) {
+    return interaction.followUp({ content: '**Payment Methods :** *الرسالة فارغة. لم يتم حفظ أي شيء.*', flags: MessageFlags.Ephemeral }).catch(() => {});
+  }
+
+  // فحص الحد الأقصى للطول
+  if (raw.length > 1000) {
+    return interaction.followUp({ content: `**Payment Methods :** *النص طويل جداً (${raw.length}/1000 حرف). قصّره ثم أعد المحاولة.*`, flags: MessageFlags.Ephemeral }).catch(() => {});
+  }
+
+  // حفظ طرق الدفع
+  saveAutomaticSettings({ paymentMethods: raw });
+
+  await interaction.followUp({
+    content: [
+      '**Payment Methods :** *تم الحفظ بنجاح ✓*',
+      '',
+      '**ستظهر هكذا في رسائل الفاتورة للعملاء :**',
+      '```',
+      raw,
+      '```',
+    ].join('\n'),
     flags: MessageFlags.Ephemeral,
-  });
+  }).catch(() => {});
+
   await interaction.message?.edit({
     ...autoImagePayload(buildOwnerEmbed(interaction.client, interaction.user)),
     components: ownerRows(),
