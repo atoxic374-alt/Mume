@@ -28,11 +28,13 @@ const SETTINGS_DISTRIBUTION_BATCH_SIZE = Math.max(1, Number(process.env.SETTINGS
 const SETTINGS_IMAGE_TIMEOUT_MS = Math.max(3000, Number(process.env.SETTINGS_IMAGE_TIMEOUT_MS || 10000));
 const SETTINGS_IMAGE_MAX_BYTES = Math.max(256 * 1024, Number(process.env.SETTINGS_IMAGE_MAX_BYTES || 8 * 1024 * 1024));
 const SETTINGS_SELECT_PAGE_SIZE = 25;
-const SETTINGS_APPEARANCE_EMOJI_ID = '1512475944839942176';
-const SETTINGS_ROOMS_EMOJI_ID = '1484364982094266428';
-const SETTINGS_OWNERS_EMOJI_ID = '1485476329171320855';
-const SETTINGS_DISPLAY_EMOJI_ID = '1512475951844294867';
-const SETTINGS_PLATFORM_EMOJI_ID = '1512475949331906682';
+const SETTINGS_EMOJI = {
+    appearance: MUSIC_EMOJIS.settings,
+    rooms:      MUSIC_EMOJIS.queue,
+    display:    MUSIC_EMOJIS.filters,
+    platform:   MUSIC_EMOJIS.smartSearch,
+    owners:     MUSIC_EMOJIS.artistTop,
+};
 const activeSmartDistributions = new Set();
 const activeSettingsProcesses = new Set();
 
@@ -76,13 +78,13 @@ function resolveRawEmoji(client, raw) {
     return null;
 }
 
-function settingsOption(client, option, emojiId) {
-    const emoji = resolveSettingsEmoji(client, emojiId);
+function settingsOption(client, option, emojiData) {
+    const emoji = MUSIC_EMOJIS.componentEmoji(emojiData, client);
     return emoji ? { ...option, emoji } : option;
 }
 
-function setSettingsEmoji(client, component, emojiId) {
-    const emoji = resolveSettingsEmoji(client, emojiId);
+function setSettingsEmoji(client, component, emojiData) {
+    const emoji = MUSIC_EMOJIS.componentEmoji(emojiData, client);
     if (emoji) component.setEmoji(emoji);
     return component;
 }
@@ -1806,12 +1808,12 @@ module.exports = {
                                     .setCustomId(`stg_${mid}_main_menu`)
                                     .setPlaceholder('Select section')
                                     .addOptions([
-                                        settingsOption(client, { label: 'Appearance', value: 'APPEARANCE', description: 'تغيير الصورة، البنر، والحالة لكل البوتات' }, SETTINGS_APPEARANCE_EMOJI_ID),
-                                                settingsOption(client, { label: 'Rooms', value: 'ROOMS', description: 'الغرف، التوزيع الذكي، الروابط، وشات الأوامر' }, SETTINGS_ROOMS_EMOJI_ID),
-                                        settingsOption(client, { label: 'Display', value: 'DISPLAY', description: 'تفعيل أو تعطيل الأزرار والإيمبد' }, SETTINGS_DISPLAY_EMOJI_ID),
-                                        settingsOption(client, { label: 'Platform', value: 'PLATFORM', description: 'اختيار منصة البحث والتشغيل' }, SETTINGS_PLATFORM_EMOJI_ID),
+                                        settingsOption(client, { label: 'Appearance', value: 'APPEARANCE', description: 'تغيير الصورة، البنر، والحالة لكل البوتات' }, SETTINGS_EMOJI.appearance),
+                                                settingsOption(client, { label: 'Rooms', value: 'ROOMS', description: 'الغرف، التوزيع الذكي، الروابط، وشات الأوامر' }, SETTINGS_EMOJI.rooms),
+                                        settingsOption(client, { label: 'Display', value: 'DISPLAY', description: 'تفعيل أو تعطيل الأزرار والإيمبد' }, SETTINGS_EMOJI.display),
+                                        settingsOption(client, { label: 'Platform', value: 'PLATFORM', description: 'اختيار منصة البحث والتشغيل' }, SETTINGS_EMOJI.platform),
                                         ...(canManageSubscriptionOwners(selectedCode)
-                                                    ? [settingsOption(client, { label: 'Owners', value: 'OWNERS', description: 'إضافة وإزالة أونرز يتحكمون ببوتات الاشتراك' }, SETTINGS_OWNERS_EMOJI_ID)]
+                                                    ? [settingsOption(client, { label: 'Owners', value: 'OWNERS', description: 'إضافة وإزالة أونرز يتحكمون ببوتات الاشتراك' }, SETTINGS_EMOJI.owners)]
                                             : []),
                                     ])
                             );
@@ -1859,8 +1861,8 @@ module.exports = {
                     embeds.push(embed);
 
                             components.push(new ActionRowBuilder().addComponents(
-                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_owner_add`).setLabel('Add Owner').setStyle(ButtonStyle.Success), SETTINGS_OWNERS_EMOJI_ID),
-                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_owner_remove`).setLabel('Remove Owner').setStyle(ButtonStyle.Danger).setDisabled(subOwnerIds.length === 0), SETTINGS_OWNERS_EMOJI_ID),
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_owner_add`).setLabel('Add Owner').setStyle(ButtonStyle.Success), SETTINGS_EMOJI.owners),
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_owner_remove`).setLabel('Remove Owner').setStyle(ButtonStyle.Danger).setDisabled(subOwnerIds.length === 0), SETTINGS_EMOJI.owners),
                                 new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary),
                             ));
                 }
@@ -1872,10 +1874,10 @@ module.exports = {
                     embeds.push(embed);
 
                                     const row = new ActionRowBuilder().addComponents(
-                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_name`).setLabel('Name').setStyle(ButtonStyle.Secondary), SETTINGS_APPEARANCE_EMOJI_ID),
-                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_avatar`).setLabel('Avatar').setStyle(ButtonStyle.Secondary), SETTINGS_APPEARANCE_EMOJI_ID),
-                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_banner`).setLabel('Banner').setStyle(ButtonStyle.Secondary), SETTINGS_APPEARANCE_EMOJI_ID),
-                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_status`).setLabel('Status').setStyle(ButtonStyle.Secondary), SETTINGS_APPEARANCE_EMOJI_ID),
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_name`).setLabel('Name').setStyle(ButtonStyle.Secondary), SETTINGS_EMOJI.appearance),
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_avatar`).setLabel('Avatar').setStyle(ButtonStyle.Secondary), SETTINGS_EMOJI.appearance),
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_banner`).setLabel('Banner').setStyle(ButtonStyle.Secondary), SETTINGS_EMOJI.appearance),
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_status`).setLabel('Status').setStyle(ButtonStyle.Secondary), SETTINGS_EMOJI.appearance),
                                 new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
                             );
                     components.push(row);
@@ -1892,11 +1894,11 @@ module.exports = {
                                         setSettingsEmoji(client, new ButtonBuilder()
                                             .setCustomId(`stg_${mid}_toggle_buttons`)
                                             .setLabel(`Buttons: ${display.buttons ? 'ON' : 'OFF'}`)
-                                            .setStyle(display.buttons ? ButtonStyle.Success : ButtonStyle.Danger), SETTINGS_DISPLAY_EMOJI_ID),
+                                            .setStyle(display.buttons ? ButtonStyle.Success : ButtonStyle.Danger), SETTINGS_EMOJI.display),
                                         setSettingsEmoji(client, new ButtonBuilder()
                                             .setCustomId(`stg_${mid}_toggle_embeds`)
                                             .setLabel(`Embeds: ${display.embeds ? 'ON' : 'OFF'}`)
-                                            .setStyle(display.embeds ? ButtonStyle.Success : ButtonStyle.Danger), SETTINGS_DISPLAY_EMOJI_ID),
+                                            .setStyle(display.embeds ? ButtonStyle.Success : ButtonStyle.Danger), SETTINGS_EMOJI.display),
                                 new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
                             );
                     components.push(row);
@@ -1960,16 +1962,16 @@ module.exports = {
                                         .setCustomId(`stg_${mid}_rooms_menu`)
                                                 .setPlaceholder('Select option')
                                                 .addOptions([
-                                                    settingsOption(client, { label: 'Voice Status', value: 'voice_status', description: 'عرض مكان كل بوت في الرومات' }, SETTINGS_ROOMS_EMOJI_ID),
-                                                    settingsOption(client, { label: 'Smart Distribution', value: 'distribute', description: 'توزيع البوتات على نطاق رومات' }, SETTINGS_ROOMS_EMOJI_ID),
-                                                    settingsOption(client, { label: 'Move Idle', value: 'moveidle', description: 'تحريك البوتات الخاملة إلى روم' }, SETTINGS_ROOMS_EMOJI_ID),
-                                                    settingsOption(client, { label: `Back to Voice : ${backVoice.enabled ? 'ON' : 'OFF'}`, value: 'toggle_back_voice', description: 'تفعيل أو تعطيل الرجوع التلقائي للروم' }, SETTINGS_ROOMS_EMOJI_ID),
-                                                    settingsOption(client, { label: `Voice Status : ${display.voiceStatus ? 'ON' : 'OFF'}`, value: 'toggle_voice_status', description: 'تفعيل أو تعطيل كتابة اسم الأغنية على Status' }, SETTINGS_ROOMS_EMOJI_ID),
-                                                    settingsOption(client, { label: 'Command Chat', value: 'panel_chat', description: 'تحديد الشات الذي يستقبل الأوامر' }, SETTINGS_ROOMS_EMOJI_ID),
-                                                    settingsOption(client, { label: 'Status Emoji', value: 'voice_status_emoji', description: 'تغيير إيموجي Status الروم' }, SETTINGS_ROOMS_EMOJI_ID),
-                                                    settingsOption(client, { label: 'Pin Room', value: 'pin_room', description: 'تثبيت كل البوتات في روم واحد' }, SETTINGS_ROOMS_EMOJI_ID),
-                                                    settingsOption(client, { label: 'All Links', value: 'links_all', description: 'روابط دعوة كل البوتات' }, SETTINGS_ROOMS_EMOJI_ID),
-                                                    settingsOption(client, { label: 'Outside Server', value: 'links_out', description: 'روابط البوتات الموجودة خارج السيرفر' }, SETTINGS_ROOMS_EMOJI_ID),
+                                                    settingsOption(client, { label: 'Voice Status', value: 'voice_status', description: 'عرض مكان كل بوت في الرومات' }, SETTINGS_EMOJI.rooms),
+                                                    settingsOption(client, { label: 'Smart Distribution', value: 'distribute', description: 'توزيع البوتات على نطاق رومات' }, SETTINGS_EMOJI.rooms),
+                                                    settingsOption(client, { label: 'Move Idle', value: 'moveidle', description: 'تحريك البوتات الخاملة إلى روم' }, SETTINGS_EMOJI.rooms),
+                                                    settingsOption(client, { label: `Back to Voice : ${backVoice.enabled ? 'ON' : 'OFF'}`, value: 'toggle_back_voice', description: 'تفعيل أو تعطيل الرجوع التلقائي للروم' }, SETTINGS_EMOJI.rooms),
+                                                    settingsOption(client, { label: `Voice Status : ${display.voiceStatus ? 'ON' : 'OFF'}`, value: 'toggle_voice_status', description: 'تفعيل أو تعطيل كتابة اسم الأغنية على Status' }, SETTINGS_EMOJI.rooms),
+                                                    settingsOption(client, { label: 'Command Chat', value: 'panel_chat', description: 'تحديد الشات الذي يستقبل الأوامر' }, SETTINGS_EMOJI.rooms),
+                                                    settingsOption(client, { label: 'Status Emoji', value: 'voice_status_emoji', description: 'تغيير إيموجي Status الروم' }, SETTINGS_EMOJI.rooms),
+                                                    settingsOption(client, { label: 'Pin Room', value: 'pin_room', description: 'تثبيت كل البوتات في روم واحد' }, SETTINGS_EMOJI.rooms),
+                                                    settingsOption(client, { label: 'All Links', value: 'links_all', description: 'روابط دعوة كل البوتات' }, SETTINGS_EMOJI.rooms),
+                                                    settingsOption(client, { label: 'Outside Server', value: 'links_out', description: 'روابط البوتات الموجودة خارج السيرفر' }, SETTINGS_EMOJI.rooms),
                                                 ]);
                                     const roomsRow1 = new ActionRowBuilder().addComponents(roomsMenu);
                                     const roomsRow2 = new ActionRowBuilder().addComponents(
