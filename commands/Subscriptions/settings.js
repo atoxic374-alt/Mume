@@ -39,11 +39,15 @@ const activeSettingsProcesses = new Set();
 function resolveSettingsEmoji(client, emojiId) {
     const id = String(emojiId || '');
     if (!id) return null;
-    const emoji = client?.emojis?.cache?.get?.(id) || client?.application?.emojis?.cache?.get?.(id);
+    const emoji = client?.application?.emojis?.cache?.get?.(id) || client?.emojis?.cache?.get?.(id);
     if (!emoji) return null;
+    const resolvedId = String(emoji.id || '');
+    const resolvedName = String(emoji.name || '');
+    if (!/^\d{17,20}$/.test(resolvedId) || !resolvedName) return null;
+    if (emoji.available === false) return null;
     return {
-        id: emoji.id,
-        name: emoji.name || undefined,
+        id: resolvedId,
+        name: resolvedName,
         animated: emoji.animated === true,
     };
 }
