@@ -76,6 +76,7 @@ function automaticSettings() {
     panelUrl: null,
     botPrice: 0,
     currency: 'SAR',
+    paymentMethods: null,
     subBotPrefix: 'music',
     subBotAvatar: null,
     subBotBanner: null,
@@ -294,6 +295,8 @@ function buildOwnerEmbed(client, requester) {
       '',
       `**Bot Price | سعر البوت :** *${formatMoney(settings.botPrice, settings.currency)}*`,
       '',
+      `**Payment Methods | طرق الدفع :** *${settings.paymentMethods ? `\`${settings.paymentMethods}\`` : '`Not set | غير محددة`'}*`,
+      '',
       `**Request Target | وجهة الطلبات :** *${target}*`,
       '',
       `**Customer Panel | لوحة العملاء :** *${link ? `[Open Panel | فتح اللوحة](${link})` : 'Not sent yet | لم يتم إرسالها بعد'}*`,
@@ -314,15 +317,19 @@ function ownerRows() {
         .setLabel('Pricing | السعر')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
+        .setCustomId('auto_admin_payment_methods')
+        .setLabel('Payment Methods | طرق الدفع')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
         .setCustomId('auto_admin_send')
         .setLabel('Send Panel | إرسال')
         .setStyle(ButtonStyle.Success),
+    ),
+    new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('auto_admin_image')
         .setLabel('Image | الصورة')
         .setStyle(ButtonStyle.Secondary),
-    ),
-    new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('auto_admin_profile')
         .setLabel('Bot Profile | مظهر البوت')
@@ -652,6 +659,7 @@ async function startPurchase(interaction, count, serverId) {
   requests.push(req);
   saveRequests(requests);
 
+  const { paymentMethods: pmPurchase } = automaticSettings();
   const dmEmbed = new EmbedBuilder()
     .setColor(getEmbedColor(interaction.client))
     .setTitle('Purchase Invoice | فاتورة الشراء')
@@ -662,10 +670,12 @@ async function startPurchase(interaction, count, serverId) {
       '',
       `**Total Price :** *${formatMoney(totalPrice, currency)}*`,
       '',
+      pmPurchase ? `**Payment Methods | طرق الدفع :**\n${pmPurchase}` : null,
+      pmPurchase ? '' : null,
       '**Required :** *ارسل صورة الفاتورة هنا في الخاص حتى تصل للإدارة*',
       '',
       '**Timeout :** *لديك 12 ساعة قبل حذف الطلب تلقائيا*',
-    ].join('\n'));
+    ].filter(v => v !== null).join('\n'));
 
   const dmOk = await interaction.user.send({ embeds: [dmEmbed] }).then(() => true).catch(() => false);
   return interaction.reply({
@@ -913,16 +923,19 @@ async function startRenewal(interaction, code) {
   requests.push(req);
   saveRequests(requests);
 
+  const { paymentMethods: pmRenewal } = automaticSettings();
   const dmEmbed = new EmbedBuilder()
     .setColor(getEmbedColor(interaction.client))
-    .setTitle('Renewal Invoice')
+    .setTitle('Renewal Invoice | فاتورة التجديد')
     .setDescription([
       `**Subscription :** *\`${code}\`*`,
       '',
+      pmRenewal ? `**Payment Methods | طرق الدفع :**\n${pmRenewal}` : null,
+      pmRenewal ? '' : null,
       '**Required :** *ارسل صورة الفاتورة هنا في الخاص حتى تصل للإدارة*',
       '',
       '**Timeout :** *لديك 12 ساعة قبل حذف الطلب تلقائيا*',
-    ].join('\n'));
+    ].filter(v => v !== null).join('\n'));
 
   const dmOk = await interaction.user.send({ embeds: [dmEmbed] }).then(() => true).catch(() => false);
   return interaction.reply({
@@ -1401,6 +1414,44 @@ async function handleAdminPricing(interaction) {
   await refreshSavedPublicPanel(interaction.client);
 }
 
+async function handleAdminPaymentMethods(interaction) {
+  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
+  const settings = automaticSettings();
+  const modal = new ModalBuilder().setCustomId('auto_payment_methods_modal').setTitle('Payment Methods | طرق الدفع');
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('methods')
+        .setLabel('طرق الدفع | Payment Methods')
+        .setPlaceholder('مثال:\nSTCPay: 0500000000\nPayPal: example@email.com\nBank Transfer: SA00...')
+        .setValue(settings.paymentMethods || '')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setMaxLength(1000),
+    ),
+  );
+  await interaction.showModal(modal);
+
+  const submit = await interaction.awaitModalSubmit({
+    filter: i => i.customId === 'auto_payment_methods_modal' && i.user.id === interaction.user.id,
+    time: 120000,
+  }).catch(() => null);
+  if (!submit) return;
+
+  const methods = submit.fields.getTextInputValue('methods').trim();
+  if (!methods) return submit.reply({ content: '**Payment Methods :** *لم يتم إدخال أي طرق دفع.*', flags: MessageFlags.Ephemeral });
+
+  saveAutomaticSettings({ paymentMethods: methods });
+  await submit.reply({
+    content: '**Payment Methods :** *تم حفظ طرق الدفع بنجاح. ستظهر في رسائل الفاتورة للعملاء.*',
+    flags: MessageFlags.Ephemeral,
+  });
+  await interaction.message?.edit({
+    ...autoImagePayload(buildOwnerEmbed(interaction.client, interaction.user)),
+    components: ownerRows(),
+  }).catch(() => {});
+}
+
 async function sendPublicPanel(interaction) {
   if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
 
@@ -1563,11 +1614,11 @@ async function handleProfileAction(interaction, action) {
     const val = submit.fields.getTextInputValue('botsname').trim();
     saveAutomaticSettings({ subBotPrefix: val });
     return submit.reply({ content: `**Prefix :** *تم حفظ البادئة \`${val}\` — ستُطبَّق على البوتات الجديدة عند إضافتها.*`, flags: MessageFlags.Ephemeral });
-	  }
-	
-	  if (action === 'avatar') {
-	    await ensureProfileImagesLocal().catch(() => {});
-	    const profile = subBotProfile();
+          }
+        
+          if (action === 'avatar') {
+            await ensureProfileImagesLocal().catch(() => {});
+            const profile = subBotProfile();
     const modal = new ModalBuilder().setCustomId('auto_profile_modal_avatar').setTitle('Sub-Bot Avatar URL');
     modal.addComponents(new ActionRowBuilder().addComponents(
       new TextInputBuilder()
@@ -1636,19 +1687,19 @@ async function handleProfileAction(interaction, action) {
     return submit.reply({ content: `**Streaming :** *تم حفظ الحالة \`${val || '(فارغة)'}\` — ستُطبَّق على البوتات الجديدة.*`, flags: MessageFlags.Ephemeral });
   }
 
-	  if (action === 'applyall') {
-	    const allBots = store.get('bots') || [];
-	    const activeSubs = new Set((store.get('tokens') || []).map(t => t.token));
-	    const stockBots = allBots.filter(b => !activeSubs.has(b.token));
+          if (action === 'applyall') {
+            const allBots = store.get('bots') || [];
+            const activeSubs = new Set((store.get('tokens') || []).map(t => t.token));
+            const stockBots = allBots.filter(b => !activeSubs.has(b.token));
 
-	    if (stockBots.length === 0) return interaction.reply({ content: '**Apply :** *لا توجد بوتات حرة في الستوك (كلهم في اشتراكات).*', flags: MessageFlags.Ephemeral });
-	
-	    const secs = stockBots.length * 5;
-	    const timeStr = `${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, '0')}`;
-	    await interaction.reply({ content: `**Apply :** *جاري تطبيق الإعدادات على \`${stockBots.length}\` بوت حر في الستوك — الوقت المتوقع ~${timeStr} دقيقة.*`, flags: MessageFlags.Ephemeral });
-	
-	    await ensureProfileImagesLocal().catch(() => {});
-	    const profile = subBotProfile();
+            if (stockBots.length === 0) return interaction.reply({ content: '**Apply :** *لا توجد بوتات حرة في الستوك (كلهم في اشتراكات).*', flags: MessageFlags.Ephemeral });
+        
+            const secs = stockBots.length * 5;
+            const timeStr = `${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, '0')}`;
+            await interaction.reply({ content: `**Apply :** *جاري تطبيق الإعدادات على \`${stockBots.length}\` بوت حر في الستوك — الوقت المتوقع ~${timeStr} دقيقة.*`, flags: MessageFlags.Ephemeral });
+        
+            await ensureProfileImagesLocal().catch(() => {});
+            const profile = subBotProfile();
     let assets = null;
     try {
       assets = await resolveProfileAssets(profile);
@@ -1678,6 +1729,7 @@ async function handleInteraction(interaction) {
   if (interaction.isButton()) {
     if (id === 'auto_admin_target') return handleAdminTarget(interaction);
     if (id === 'auto_admin_pricing') return handleAdminPricing(interaction);
+    if (id === 'auto_admin_payment_methods') return handleAdminPaymentMethods(interaction);
     if (id === 'auto_admin_send') return sendPublicPanel(interaction);
     if (id === 'auto_admin_image') return handleAdminImage(interaction);
     if (id === 'auto_panel_cancel') {
