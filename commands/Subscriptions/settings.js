@@ -29,11 +29,29 @@ const SETTINGS_IMAGE_TIMEOUT_MS = Math.max(3000, Number(process.env.SETTINGS_IMA
 const SETTINGS_IMAGE_MAX_BYTES = Math.max(256 * 1024, Number(process.env.SETTINGS_IMAGE_MAX_BYTES || 8 * 1024 * 1024));
 const SETTINGS_SELECT_PAGE_SIZE = 25;
 const SETTINGS_EMOJI = {
-    appearance: MUSIC_EMOJIS.settings,
+    appearance: MUSIC_EMOJIS.artistTop,
     rooms:      MUSIC_EMOJIS.queue,
     display:    MUSIC_EMOJIS.filters,
     platform:   MUSIC_EMOJIS.smartSearch,
-    owners:     MUSIC_EMOJIS.artistTop,
+    owners:     MUSIC_EMOJIS.like,
+    name:       MUSIC_EMOJIS.artistTop,
+    avatar:     MUSIC_EMOJIS.like,
+    banner:     MUSIC_EMOJIS.filters,
+    status:     MUSIC_EMOJIS.settings,
+    voiceStatus:   MUSIC_EMOJIS.queue,
+    distribute:    MUSIC_EMOJIS.skip,
+    moveIdle:      MUSIC_EMOJIS.pause,
+    backToVoice:   MUSIC_EMOJIS.loop,
+    toggleSetting: MUSIC_EMOJIS.filters,
+    commandChat:   MUSIC_EMOJIS.settings,
+    statusEmoji:   MUSIC_EMOJIS.artistTop,
+    pinRoom:       MUSIC_EMOJIS.stop,
+    allLinks:      MUSIC_EMOJIS.pageNext,
+    outsideServer: MUSIC_EMOJIS.pagePrev,
+    addOwner:      MUSIC_EMOJIS.like,
+    removeOwner:   MUSIC_EMOJIS.dislike,
+    toggleButtons: MUSIC_EMOJIS.stop,
+    toggleEmbeds:  MUSIC_EMOJIS.queue,
 };
 const activeSmartDistributions = new Set();
 const activeSettingsProcesses = new Set();
@@ -1861,8 +1879,8 @@ module.exports = {
                     embeds.push(embed);
 
                             components.push(new ActionRowBuilder().addComponents(
-                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_owner_add`).setLabel('Add Owner').setStyle(ButtonStyle.Success), SETTINGS_EMOJI.owners),
-                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_owner_remove`).setLabel('Remove Owner').setStyle(ButtonStyle.Danger).setDisabled(subOwnerIds.length === 0), SETTINGS_EMOJI.owners),
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_owner_add`).setLabel('Add Owner').setStyle(ButtonStyle.Success), SETTINGS_EMOJI.addOwner),
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_owner_remove`).setLabel('Remove Owner').setStyle(ButtonStyle.Danger).setDisabled(subOwnerIds.length === 0), SETTINGS_EMOJI.removeOwner),
                                 new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary),
                             ));
                 }
@@ -1874,10 +1892,10 @@ module.exports = {
                     embeds.push(embed);
 
                                     const row = new ActionRowBuilder().addComponents(
-                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_name`).setLabel('Name').setStyle(ButtonStyle.Secondary), SETTINGS_EMOJI.appearance),
-                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_avatar`).setLabel('Avatar').setStyle(ButtonStyle.Secondary), SETTINGS_EMOJI.appearance),
-                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_banner`).setLabel('Banner').setStyle(ButtonStyle.Secondary), SETTINGS_EMOJI.appearance),
-                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_status`).setLabel('Status').setStyle(ButtonStyle.Secondary), SETTINGS_EMOJI.appearance),
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_name`).setLabel('Name').setStyle(ButtonStyle.Secondary), SETTINGS_EMOJI.name),
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_avatar`).setLabel('Avatar').setStyle(ButtonStyle.Secondary), SETTINGS_EMOJI.avatar),
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_banner`).setLabel('Banner').setStyle(ButtonStyle.Secondary), SETTINGS_EMOJI.banner),
+                                        setSettingsEmoji(client, new ButtonBuilder().setCustomId(`stg_${mid}_set_status`).setLabel('Status').setStyle(ButtonStyle.Secondary), SETTINGS_EMOJI.status),
                                 new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
                             );
                     components.push(row);
@@ -1894,11 +1912,11 @@ module.exports = {
                                         setSettingsEmoji(client, new ButtonBuilder()
                                             .setCustomId(`stg_${mid}_toggle_buttons`)
                                             .setLabel(`Buttons: ${display.buttons ? 'ON' : 'OFF'}`)
-                                            .setStyle(display.buttons ? ButtonStyle.Success : ButtonStyle.Danger), SETTINGS_EMOJI.display),
+                                            .setStyle(display.buttons ? ButtonStyle.Success : ButtonStyle.Danger), SETTINGS_EMOJI.toggleButtons),
                                         setSettingsEmoji(client, new ButtonBuilder()
                                             .setCustomId(`stg_${mid}_toggle_embeds`)
                                             .setLabel(`Embeds: ${display.embeds ? 'ON' : 'OFF'}`)
-                                            .setStyle(display.embeds ? ButtonStyle.Success : ButtonStyle.Danger), SETTINGS_EMOJI.display),
+                                            .setStyle(display.embeds ? ButtonStyle.Success : ButtonStyle.Danger), SETTINGS_EMOJI.toggleEmbeds),
                                 new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
                             );
                     components.push(row);
@@ -1962,16 +1980,16 @@ module.exports = {
                                         .setCustomId(`stg_${mid}_rooms_menu`)
                                                 .setPlaceholder('Select option')
                                                 .addOptions([
-                                                    settingsOption(client, { label: 'Voice Status', value: 'voice_status', description: 'عرض مكان كل بوت في الرومات' }, SETTINGS_EMOJI.rooms),
-                                                    settingsOption(client, { label: 'Smart Distribution', value: 'distribute', description: 'توزيع البوتات على نطاق رومات' }, SETTINGS_EMOJI.rooms),
-                                                    settingsOption(client, { label: 'Move Idle', value: 'moveidle', description: 'تحريك البوتات الخاملة إلى روم' }, SETTINGS_EMOJI.rooms),
-                                                    settingsOption(client, { label: `Back to Voice : ${backVoice.enabled ? 'ON' : 'OFF'}`, value: 'toggle_back_voice', description: 'تفعيل أو تعطيل الرجوع التلقائي للروم' }, SETTINGS_EMOJI.rooms),
-                                                    settingsOption(client, { label: `Voice Status : ${display.voiceStatus ? 'ON' : 'OFF'}`, value: 'toggle_voice_status', description: 'تفعيل أو تعطيل كتابة اسم الأغنية على Status' }, SETTINGS_EMOJI.rooms),
-                                                    settingsOption(client, { label: 'Command Chat', value: 'panel_chat', description: 'تحديد الشات الذي يستقبل الأوامر' }, SETTINGS_EMOJI.rooms),
-                                                    settingsOption(client, { label: 'Status Emoji', value: 'voice_status_emoji', description: 'تغيير إيموجي Status الروم' }, SETTINGS_EMOJI.rooms),
-                                                    settingsOption(client, { label: 'Pin Room', value: 'pin_room', description: 'تثبيت كل البوتات في روم واحد' }, SETTINGS_EMOJI.rooms),
-                                                    settingsOption(client, { label: 'All Links', value: 'links_all', description: 'روابط دعوة كل البوتات' }, SETTINGS_EMOJI.rooms),
-                                                    settingsOption(client, { label: 'Outside Server', value: 'links_out', description: 'روابط البوتات الموجودة خارج السيرفر' }, SETTINGS_EMOJI.rooms),
+                                                    settingsOption(client, { label: 'Voice Status', value: 'voice_status', description: 'عرض مكان كل بوت في الرومات' }, SETTINGS_EMOJI.voiceStatus),
+                                                    settingsOption(client, { label: 'Smart Distribution', value: 'distribute', description: 'توزيع البوتات على نطاق رومات' }, SETTINGS_EMOJI.distribute),
+                                                    settingsOption(client, { label: 'Move Idle', value: 'moveidle', description: 'تحريك البوتات الخاملة إلى روم' }, SETTINGS_EMOJI.moveIdle),
+                                                    settingsOption(client, { label: `Back to Voice : ${backVoice.enabled ? 'ON' : 'OFF'}`, value: 'toggle_back_voice', description: 'تفعيل أو تعطيل الرجوع التلقائي للروم' }, SETTINGS_EMOJI.backToVoice),
+                                                    settingsOption(client, { label: `Voice Status : ${display.voiceStatus ? 'ON' : 'OFF'}`, value: 'toggle_voice_status', description: 'تفعيل أو تعطيل كتابة اسم الأغنية على Status' }, SETTINGS_EMOJI.toggleSetting),
+                                                    settingsOption(client, { label: 'Command Chat', value: 'panel_chat', description: 'تحديد الشات الذي يستقبل الأوامر' }, SETTINGS_EMOJI.commandChat),
+                                                    settingsOption(client, { label: 'Status Emoji', value: 'voice_status_emoji', description: 'تغيير إيموجي Status الروم' }, SETTINGS_EMOJI.statusEmoji),
+                                                    settingsOption(client, { label: 'Pin Room', value: 'pin_room', description: 'تثبيت كل البوتات في روم واحد' }, SETTINGS_EMOJI.pinRoom),
+                                                    settingsOption(client, { label: 'All Links', value: 'links_all', description: 'روابط دعوة كل البوتات' }, SETTINGS_EMOJI.allLinks),
+                                                    settingsOption(client, { label: 'Outside Server', value: 'links_out', description: 'روابط البوتات الموجودة خارج السيرفر' }, SETTINGS_EMOJI.outsideServer),
                                                 ]);
                                     const roomsRow1 = new ActionRowBuilder().addComponents(roomsMenu);
                                     const roomsRow2 = new ActionRowBuilder().addComponents(
