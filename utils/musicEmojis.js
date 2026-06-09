@@ -25,6 +25,13 @@ const MUSIC_EMOJIS = {
         amsearch:  { id: '1511837166014169228', name: 'applemusic' },
         dzsearch:  { id: '1511837155247259768', name: 'deezer' },
     },
+    stg: {
+        appearance: { id: '1512475944839942176', name: 'stgAppearance' },
+        rooms:      { id: '1484364982094266428', name: 'stgRooms' },
+        owners:     { id: '1485476329171320855', name: 'stgOwners' },
+        display:    { id: '1512475951844294867', name: 'stgDisplay' },
+        platform:   { id: '1512475949331906682', name: 'stgPlatform' },
+    },
 };
 
 // ── Emoji ID map (original ID → uploaded application emoji ID) ─────────────
