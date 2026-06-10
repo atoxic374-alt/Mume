@@ -50,9 +50,8 @@ const MONTH_PRESETS = [
 ];
 
 function quickEmbed(client, user, type, description) {
-  const COLORS = { success: 0x2ECC71, error: 0xE74C3C, warning: 0xF1C40F, info: null };
   const embed = new EmbedBuilder()
-    .setColor(COLORS[type] != null ? COLORS[type] : getEmbedColor(client))
+    .setColor(getEmbedColor(client))
     .setDescription(description)
     .setFooter({
       text: client?.user?.username || 'Mume Auto',
@@ -65,16 +64,13 @@ function quickEmbed(client, user, type, description) {
 }
 
 function durationBuyRows(iid) {
-  const s = automaticSettings();
-  const price = Number(s.botPrice || 0);
-  const cur   = s.currency || 'SAR';
   const styles = [ButtonStyle.Primary, ButtonStyle.Primary, ButtonStyle.Success];
   return [
     new ActionRowBuilder().addComponents(
       ...MONTH_PRESETS.map((p, i) =>
         new ButtonBuilder()
           .setCustomId(`auto_buy_dur_${p.months}_${iid}`)
-          .setLabel(`${p.months} • ${p.labelAr} • ${p.labelEn} — ${p.days}d | ${formatMoney(price * p.months, cur)}/بوت`)
+          .setLabel(`${p.months} Month | ${p.labelAr}`)
           .setStyle(styles[i] ?? ButtonStyle.Primary),
       ),
     ),
@@ -88,7 +84,7 @@ function durationRenewRows(code, iid) {
       ...MONTH_PRESETS.map((p, i) =>
         new ButtonBuilder()
           .setCustomId(`auto_rdur_${p.months}_${code}_${String(iid).slice(-10)}`)
-          .setLabel(`${p.months} • ${p.labelAr} • ${p.labelEn} — ${p.days}d`)
+          .setLabel(`${p.months} Month | ${p.labelAr}`)
           .setStyle(styles[i] ?? ButtonStyle.Primary),
       ),
     ),
@@ -680,7 +676,7 @@ async function startPurchase(interaction, count, serverId, durationMs, durationL
   if (stock < count) {
     return interaction.reply({
       embeds: [quickEmbed(interaction.client, interaction.user, 'error',
-        `**Stock | المخزون** ❌\nالمخزون غير كافي. المتاح الآن: \`${stock}\` بوت وطلبك \`${count}\` بوت.`)],
+        `**Stock | المخزون**\nالمخزون غير كافي. المتاح الآن : \`${stock}\` بوت وطلبك \`${count}\` بوت.`)],
       flags: MessageFlags.Ephemeral,
     }).catch(() => {});
   }
@@ -693,8 +689,8 @@ async function startPurchase(interaction, count, serverId, durationMs, durationL
   );
   if (existing) {
     const desc = existing.status === 'awaiting_invoice'
-      ? '**طلب معلق ⏳**\nلديك طلب شراء بانتظار الفاتورة. أرسل صورة الفاتورة في الخاص أو انتظر انتهاء مهلة الـ 12 ساعة.'
-      : '**طلب قيد المراجعة 🔍**\nطلبك وصل للإدارة وبانتظار الرد. يرجى الانتظار.';
+      ? '**طلب معلق**\nلديك طلب شراء بانتظار الفاتورة. أرسل صورة الفاتورة في الخاص أو انتظر انتهاء مهلة الـ 12 ساعة.'
+      : '**طلب قيد المراجعة**\nطلبك وصل للإدارة وبانتظار الرد. يرجى الانتظار.';
     return interaction.reply({
       embeds: [quickEmbed(interaction.client, interaction.user, 'warning', desc)],
       flags: MessageFlags.Ephemeral,
@@ -729,26 +725,26 @@ async function startPurchase(interaction, count, serverId, durationMs, durationL
   const userThumb = interaction.user.displayAvatarURL({ dynamic: true, size: 256 });
   const dmEmbed = new EmbedBuilder()
     .setColor(getEmbedColor(interaction.client))
-    .setTitle('🧾 Purchase Invoice | فاتورة الشراء')
+    .setTitle('Purchase Invoice | فاتورة الشراء')
     .setThumbnail(userThumb)
     .setFooter({ text: interaction.client?.user?.username || 'Mume Auto', iconURL: interaction.client?.user?.displayAvatarURL?.() || undefined })
     .setTimestamp()
     .addFields(
-      { name: '🤖 Bot Count | عدد البوتات', value: `\`${count}\``, inline: true },
-      { name: '⏳ Duration | المدة', value: `\`${durationLabel}\` (${durationDays} يوم)`, inline: true },
-      { name: '🖥️ Server ID | ايدي السيرفر', value: `\`${serverId}\``, inline: false },
-      { name: '💰 Total Price | الإجمالي', value: formatMoney(totalPrice, currency), inline: true },
-      ...(pmPurchase ? [{ name: '💳 Payment Methods | طرق الدفع', value: pmPurchase, inline: false }] : []),
-      { name: '📤 Required | المطلوب', value: 'أرسل صورة الفاتورة هنا في الخاص حتى تصل للإدارة', inline: false },
-      { name: '⏱️ Timeout', value: 'لديك **12 ساعة** قبل حذف الطلب تلقائياً', inline: false },
+      { name: 'Bot Count | عدد البوتات', value: `\`${count}\``, inline: true },
+      { name: 'Duration | المدة', value: `\`${durationLabel}\` (${durationDays} يوم)`, inline: true },
+      { name: 'Server ID | ايدي السيرفر', value: `\`${serverId}\``, inline: false },
+      { name: 'Total Price | الإجمالي', value: formatMoney(totalPrice, currency), inline: true },
+      ...(pmPurchase ? [{ name: 'Payment Methods | طرق الدفع', value: pmPurchase, inline: false }] : []),
+      { name: 'Required | المطلوب', value: 'أرسل صورة الفاتورة هنا في الخاص حتى تصل للإدارة', inline: false },
+      { name: 'Timeout | المهلة', value: 'لديك **12 ساعة** قبل حذف الطلب تلقائياً', inline: false },
     );
 
   const dmOk = await interaction.user.send({ embeds: [dmEmbed] }).then(() => true).catch(() => false);
   return interaction.reply({
     embeds: [quickEmbed(interaction.client, interaction.user, dmOk ? 'success' : 'error',
       dmOk
-        ? '**✅ تم إرسال الفاتورة في الخاص!**\nأرسل صورة الفاتورة هناك خلال **12 ساعة**.'
-        : '**❌ تعذّر إرسال الخاص**\nافتح رسائل الخاص (Privacy Settings) ثم اضغط Buy مجدداً.')],
+        ? '**تم إرسال الفاتورة في الخاص**\nأرسل صورة الفاتورة هناك خلال **12 ساعة**.'
+        : '**تعذّر إرسال الخاص**\nافتح رسائل الخاص (Privacy Settings) ثم اضغط Buy مجدداً.')],
     flags: MessageFlags.Ephemeral,
   }).catch(() => {});
 }
@@ -972,10 +968,10 @@ async function rejectRequest(interaction, reqId, type = 'add') {
   const user = await interaction.client.users.fetch(req.userId).catch(() => null);
   if (user) {
     const typeDesc = type === 'purchase'
-      ? `**❌ تم رفض طلب الشراء**\n${req.count || '?'} بوت — ${req.durationLabel || ''}\nيمكنك المحاولة مجدداً عبر قائمة الاشتراك.`
+      ? `**تم رفض طلب الشراء**\n${req.count || '?'} بوت — ${req.durationLabel || ''}\nيمكنك المحاولة مجدداً عبر قائمة الاشتراك.`
       : type === 'renew'
-        ? `**❌ تم رفض طلب التجديد**\nالاشتراك: \`${req.code || ''}\`\nيمكنك المحاولة مجدداً عبر قائمة اشتراكاتك.`
-        : `**❌ تم رفض طلب إضافة البوتات**\nالاشتراك: \`${req.code || ''}\``;
+        ? `**تم رفض طلب التجديد**\nالاشتراك : \`${req.code || ''}\`\nيمكنك المحاولة مجدداً عبر قائمة اشتراكاتك.`
+        : `**تم رفض طلب إضافة البوتات**\nالاشتراك : \`${req.code || ''}\``;
     user.send({
       embeds: [quickEmbed(interaction.client, user, 'error', typeDesc)],
     }).catch(() => {});
@@ -985,7 +981,7 @@ async function rejectRequest(interaction, reqId, type = 'add') {
 async function startRenewal(interaction, code) {
   const entry = findSubscription(code, interaction.user.id);
   if (!entry) {
-    const ep = { embeds: [quickEmbed(interaction.client, interaction.user, 'error', '**❌ الاشتراك غير موجود**\nلم أجد اشتراكاً بهذا الرمز.')], flags: MessageFlags.Ephemeral };
+    const ep = { embeds: [quickEmbed(interaction.client, interaction.user, 'error', '**الاشتراك غير موجود**\nلم أجد اشتراكاً بهذا الرمز.')], flags: MessageFlags.Ephemeral };
     if (interaction.replied || interaction.deferred) return interaction.editReply(ep).catch(() => {});
     return interaction.reply(ep).catch(() => {});
   }
@@ -998,8 +994,8 @@ async function startRenewal(interaction, code) {
   );
   if (existing) {
     const desc = existing.status === 'awaiting_invoice'
-      ? '**طلب تجديد معلق ⏳**\nلديك طلب تجديد بانتظار الفاتورة. أرسل صورة الفاتورة في الخاص أو انتظر انتهاء مهلة الـ 12 ساعة.'
-      : '**طلب قيد المراجعة 🔍**\nطلب تجديدك وصل للإدارة وبانتظار الرد. يرجى الانتظار.';
+      ? '**طلب تجديد معلق**\nلديك طلب تجديد بانتظار الفاتورة. أرسل صورة الفاتورة في الخاص أو انتظر انتهاء مهلة الـ 12 ساعة.'
+      : '**طلب قيد المراجعة**\nطلب تجديدك وصل للإدارة وبانتظار الرد. يرجى الانتظار.';
     const ep = { embeds: [quickEmbed(interaction.client, interaction.user, 'warning', desc)], flags: MessageFlags.Ephemeral };
     if (interaction.replied || interaction.deferred) return interaction.editReply(ep).catch(() => {});
     if (interaction.isStringSelectMenu() || interaction.isButton()) return interaction.update(ep).catch(() => {});
@@ -1012,11 +1008,11 @@ async function startRenewal(interaction, code) {
   const currency = settings.currency || 'SAR';
   const botsCount = Number(entry.botsCount || 0);
   const priceLines = MONTH_PRESETS.map(p =>
-    `**${p.months} •** ${p.labelAr} — ${p.days}d | ${formatMoney(price * botsCount * p.months, currency)}`,
+    `**${p.months} Month | ${p.labelAr} :** ${formatMoney(price * botsCount * p.months, currency)}`,
   ).join('\n');
   const durEmbed = quickEmbed(
     interaction.client, interaction.user, 'info',
-    `**🔄 Renewal | تجديد الاشتراك \`${code}\`**\n*اختر مدة التجديد:*\n\n${priceLines}`,
+    `**Renewal | تجديد الاشتراك \`${code}\`**\n*اختر مدة التجديد :*\n\n${priceLines}`,
   );
   const payload = { embeds: [durEmbed], components: durationRenewRows(code, interaction.id), flags: MessageFlags.Ephemeral };
   if (interaction.replied || interaction.deferred) return interaction.editReply(payload).catch(() => {});
@@ -1051,25 +1047,25 @@ async function doStartRenewal(interaction, code, durationMs, durationLabel, dura
 
   const dmEmbed = new EmbedBuilder()
     .setColor(getEmbedColor(interaction.client))
-    .setTitle('🔄 Renewal Invoice | فاتورة التجديد')
+    .setTitle('Renewal Invoice | فاتورة التجديد')
     .setThumbnail(userThumbR)
     .setFooter({ text: interaction.client?.user?.username || 'Mume Auto', iconURL: interaction.client?.user?.displayAvatarURL?.() || undefined })
     .setTimestamp()
     .addFields(
-      { name: '📋 Subscription | الاشتراك', value: `\`${code}\``, inline: true },
-      { name: '⏳ Duration | المدة', value: `\`${durationLabel}\` (${durationDays} يوم)`, inline: true },
-      { name: '💰 Total Price | الإجمالي', value: formatMoney(totalPrice, currency), inline: true },
-      ...(pmRenewal ? [{ name: '💳 Payment Methods | طرق الدفع', value: pmRenewal, inline: false }] : []),
-      { name: '📤 Required | المطلوب', value: 'أرسل صورة الفاتورة هنا في الخاص حتى تصل للإدارة', inline: false },
-      { name: '⏱️ Timeout', value: 'لديك **12 ساعة** قبل حذف الطلب تلقائياً', inline: false },
+      { name: 'Subscription | الاشتراك', value: `\`${code}\``, inline: true },
+      { name: 'Duration | المدة', value: `\`${durationLabel}\` (${durationDays} يوم)`, inline: true },
+      { name: 'Total Price | الإجمالي', value: formatMoney(totalPrice, currency), inline: true },
+      ...(pmRenewal ? [{ name: 'Payment Methods | طرق الدفع', value: pmRenewal, inline: false }] : []),
+      { name: 'Required | المطلوب', value: 'أرسل صورة الفاتورة هنا في الخاص حتى تصل للإدارة', inline: false },
+      { name: 'Timeout | المهلة', value: 'لديك **12 ساعة** قبل حذف الطلب تلقائياً', inline: false },
     );
 
   const dmOk = await interaction.user.send({ embeds: [dmEmbed] }).then(() => true).catch(() => false);
   const confirmEmbed = quickEmbed(
     interaction.client, interaction.user, dmOk ? 'success' : 'error',
     dmOk
-      ? '**✅ تم إرسال الفاتورة في الخاص!**\nأرسل صورة الفاتورة هناك خلال **12 ساعة**.'
-      : '**❌ تعذّر إرسال الخاص**\nافتح رسائل الخاص (Privacy Settings) ثم اضغط Renew مجدداً.',
+      ? '**تم إرسال الفاتورة في الخاص**\nأرسل صورة الفاتورة هناك خلال **12 ساعة**.'
+      : '**تعذّر إرسال الخاص**\nافتح رسائل الخاص (Privacy Settings) ثم اضغط Renew مجدداً.',
   );
   const confirmPayload = { embeds: [confirmEmbed], components: [], flags: MessageFlags.Ephemeral };
   if (interaction.replied || interaction.deferred) return interaction.editReply(confirmPayload).catch(() => {});
@@ -1113,9 +1109,9 @@ async function handleInvoiceDm(client, message) {
   await message.reply({
     embeds: [new EmbedBuilder()
       .setColor(getEmbedColor(client))
-      .setTitle('📨 Invoice Received | تم استلام الفاتورة')
+      .setTitle('Invoice Received | تم استلام الفاتورة')
       .setThumbnail(message.author.displayAvatarURL({ dynamic: true, size: 128 }))
-      .setDescription('✅ **وصلت فاتورتك للإدارة وجاري المراجعة.**\nسيتم التواصل معك بمجرد اتخاذ القرار.')
+      .setDescription('**وصلت فاتورتك للإدارة وجاري المراجعة.**\nسيتم التواصل معك بمجرد اتخاذ القرار.')
       .setFooter({ text: client?.user?.username || 'Mume Auto', iconURL: client?.user?.displayAvatarURL?.() || undefined })
       .setTimestamp()],
   }).catch(() => {});
@@ -1171,7 +1167,7 @@ async function acceptPurchase(interaction, reqId) {
   const updated = updateRequest(reqId, { status: 'approved', duration: durationLabel, code });
   await interaction.reply({
     embeds: [quickEmbed(interaction.client, interaction.user, 'success',
-      `**✅ تم قبول الشراء وتفعيل الاشتراك**\nكود الاشتراك: \`${code}\`\nالمدة: **${durationLabel}** (${req.durationDays || '?'} يوم)\nالمستخدم: <@${req.userId}>`)],
+      `**تم قبول الشراء وتفعيل الاشتراك**\nكود الاشتراك : \`${code}\`\nالمدة : **${durationLabel}** (${req.durationDays || '?'} يوم)\nالمستخدم : <@${req.userId}>`)],
     flags: MessageFlags.Ephemeral,
   }).catch(() => {});
   await interaction.message.edit({
@@ -1215,7 +1211,7 @@ async function acceptRenewal(interaction, reqId) {
   const updated = updateRequest(reqId, { status: 'approved', duration: durationLabel });
   await interaction.reply({
     embeds: [quickEmbed(interaction.client, interaction.user, 'success',
-      `**✅ تم قبول التجديد**\nالاشتراك: \`${req.code}\`\nمضاف: **${durationLabel}** (${req.durationDays || '?'} يوم)\nالمستخدم: <@${req.userId}>`)],
+      `**تم قبول التجديد**\nالاشتراك : \`${req.code}\`\nمضاف : **${durationLabel}** (${req.durationDays || '?'} يوم)\nالمستخدم : <@${req.userId}>`)],
     flags: MessageFlags.Ephemeral,
   }).catch(() => {});
   await interaction.message.edit({
@@ -1927,8 +1923,8 @@ async function handleInteraction(interaction) {
       );
       if (existingBuy) {
         const blockedDesc = existingBuy.status === 'awaiting_invoice'
-          ? '**طلب معلق ⏳**\nلديك طلب شراء بانتظار الفاتورة. أرسل صورة الفاتورة في الخاص أو انتظر انتهاء مهلة الـ 12 ساعة.'
-          : '**طلب قيد المراجعة 🔍**\nطلبك وصل للإدارة وبانتظار الرد. يرجى الانتظار.';
+          ? '**طلب معلق**\nلديك طلب شراء بانتظار الفاتورة. أرسل صورة الفاتورة في الخاص أو انتظر انتهاء مهلة الـ 12 ساعة.'
+          : '**طلب قيد المراجعة**\nطلبك وصل للإدارة وبانتظار الرد. يرجى الانتظار.';
         return interaction.reply({
           embeds: [quickEmbed(interaction.client, interaction.user, 'warning', blockedDesc)],
           flags: MessageFlags.Ephemeral,
@@ -1938,11 +1934,11 @@ async function handleInteraction(interaction) {
       const price = Number(s.botPrice || 0);
       const cur = s.currency || 'SAR';
       const priceLines = MONTH_PRESETS.map(p =>
-        `**${p.months} •** ${p.labelAr} — ${p.days}d | ${formatMoney(price * p.months, cur)}/بوت`,
+        `**${p.months} Month | ${p.labelAr} :** ${formatMoney(price * p.months, cur)} / بوت`,
       ).join('\n');
       return interaction.reply({
         embeds: [quickEmbed(interaction.client, interaction.user, 'info',
-          `**🛒 Buy Subscription | شراء اشتراك**\n*اختر مدة الاشتراك:*\n\n${priceLines}`)],
+          `**Buy Subscription | شراء اشتراك**\n*اختر مدة الاشتراك :*\n\n${priceLines}`)],
         components: durationBuyRows(interaction.id),
         flags: MessageFlags.Ephemeral,
       }).catch(() => {});
