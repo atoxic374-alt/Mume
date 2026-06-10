@@ -29,18 +29,34 @@ module.exports = {
         return;
       }
 
-      let description = ''; 
+      function makeBar(remaining) {
+        const BAR = 12;
+        const maxMs = remaining > 60 * 24 * 60 * 60 * 1000 ? 90 * 24 * 60 * 60 * 1000
+          : remaining > 30 * 24 * 60 * 60 * 1000 ? 60 * 24 * 60 * 60 * 1000
+          : 30 * 24 * 60 * 60 * 1000;
+        const ratio = Math.max(0, Math.min(1, remaining / maxMs));
+        const filled = Math.round(ratio * BAR);
+        const pct = Math.round(ratio * 100);
+        return `\`[${'▓'.repeat(filled)}${'▒'.repeat(BAR - filled)}]\` ${pct}%`;
+      }
+
+      let description = '';
       userSubscriptions.forEach((userSubscription, index) => {
         const expirationTime = userSubscription.expirationTime;
-        const remainingTime = expirationTime - Date.now();
+        const remainingTime = Math.max(0, expirationTime - Date.now());
+        const paused = !!userSubscription.pausedAt;
 
         const days = Math.floor(remainingTime / (1000 * 60 * 60 * 24));
         const hours = Math.floor((remainingTime % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
         const minutes = Math.floor((remainingTime % (1000 * 60 * 60)) / (1000 * 60));
         const seconds = Math.floor((remainingTime % (1000 * 60)) / 1000);
+        const formattedTime = `${days ? `${days}d ` : ''}${hours ? `${hours}h ` : ''}${minutes ? `${minutes}m ` : ''}${seconds ? `${seconds}s` : ''}`.trim() || '0s';
 
-        const formattedTime = `${days ? `${days}d ` : ''}${hours ? `${hours}h ` : ''}${minutes ? `${minutes}m ` : ''}${seconds ? `${seconds}s` : ''}`;
-        description += `\`${index + 1}\` : \`Music x${userSubscription.botsCount} (SuID ${userSubscription.code})\` : \`${formattedTime}\`\n`;
+        const bar = makeBar(remainingTime);
+        const statusLabel = paused ? ' — متوقف' : '';
+        description += `**\`${index + 1}\`** — \`Music x${userSubscription.botsCount}\` — SuID \`${userSubscription.code}\`${statusLabel}\n`;
+        description += `${bar} — \`${formattedTime}\`\n`;
+        description += `ينتهي : <t:${Math.floor(expirationTime / 1000)}:R>\n\n`;
       });
 
       const embed = new EmbedBuilder()

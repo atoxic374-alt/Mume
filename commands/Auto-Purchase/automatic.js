@@ -375,6 +375,10 @@ function ownerRows() {
         .setCustomId('auto_admin_send')
         .setLabel('Send Panel | إرسال')
         .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId('auto_admin_stock')
+        .setLabel('Stock | الستوك')
+        .setStyle(ButtonStyle.Secondary),
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -395,23 +399,22 @@ function publicPanelEmbed(client) {
     .setColor(getEmbedColor(client))
     .setTitle('Automatic Purchase | الشراء التلقائي')
     .setDescription([
-      '**Buy Subscription | شراء اشتراك**',
-      '*Choose bot count, send invoice in DM, then wait for owner approval.*',
+      '**Buy | شراء**',
       '*حدد عدد البوتات وارسل الفاتورة في الخاص ثم انتظر قبول الإدارة.*',
       '',
-      '**My Subscription | اشتراكي**',
-      '*View and manage your active subscriptions.*',
+      '**My Sub | اشتراكي**',
       '*عرض وإدارة اشتراكاتك الحالية.*',
       '',
-      '**Management | الإدارة**',
-      '*Open My Sub, then use Manage for ownership, server, and bot links.*',
-      '*افتح اشتراكي ثم استخدم إدارة لنقل الملكية أو السيرفر أو روابط البوتات.*',
-      '',
-      '**Renewal | التجديد**',
-      '*Request renewal, then send the invoice image in DM within 12 hours.*',
+      '**Renew | تجديد**',
       '*اطلب التجديد ثم ارسل صورة الفاتورة في الخاص خلال 12 ساعة.*',
       '',
-      `**Bot Price | سعر البوت :** *${formatMoney(settings.botPrice, settings.currency)}*`,
+      '**Pricing | الأسعار**',
+      '*احسب سعر اشتراكك تلقائياً بناءً على عدد البوتات والمدة.*',
+      '',
+      '**Support | الدعم**',
+      '*تواصل مع الإدارة مباشرة.*',
+      '',
+      `**Bot Price / Month | سعر البوت / شهر :** *${formatMoney(settings.botPrice, settings.currency)}*`,
     ].join('\n'))
     .setFooter({ text: `${client.user?.username || 'Music'} | Automatic`, iconURL: client.user?.displayAvatarURL({ dynamic: true }) });
   const thumb = client.user?.displayAvatarURL({ dynamic: true, size: 256 });
@@ -427,6 +430,10 @@ function publicPanelRows() {
       new ButtonBuilder().setCustomId('auto_user_renew').setLabel('Renew | تجديد').setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId('auto_user_links').setLabel('Links | روابط').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('auto_user_pause').setLabel('Pause/Resume | إيقاف/تشغيل').setStyle(ButtonStyle.Secondary),
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('auto_user_pricing').setLabel('Pricing | الأسعار').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('auto_user_support').setLabel('Support | الدعم').setStyle(ButtonStyle.Secondary),
     ),
   ];
 }
@@ -779,7 +786,7 @@ async function showControlPanel(interaction, code) {
 
 async function showSubscriptionPicker(interaction, action) {
   const subs = userSubscriptions(interaction.user.id);
-  if (!subs.length) return interaction.reply({ content: '**Subscription :** *لا يوجد لديك اشتراك حاليا.*', flags: MessageFlags.Ephemeral }).catch(() => {});
+  if (!subs.length) return interaction.reply({ embeds: [quickEmbed(interaction.client, interaction.user, 'error', '**لا يوجد لديك اشتراك حالياً**\nاضغط Buy لشراء اشتراك جديد.')], flags: MessageFlags.Ephemeral }).catch(() => {});
   if (subs.length === 1) {
     if (action === 'renew') return startRenewal(interaction, subs[0].code);
     if (action === 'pause') return togglePause(interaction, subs[0].code);
@@ -810,7 +817,7 @@ async function requestAddBots(interaction, code, count) {
   );
   if (existing) {
     return interaction.reply({
-      content: '**Add Bots :** *لديك طلب إضافة بوتات معلق بالفعل. انتظر قبوله أو رفضه قبل إرسال طلب جديد.*',
+      embeds: [quickEmbed(interaction.client, interaction.user, 'warning', '**طلب إضافة بوتات معلق**\nلديك طلب إضافة بوتات قيد المراجعة. انتظر قبوله أو رفضه قبل إرسال طلب جديد.')],
       flags: MessageFlags.Ephemeral,
     }).catch(() => {});
   }
@@ -849,13 +856,14 @@ async function requestAddBots(interaction, code, count) {
   }
 
   return interaction.reply({
-    content: [
-      `**Add Bots :** *تم إرسال طلب إضافة \`${count}\` بوت إلى ${requestTargetLabel()}.*`,
+    embeds: [quickEmbed(interaction.client, interaction.user, 'success', [
+      `**تم إرسال طلب إضافة \`${count}\` بوت**`,
       '',
-      `**Unit Price :** *${formatMoney(unitPrice, currency)}*`,
+      `**سعر البوت الواحد :** *${formatMoney(unitPrice, currency)}*`,
+      `**الإجمالي :** *${formatMoney(totalPrice, currency)}*`,
       '',
-      `**Total Price :** *${formatMoney(totalPrice, currency)}*`,
-    ].join('\n'),
+      `**الوجهة :** *${requestTargetLabel()}*`,
+    ].join('\n'))],
     flags: MessageFlags.Ephemeral,
   }).catch(() => {});
 }
@@ -950,31 +958,29 @@ async function approveAddBots(interaction, reqId) {
   }
 }
 
-async function rejectRequest(interaction, reqId, type = 'add') {
-  if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
-  const req = updateRequest(reqId, { status: 'rejected' });
-  if (!req) return interaction.reply({ content: '**Request :** *الطلب غير موجود.*', flags: MessageFlags.Ephemeral });
+async function rejectRequest(client, reqMessage, reqId, type = 'add', reason = '') {
+  const req = updateRequest(reqId, { status: 'rejected', rejectionReason: reason || null });
+  if (!req) return;
   const embed = type === 'renew'
-    ? buildRenewRequestEmbed(interaction.client, req)
+    ? buildRenewRequestEmbed(client, req)
     : type === 'purchase'
-      ? buildPurchaseRequestEmbed(interaction.client, req)
-      : buildAddBotsRequestEmbed(interaction.client, req);
+      ? buildPurchaseRequestEmbed(client, req)
+      : buildAddBotsRequestEmbed(client, req);
   const rows = type === 'renew'
     ? renewRequestRows(reqId, true)
     : type === 'purchase'
       ? purchaseRequestRows(reqId, true)
       : addBotsRequestRows(reqId, true);
-  await interaction.update({ embeds: [embed], components: rows }).catch(() => {});
-  const user = await interaction.client.users.fetch(req.userId).catch(() => null);
+  await reqMessage?.edit({ embeds: [embed], components: rows }).catch(() => {});
+  const user = await client.users.fetch(req.userId).catch(() => null);
   if (user) {
-    const typeDesc = type === 'purchase'
+    let typeDesc = type === 'purchase'
       ? `**تم رفض طلب الشراء**\n${req.count || '?'} بوت — ${req.durationLabel || ''}\nيمكنك المحاولة مجدداً عبر قائمة الاشتراك.`
       : type === 'renew'
         ? `**تم رفض طلب التجديد**\nالاشتراك : \`${req.code || ''}\`\nيمكنك المحاولة مجدداً عبر قائمة اشتراكاتك.`
         : `**تم رفض طلب إضافة البوتات**\nالاشتراك : \`${req.code || ''}\``;
-    user.send({
-      embeds: [quickEmbed(interaction.client, user, 'error', typeDesc)],
-    }).catch(() => {});
+    if (reason) typeDesc += `\n\n**السبب :** *${reason}*`;
+    user.send({ embeds: [quickEmbed(client, user, 'error', typeDesc)] }).catch(() => {});
   }
 }
 
@@ -1247,7 +1253,15 @@ async function togglePause(interaction, code) {
     subTokens.forEach(token => { delete token.paused; });
     store.set('time', timeArray);
     store.set('tokens', tokens);
-    return interaction.reply({ content: `**Pause :** *تم استئناف الاشتراك \`${code}\`.*`, flags: MessageFlags.Ephemeral }).catch(() => {});
+    return interaction.reply({
+      embeds: [quickEmbed(interaction.client, interaction.user, 'success', [
+        `**تم استئناف الاشتراك \`${code}\`**`,
+        '',
+        `**الوقت المُعاد :** *\`${formatDuration(Math.max(0, pausedFor))}\`*`,
+        `**ينتهي الآن :** *<t:${Math.floor(entry.expirationTime / 1000)}:R>*`,
+      ].join('\n'))],
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => {});
   }
 
   entry.pausedAt = Date.now();
@@ -1266,7 +1280,15 @@ async function togglePause(interaction, code) {
     }
   } catch {}
 
-  return interaction.reply({ content: `**Pause :** *تم إيقاف الاشتراك \`${code}\` مؤقتا، وتم فصل البوتات.*`, flags: MessageFlags.Ephemeral }).catch(() => {});
+  return interaction.reply({
+    embeds: [quickEmbed(interaction.client, interaction.user, 'warning', [
+      `**تم إيقاف الاشتراك \`${code}\` مؤقتاً**`,
+      '',
+      `**البوتات :** *تم فصلها — ستُعاد عند الاستئناف.*`,
+      `**الوقت :** *موقوف الآن ولن يُحسب حتى تستأنف.*`,
+    ].join('\n'))],
+    flags: MessageFlags.Ephemeral,
+  }).catch(() => {});
 }
 
 async function botInviteInfo(tokenData, mode) {
@@ -1885,6 +1907,154 @@ async function handleProfileAction(interaction, action) {
   }
 }
 
+async function showStockDetails(interaction) {
+  if (!owners.includes(interaction.user.id)) {
+    return interaction.reply({ embeds: [quickEmbed(interaction.client, interaction.user, 'error', '**Permission :** *هذا الزر للأونرات فقط.*')], flags: MessageFlags.Ephemeral });
+  }
+  const allBots = store.get('bots') || [];
+  const allTokens = store.get('tokens') || [];
+  const timeArray = store.get('time') || [];
+  const activeTokenSet = new Set(allTokens.map(t => t.token));
+  const freeStock = allBots.filter(b => !activeTokenSet.has(b.token)).length;
+  const pausedCount = timeArray.filter(e => e.pausedAt).length;
+  const activeCount = timeArray.length - pausedCount;
+  const lines = timeArray.slice(0, 15).map(entry => {
+    const tks = allTokens.filter(t => t.code === entry.code).length;
+    const paused = !!entry.pausedAt;
+    const remaining = paused
+      ? Math.max(0, entry.expirationTime - Number(entry.pausedAt || Date.now()))
+      : Math.max(0, entry.expirationTime - Date.now());
+    const days = Math.floor(remaining / 86400000);
+    return `\`${entry.code}\` — \`${tks}\` بوت — ${days}d — ${paused ? 'متوقف' : 'نشط'}`;
+  });
+  const embed = new EmbedBuilder()
+    .setColor(getEmbedColor(interaction.client))
+    .setTitle('Stock Details | تفاصيل الستوك')
+    .setDescription([
+      `**Free Stock | الستوك المتاح :** *\`${freeStock}\`*`,
+      '',
+      `**In Subscriptions | داخل اشتراكات :** *\`${allTokens.length}\`*`,
+      '',
+      `**Active Subs | اشتراكات نشطة :** *\`${activeCount}\`*`,
+      `**Paused Subs | اشتراكات متوقفة :** *\`${pausedCount}\`*`,
+      '',
+      lines.length ? `**Subscriptions :**\n${lines.join('\n')}` : '*لا توجد اشتراكات.*',
+    ].join('\n'))
+    .setFooter({ text: `${interaction.client.user?.username || 'Mume'} | Stock`, iconURL: interaction.client.user?.displayAvatarURL({ dynamic: true }) })
+    .setTimestamp();
+  return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral }).catch(() => {});
+}
+
+async function handleContactSupport(interaction) {
+  const modal = new ModalBuilder()
+    .setCustomId('auto_support_modal')
+    .setTitle('Contact Support | تواصل مع الدعم');
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('message')
+        .setLabel('Message | الرسالة')
+        .setPlaceholder('اكتب استفسارك أو مشكلتك هنا...')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setMaxLength(1000),
+    ),
+  );
+  await interaction.showModal(modal);
+  const submit = await interaction.awaitModalSubmit({
+    filter: i => i.customId === 'auto_support_modal' && i.user.id === interaction.user.id,
+    time: 120000,
+  }).catch(() => null);
+  if (!submit) return;
+  const msg = submit.fields.getTextInputValue('message').trim();
+  const supportEmbed = new EmbedBuilder()
+    .setColor(getEmbedColor(interaction.client))
+    .setTitle('Support Request | طلب دعم')
+    .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true, size: 128 }))
+    .setDescription([
+      `**User | المستخدم :** *<@${interaction.user.id}> (\`${interaction.user.tag || interaction.user.username}\`)*`,
+      '',
+      `**Message | الرسالة :**\n${msg}`,
+    ].join('\n'))
+    .setFooter({ text: `User ID : ${interaction.user.id}` })
+    .setTimestamp();
+  let sent = false;
+  for (const ownerId of owners) {
+    const owner = await interaction.client.users.fetch(ownerId).catch(() => null);
+    if (!owner) continue;
+    const ok = await owner.send({ embeds: [supportEmbed] }).then(() => true).catch(() => false);
+    if (ok) sent = true;
+  }
+  return submit.reply({
+    embeds: [quickEmbed(interaction.client, interaction.user, sent ? 'success' : 'error',
+      sent
+        ? '**تم إرسال رسالتك للدعم**\nسيتم التواصل معك قريباً.'
+        : '**تعذّر إرسال الرسالة**\nحدث خطأ، حاول مرة أخرى لاحقاً.')],
+    flags: MessageFlags.Ephemeral,
+  }).catch(() => {});
+}
+
+async function handlePricingCalculator(interaction) {
+  const modal = new ModalBuilder()
+    .setCustomId('auto_pricing_modal')
+    .setTitle('Price Calculator | حاسبة السعر');
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('count')
+        .setLabel('Bot Count | عدد البوتات')
+        .setPlaceholder('مثال : 5')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true),
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('months')
+        .setLabel('Months | الأشهر (1 أو 2 أو 3)')
+        .setPlaceholder('1 أو 2 أو 3')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(1),
+    ),
+  );
+  await interaction.showModal(modal);
+  const submit = await interaction.awaitModalSubmit({
+    filter: i => i.customId === 'auto_pricing_modal' && i.user.id === interaction.user.id,
+    time: 120000,
+  }).catch(() => null);
+  if (!submit) return;
+  const count = parseInt(submit.fields.getTextInputValue('count').trim(), 10);
+  const months = parseInt(submit.fields.getTextInputValue('months').trim(), 10);
+  if (!Number.isInteger(count) || count <= 0) {
+    return submit.reply({ embeds: [quickEmbed(interaction.client, interaction.user, 'error', '**عدد البوتات غير صحيح**\nاكتب رقماً صحيحاً أكبر من صفر.')], flags: MessageFlags.Ephemeral }).catch(() => {});
+  }
+  if (![1, 2, 3].includes(months)) {
+    return submit.reply({ embeds: [quickEmbed(interaction.client, interaction.user, 'error', '**عدد الأشهر غير صحيح**\nاكتب 1 أو 2 أو 3 فقط.')], flags: MessageFlags.Ephemeral }).catch(() => {});
+  }
+  const s = automaticSettings();
+  const pricePerBot = Number(s.botPrice || 0);
+  const currency = s.currency || 'SAR';
+  const totalPrice = pricePerBot * count * months;
+  const preset = MONTH_PRESETS.find(p => p.months === months);
+  return submit.reply({
+    embeds: [new EmbedBuilder()
+      .setColor(getEmbedColor(interaction.client))
+      .setTitle('Price Calculation | حساب السعر')
+      .setDescription([
+        `**Bot Count | عدد البوتات :** *\`${count}\`*`,
+        '',
+        `**Duration | المدة :** *${preset?.labelAr || months + ' شهر'} (${preset?.days || months * 30} يوم)*`,
+        '',
+        `**Price / Bot / Month | سعر البوت / شهر :** *${formatMoney(pricePerBot, currency)}*`,
+        '',
+        `**Total Price | الإجمالي :** *${formatMoney(totalPrice, currency)}*`,
+      ].join('\n'))
+      .setFooter({ text: interaction.client?.user?.username || 'Mume Auto', iconURL: interaction.client?.user?.displayAvatarURL?.() || undefined })
+      .setTimestamp()],
+    flags: MessageFlags.Ephemeral,
+  }).catch(() => {});
+}
+
 async function handleInteraction(interaction) {
   const id = interaction.customId || '';
   if (!id.startsWith('auto_')) return;
@@ -1993,6 +2163,9 @@ async function handleInteraction(interaction) {
       const code = parts.slice(3, -1).join('_');
       return doStartRenewal(interaction, code, preset.ms, preset.labelAr, preset.days);
     }
+    if (id === 'auto_admin_stock') return showStockDetails(interaction);
+    if (id === 'auto_user_pricing') return handlePricingCalculator(interaction);
+    if (id === 'auto_user_support') return handleContactSupport(interaction);
     if (id === 'auto_user_my') return showSubscriptionPicker(interaction, 'my');
     if (id === 'auto_user_renew') return showSubscriptionPicker(interaction, 'renew');
     if (id === 'auto_user_links') return showSubscriptionPicker(interaction, 'links_all');
@@ -2099,11 +2272,83 @@ async function handleInteraction(interaction) {
     }
 
     if (id.startsWith('auto_req_add_')) return approveAddBots(interaction, id.slice('auto_req_add_'.length));
-    if (id.startsWith('auto_req_reject_')) return rejectRequest(interaction, id.slice('auto_req_reject_'.length), 'add');
+    if (id.startsWith('auto_req_reject_')) {
+      const reqId = id.slice('auto_req_reject_'.length);
+      const savedMsg = interaction.message;
+      const reasonModal = new ModalBuilder()
+        .setCustomId(`auto_reject_reason_modal_${reqId}`)
+        .setTitle('Reject Reason | سبب الرفض');
+      reasonModal.addComponents(new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('reason')
+          .setLabel('Reason | السبب')
+          .setPlaceholder('اكتب سبب الرفض...')
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(false)
+          .setMaxLength(500),
+      ));
+      await interaction.showModal(reasonModal);
+      const submit = await interaction.awaitModalSubmit({
+        filter: i => i.customId === `auto_reject_reason_modal_${reqId}` && i.user.id === interaction.user.id,
+        time: 120000,
+      }).catch(() => null);
+      if (!submit) return;
+      const reason = submit.fields.getTextInputValue('reason').trim();
+      await rejectRequest(interaction.client, savedMsg, reqId, 'add', reason);
+      return submit.reply({ embeds: [quickEmbed(interaction.client, interaction.user, 'success', '**تم رفض الطلب وإشعار المستخدم.**')], flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
     if (id.startsWith('auto_renew_accept_')) return acceptRenewal(interaction, id.slice('auto_renew_accept_'.length));
-    if (id.startsWith('auto_renew_reject_')) return rejectRequest(interaction, id.slice('auto_renew_reject_'.length), 'renew');
+    if (id.startsWith('auto_renew_reject_')) {
+      const reqId = id.slice('auto_renew_reject_'.length);
+      const savedMsg = interaction.message;
+      const reasonModal = new ModalBuilder()
+        .setCustomId(`auto_reject_reason_modal_${reqId}`)
+        .setTitle('Reject Reason | سبب الرفض');
+      reasonModal.addComponents(new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('reason')
+          .setLabel('Reason | السبب')
+          .setPlaceholder('اكتب سبب الرفض...')
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(false)
+          .setMaxLength(500),
+      ));
+      await interaction.showModal(reasonModal);
+      const submit = await interaction.awaitModalSubmit({
+        filter: i => i.customId === `auto_reject_reason_modal_${reqId}` && i.user.id === interaction.user.id,
+        time: 120000,
+      }).catch(() => null);
+      if (!submit) return;
+      const reason = submit.fields.getTextInputValue('reason').trim();
+      await rejectRequest(interaction.client, savedMsg, reqId, 'renew', reason);
+      return submit.reply({ embeds: [quickEmbed(interaction.client, interaction.user, 'success', '**تم رفض طلب التجديد وإشعار المستخدم.**')], flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
     if (id.startsWith('auto_purchase_accept_')) return acceptPurchase(interaction, id.slice('auto_purchase_accept_'.length));
-    if (id.startsWith('auto_purchase_reject_')) return rejectRequest(interaction, id.slice('auto_purchase_reject_'.length), 'purchase');
+    if (id.startsWith('auto_purchase_reject_')) {
+      const reqId = id.slice('auto_purchase_reject_'.length);
+      const savedMsg = interaction.message;
+      const reasonModal = new ModalBuilder()
+        .setCustomId(`auto_reject_reason_modal_${reqId}`)
+        .setTitle('Reject Reason | سبب الرفض');
+      reasonModal.addComponents(new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('reason')
+          .setLabel('Reason | السبب')
+          .setPlaceholder('اكتب سبب الرفض...')
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(false)
+          .setMaxLength(500),
+      ));
+      await interaction.showModal(reasonModal);
+      const submit = await interaction.awaitModalSubmit({
+        filter: i => i.customId === `auto_reject_reason_modal_${reqId}` && i.user.id === interaction.user.id,
+        time: 120000,
+      }).catch(() => null);
+      if (!submit) return;
+      const reason = submit.fields.getTextInputValue('reason').trim();
+      await rejectRequest(interaction.client, savedMsg, reqId, 'purchase', reason);
+      return submit.reply({ embeds: [quickEmbed(interaction.client, interaction.user, 'success', '**تم رفض طلب الشراء وإشعار المستخدم.**')], flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
   }
 
   if (interaction.isStringSelectMenu()) {
