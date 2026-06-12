@@ -50,6 +50,39 @@ const tempData = new Collection();
 tempData.set("bots", []);
 const collection = new Collection();
 
+function stableHash(value) {
+    const text = String(value || '');
+    let hash = 2166136261;
+    for (let i = 0; i < text.length; i++) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+}
+
+function normalizeLavalinkHostConfig(hostConfig) {
+    return Array.isArray(hostConfig) ? hostConfig.filter(node => node?.host && node?.port) : [];
+}
+
+function selectLavalinkHostsForBot(hostConfig, token, serverId) {
+    const nodes = normalizeLavalinkHostConfig(hostConfig);
+    if (nodes.length <= 1) return nodes;
+
+    const strategy = String(process.env.LAVALINK_NODE_STRATEGY || 'partition').toLowerCase();
+    if (strategy === 'all' || strategy === 'full') return nodes;
+
+    const replicaCount = Math.max(1, Math.min(
+        nodes.length,
+        Number(process.env.LAVALINK_NODE_REPLICAS || 1) || 1,
+    ));
+    const start = stableHash(`${serverId || ''}:${String(token || '').slice(-12)}`) % nodes.length;
+    const selected = [];
+    for (let offset = 0; offset < replicaCount; offset++) {
+        selected.push(nodes[(start + offset) % nodes.length]);
+    }
+    return selected;
+}
+
 // ── B: resolveTrack cache (1-hour TTL, max 500 entries) ──────────────────────
 const _resolveTrackCache = new Map();
 const RESOLVE_TRACK_TTL = 60 * 60 * 1000;
@@ -1034,6 +1067,74 @@ function rememberTextChannel(player, channelId) {
     ensurePlayerData(player);
     player.textChannel = channelId;
     player.data.lastTextChannel = channelId;
+}
+
+function canSendMusicPanel(channel) {
+    if (!channel || typeof channel.send !== 'function') return false;
+    if (typeof channel.isTextBased === 'function' && !channel.isTextBased()) return false;
+    return true;
+}
+
+async function resolveNowPlayingTextChannel(client, player, tokenObj = null) {
+    const data = ensurePlayerData(player);
+    const candidates = [
+        data.lastTextChannel,
+        player?.textChannel,
+        tokenObj?.chat,
+        tokenObj?.textChannel,
+        tokenObj?.logChannel,
+    ].filter(Boolean);
+
+    for (const candidate of candidates) {
+        const id = typeof candidate === 'string' ? candidate : candidate?.id;
+        let channel = id ? client.channels.cache.get(id) : candidate;
+        if (!channel && id) channel = await client.channels.fetch(id).catch(() => null);
+        if (canSendMusicPanel(channel)) {
+            rememberTextChannel(player, channel.id);
+            return channel;
+        }
+    }
+
+    const guild = client.guilds.cache.get(player?.guildId)
+        || await client.guilds.fetch(player?.guildId).catch(() => null);
+    if (!guild) return null;
+
+    const cached = guild.channels.cache.find(canSendMusicPanel);
+    if (cached) {
+        rememberTextChannel(player, cached.id);
+        return cached;
+    }
+
+    const fetched = await guild.channels.fetch().catch(() => null);
+    const fallback = fetched?.find?.(canSendMusicPanel);
+    if (fallback) rememberTextChannel(player, fallback.id);
+    return fallback || null;
+}
+
+function ensureTrackRequester(track, player, fallbackUser) {
+    if (!track?.info) return fallbackUser || null;
+    const requester = track.info.requester || player?.data?.lastRequester || fallbackUser || null;
+    if (requester) {
+        track.info.requester = requester;
+        if (player) ensurePlayerData(player).lastRequester = requester;
+    }
+    return requester;
+}
+
+function recoverableTrackErrorMessage(data) {
+    return String(
+        data?.reason
+        || data?.exception?.message
+        || data?.exception?.cause
+        || data?.message
+        || data?.type
+        || ''
+    );
+}
+
+function isRecoverableTrackError(data) {
+    const message = recoverableTrackErrorMessage(data);
+    return /voice|session|connection|websocket|socket|timeout|timed out|closed|reset|aborted|no such player|not connected|server update|endpoint/i.test(message);
 }
 
 function registerQueuePanel(player, message, version) {
@@ -2630,6 +2731,10 @@ module.exports = {
                 password: process.env.LAVALINK_PASS || 'youshallnotpass',
             }];
         }
+        hostConfig = selectLavalinkHostsForBot(hostConfig, token, idbot);
+        if (hostConfig.length === 0) {
+            console.warn(`[Lavalink] no valid nodes configured for bot …${String(token).slice(-6)}`);
+        }
 
         const TrueMusic = new Client({
             shards: "auto",
@@ -4074,6 +4179,25 @@ module.exports = {
                 return;
             }
         }
+        const erroredTrack = track || player.currentTrack || player.data.lastTrack;
+        const errorIdentity = trackIdentity(erroredTrack);
+        const lastRetryAt = Number(player.data.trackErrorRetryAt || 0);
+        const sameRecentRetry = player.data.trackErrorRetryIdentity === errorIdentity
+            && Date.now() - lastRetryAt < 45_000;
+
+        if (erroredTrack && errorIdentity && isRecoverableTrackError(data) && !sameRecentRetry && typeof player.queue?.unshift === 'function') {
+            player.data.trackErrorRetryIdentity = errorIdentity;
+            player.data.trackErrorRetryAt = Date.now();
+            player.queue.unshift(erroredTrack);
+            player.currentTrack = null;
+            player.isPlaying = false;
+            player.isPaused = false;
+            markPlayerNeedsVoiceRefresh(player, `track_error:${recoverableTrackErrorMessage(data).slice(0, 80) || 'recoverable'}`);
+            warnPlayerOnce(player, `track-error-retry:${errorIdentity}`, `[TrackError] recoverable voice/session error; retrying ${errorIdentity}`, 45_000);
+            setTimeout(() => safePlay(player).catch(() => recoverPlayerPlayback(player, 'track_error_retry').catch(() => {})), 1500).unref?.();
+            return;
+        }
+
         // Suppress errors silently for SoundCloud autoplay tracks (no sound is acceptable)
         const isSoundCloudAutoPlay = String(track?.info?.sourceName || '').toLowerCase().includes('soundcloud')
             && track?.info?.autoPlay === true;
@@ -4082,7 +4206,7 @@ module.exports = {
         }
         await finalizePlayerUi(player);
         await bumpQueueVersion(player, 'track_error');
-        setTimeout(() => recoverPlayerPlayback(player, 'track_error').catch(() => {}), 2500);
+        setTimeout(() => recoverPlayerPlayback(player, 'track_error').catch(() => {}), 2500).unref?.();
     });
 
     TrueMusic.poru.on('trackEnd', async (player, track, data) => {
@@ -4367,25 +4491,19 @@ module.exports = {
         }
         // ─────────────────────────────────────────────────────────────────────────
 
-                const requester = track.info?.requester;
                 const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
+                const requester = ensureTrackRequester(track, player, TrueMusic.user);
                 await updatePlaybackVoiceStatus(TrueMusic, tokenObj2, player, track);
                         if (!requester) {
                             player.data.nowPlayingSendLock = null;
-                            console.warn(`[NowPlaying] skipped panel without requester for ${identity || 'unknown'}`);
+                            warnPlayerOnce(player, `np-no-requester:${identity || 'unknown'}`, `[NowPlaying] missing requester for ${identity || 'unknown'}`);
                             return;
                         }
 
-                const tc = player.data.lastTextChannel || player.textChannel;
-                let channel;
-                if (typeof tc === 'string') {
-                    channel = TrueMusic.channels.cache.get(tc);
-                } else if (tc && typeof tc === 'object') {
-                    channel = TrueMusic.channels.cache.get(tc.id) || tc;
-                }
+                const channel = await resolveNowPlayingTextChannel(TrueMusic, player, tokenObj2);
                         if (!channel) {
                             player.data.nowPlayingSendLock = null;
-                            console.warn(`[NowPlaying] skipped panel without text channel for ${identity || 'unknown'}`);
+                            warnPlayerOnce(player, `np-no-text:${identity || 'unknown'}`, `[NowPlaying] no usable text channel for ${identity || 'unknown'}`);
                             return;
                         }
 
