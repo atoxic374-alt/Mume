@@ -243,16 +243,14 @@ function startWsPing(node) {
                 event: 'ws_pong_timeout',
                 note: `No Lavalink pong for ${Math.floor((Date.now() - lastPongAt) / 1000)}s`,
             });
-            try { ws.terminate?.(); } catch {}
-            try { ws.close?.(); } catch {}
             try {
                 node.isConnected = false;
-                node.attempt = 0;
-                clearTimeout(node.reconnectAttempt);
-                node.reconnectAttempt = null;
-                node.connect?.().catch(() => {});
+                node._llLastPongAt = Date.now();
             } catch {}
-            node._llLastPongAt = Date.now();
+            try { ws.terminate?.(); } catch {}
+            try { ws.close?.(); } catch {}
+            // Do not call node.connect() here. Poru's close handler owns the
+            // reconnect schedule; racing it can create duplicate Lavalink sockets.
             return;
         }
 
