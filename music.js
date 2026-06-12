@@ -1095,20 +1095,10 @@ async function resolveNowPlayingTextChannel(client, player, tokenObj = null) {
         }
     }
 
-    const guild = client.guilds.cache.get(player?.guildId)
-        || await client.guilds.fetch(player?.guildId).catch(() => null);
-    if (!guild) return null;
-
-    const cached = guild.channels.cache.find(canSendMusicPanel);
-    if (cached) {
-        rememberTextChannel(player, cached.id);
-        return cached;
-    }
-
-    const fetched = await guild.channels.fetch().catch(() => null);
-    const fallback = fetched?.find?.(canSendMusicPanel);
-    if (fallback) rememberTextChannel(player, fallback.id);
-    return fallback || null;
+    // Do not fall back to an arbitrary guild text channel. If the configured
+    // channel candidates are missing/stale, skipping the panel is safer than
+    // posting controls into staff/log/unrelated channels based on cache order.
+    return null;
 }
 
 function ensureTrackRequester(track, player, fallbackUser) {
