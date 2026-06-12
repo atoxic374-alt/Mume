@@ -5,6 +5,7 @@ const lavalinkConsole = require('./lavalinkConsole');
 
 const RESUME_TIMEOUT_SEC = Math.max(30, Number(process.env.LAVALINK_RESUME_TIMEOUT_SEC || 600));
 const WS_PING_MS = Math.max(15_000, Number(process.env.LAVALINK_WS_PING_MS || 25_000));
+const WS_PONG_TIMEOUT_MS = Math.max(45_000, Number(process.env.LAVALINK_WS_PONG_TIMEOUT_MS || 90_000));
 
 function nodeKey(node) {
     return `${node?.options?.host || 'unknown'}:${node?.options?.port || 'unknown'}`;
@@ -219,10 +220,40 @@ function patchNodeMessageHandler(node) {
 
 function startWsPing(node) {
     stopWsPing(node);
+    node._llLastPongAt = Date.now();
+
+    const attachPongHandler = () => {
+        const ws = node?.ws;
+        if (!ws || ws._llPongHandlerAttached) return;
+        ws._llPongHandlerAttached = true;
+        ws.on?.('pong', () => {
+            node._llLastPongAt = Date.now();
+        });
+    };
+
+    attachPongHandler();
     const interval = setInterval(() => {
-        if (!node?.isConnected) return;
-        const ws = node.ws;
+        const ws = node?.ws;
         if (!ws || ws.readyState !== 1) return;
+        attachPongHandler();
+
+        const lastPongAt = Number(node._llLastPongAt || 0);
+        if (lastPongAt && Date.now() - lastPongAt > WS_PONG_TIMEOUT_MS) {
+            lavalinkConsole.updateNode(node, 'reconnecting', {
+                event: 'ws_pong_timeout',
+                note: `No Lavalink pong for ${Math.floor((Date.now() - lastPongAt) / 1000)}s`,
+            });
+            try {
+                node.isConnected = false;
+                node._llLastPongAt = Date.now();
+            } catch {}
+            try { ws.terminate?.(); } catch {}
+            try { ws.close?.(); } catch {}
+            // Do not call node.connect() here. Poru's close handler owns the
+            // reconnect schedule; racing it can create duplicate Lavalink sockets.
+            return;
+        }
+
         try {
             if (typeof ws.ping === 'function') ws.ping(Buffer.alloc(0));
         } catch {}
@@ -235,6 +266,7 @@ function stopWsPing(node) {
     if (!node?._llPingInterval) return;
     clearInterval(node._llPingInterval);
     node._llPingInterval = null;
+    node._llLastPongAt = null;
 }
 
 function getBestNode(poru) {

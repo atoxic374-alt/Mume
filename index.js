@@ -16,7 +16,8 @@ const {
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
-    Options
+    Options,
+    WebSocketShardStatus
 } = require('discord.js');
 
 const fs = require('fs');
@@ -134,7 +135,7 @@ process.on('SIGTERM', async () => {
 // If no event arrives for ZOMBIE_THRESHOLD_MS, the WebSocket is considered
 // dead and a forced reconnect is triggered.
 let lastGatewayEventAt = Date.now();
-const ZOMBIE_THRESHOLD_MS = 4 * 60 * 1000; // 4 minutes without any event = zombie
+const ZOMBIE_THRESHOLD_MS = Math.max(15 * 60 * 1000, Number(process.env.DISCORD_ZOMBIE_THRESHOLD_MS || 15 * 60 * 1000)); // quiet servers can have no dispatches for minutes
 
 // Update the timestamp on ANY raw packet received from the gateway
 client.on('raw', () => {
@@ -155,8 +156,18 @@ async function zombieCheck() {
     const elapsed = Date.now() - lastGatewayEventAt;
     if (elapsed < ZOMBIE_THRESHOLD_MS) return;
 
+    const wsPing = client.ws?.ping ?? -1;
+    const hasDeadShard = [...(client.ws?.shards?.values?.() || [])].some(shard => {
+        if (!shard) return false;
+        // discord.js v14: Ready = 3, Idle = 0. Treat only Ready as healthy;
+        // an Idle/Connecting/Resuming shard with ping -1 is a dead shard even
+        // when other shards keep the aggregate client.ws.ping healthy.
+        return shard.status !== WebSocketShardStatus.Ready && shard.ping === -1;
+    });
+    if (wsPing !== -1 && !hasDeadShard) return;
+
     isReconnecting = true;
-    console.log(`[KeepAlive] No gateway events for ${Math.floor(elapsed / 1000)}s — forcing reconnect`);
+    console.log(`[KeepAlive] Discord gateway appears dead for ${Math.floor(elapsed / 1000)}s (ping=${wsPing}) — forcing reconnect`);
 
     try {
         // Try soft WS reconnect first (all shards)
