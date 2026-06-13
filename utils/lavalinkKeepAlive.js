@@ -98,14 +98,14 @@ function scheduleResumeEnable(node) {
 }
 
 function patchNodeConnectV4(node) {
-    if (!node || node._llV4ConnectPatched) return;
+    if (!node || node._nodeLinkCompat || node._llV4ConnectPatched) return;
     node._llV4ConnectPatched = true;
 
     const originalConnect = node.connect.bind(node);
 
     node.connect = function() {
         const sessionId = node._llResumeSessionId || node.sessionId || node.rest?.sessionId;
-        if (!sessionId || !node.poru?.userId) {
+        if (!sessionId || !node.audioManager?.userId) {
             return originalConnect();
         }
 
@@ -119,13 +119,13 @@ function patchNodeConnectV4(node) {
                     } catch {}
                 }
 
-                if (!node.poru.nodes.get(node.options.name)) {
-                    node.poru.nodes.set(node.options.name, node);
+                if (!node.audioManager.nodes.get(node.options.name)) {
+                    node.audioManager.nodes.set(node.options.name, node);
                 }
 
                 const headers = {
                     Authorization: node.password,
-                    'User-Id': node.poru.userId,
+                    'User-Id': node.audioManager.userId,
                     'Client-Name': node.clientName,
                     'Session-Id': sessionId,
                 };
@@ -241,7 +241,7 @@ function startWsPing(node) {
         if (lastPongAt && Date.now() - lastPongAt > WS_PONG_TIMEOUT_MS) {
             lavalinkConsole.updateNode(node, 'reconnecting', {
                 event: 'ws_pong_timeout',
-                note: `No Lavalink pong for ${Math.floor((Date.now() - lastPongAt) / 1000)}s`,
+                note: `No NodeLink pong for ${Math.floor((Date.now() - lastPongAt) / 1000)}s`,
             });
             try {
                 node.isConnected = false;
@@ -249,8 +249,8 @@ function startWsPing(node) {
             } catch {}
             try { ws.terminate?.(); } catch {}
             try { ws.close?.(); } catch {}
-            // Do not call node.connect() here. Poru's close handler owns the
-            // reconnect schedule; racing it can create duplicate Lavalink sockets.
+            // Do not call node.connect() here. the audio manager's close handler owns the
+            // reconnect schedule; racing it can create duplicate NodeLink sockets.
             return;
         }
 
@@ -269,13 +269,13 @@ function stopWsPing(node) {
     node._llLastPongAt = null;
 }
 
-function getBestNode(poru) {
-    if (!poru?.nodes?.size) return null;
+function getBestNode(audio) {
+    if (!audio?.nodes?.size) return null;
 
     let best = null;
     let bestScore = Infinity;
 
-    poru.nodes.forEach(node => {
+    audio.nodes.forEach(node => {
         if (!node?.isConnected) return;
         const cpu = Number(node.stats?.cpu?.systemLoad || 0);
         const lavalink = Number(node.stats?.cpu?.lavalinkLoad || 0);
@@ -332,14 +332,14 @@ function onNodeDisconnect(node) {
     stopWsPing(node);
 }
 
-function onShardReconnect(client, poru, delayMs = 5000) {
-    if (!poru?.players?.size) return;
+function onShardReconnect(client, audio, delayMs = 5000) {
+    if (!audio?.players?.size) return;
 
     setTimeout(() => {
-        if (!poru.players?.size) return;
+        if (!audio.players?.size) return;
 
         let refreshed = 0;
-        poru.players.forEach(player => {
+        audio.players.forEach(player => {
             if (!player?.voiceChannel) return;
             try {
                 if (typeof player.connect === 'function') {
@@ -360,15 +360,15 @@ function onShardReconnect(client, poru, delayMs = 5000) {
                 state: 'voice_refresh',
                 event: 'shard_reconnect_refresh',
                 note: `Refreshed voice state for ${refreshed} player(s)`,
-                players: poru.players?.size || 0,
+                players: audio.players?.size || 0,
             });
         }
     }, delayMs).unref?.();
 }
 
-function prepareNodes(poru) {
-    if (!poru?.nodes) return;
-    poru.nodes.forEach(node => {
+function prepareNodes(audio) {
+    if (!audio?.nodes) return;
+    audio.nodes.forEach(node => {
         patchSessionPayload(node);
         patchNodeConnectV4(node);
         patchNodeCloseHandler(node);
@@ -376,9 +376,9 @@ function prepareNodes(poru) {
     });
 }
 
-function destroyKeepAlive(poru) {
-    if (!poru?.nodes) return;
-    poru.nodes.forEach(node => stopWsPing(node));
+function destroyKeepAlive(audio) {
+    if (!audio?.nodes) return;
+    audio.nodes.forEach(node => stopWsPing(node));
 }
 
 module.exports = {

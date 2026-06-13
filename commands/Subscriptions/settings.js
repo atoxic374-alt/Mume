@@ -15,7 +15,7 @@ const {
     MessageFlags
 } = require('discord.js');
 const { owners, TwitchUrl } = require('../../config');
-const { runningBots, botLastActivity, restorePoruNodes } = require('../../music');
+const { runningBots, botLastActivity, restoreAudioNodes } = require('../../music');
 const { getDisplay, setDisplay } = require('../../utils/display');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
@@ -139,14 +139,14 @@ async function fetchImageDataUri(rawUrl, label = 'Image') {
     return `data:${contentType};base64,${buffer.toString('base64')}`;
 }
 
-// ── Wait for a bot's Poru node to connect (up to timeoutMs) ──────────────────
-// Fixes "No nodes are available" for new bots whose Lavalink connection
+// ── Wait for a bot's NodeLink node to connect (up to timeoutMs) ──────────────────
+// Fixes "No nodes are available" for new bots whose NodeLink connection
 // hasn't finished establishing yet when distribution/join is triggered.
-async function waitForBotPoruReady(bot, timeoutMs = 12_000) {
-    if (bot?.poru?.leastUsedNodes?.length) return true;
+async function waitForBotAudioReady(bot, timeoutMs = 12_000) {
+    if (bot?.audio?.leastUsedNodes?.length) return true;
     // Try to nudge any exhausted nodes back to life
     try {
-        bot.poru.nodes?.forEach(node => {
+        bot.audio.nodes?.forEach(node => {
             if (!node.isConnected) {
                 try {
                     node.attempt = 0;
@@ -156,20 +156,20 @@ async function waitForBotPoruReady(bot, timeoutMs = 12_000) {
                 } catch {}
             }
         });
-        if (!bot.poru.nodes?.size) {
-            if (typeof restorePoruNodes === 'function') {
-                restorePoruNodes(bot.poru, bot, 'settings waitForBotPoruReady');
+        if (!bot.audio.nodes?.size) {
+            if (typeof restoreAudioNodes === 'function') {
+                restoreAudioNodes(bot.audio, bot, 'settings waitForBotAudioReady');
             } else {
-                bot.poru.init(bot).catch?.(() => {});
+                bot.audio.init(bot).catch?.(() => {});
             }
         }
     } catch {}
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-        if (bot?.poru?.leastUsedNodes?.length) return true;
+        if (bot?.audio?.leastUsedNodes?.length) return true;
         await new Promise(r => setTimeout(r, 500));
     }
-    return !!(bot?.poru?.leastUsedNodes?.length);
+    return !!(bot?.audio?.leastUsedNodes?.length);
 }
 const SETTINGS_PROGRESS_INTERVAL_MS = Math.max(750, Number(process.env.SETTINGS_PROGRESS_INTERVAL_MS || 1500));
 const SETTINGS_MAX_PROGRESS_LINES = Math.max(20, Number(process.env.SETTINGS_MAX_PROGRESS_LINES || 120));
@@ -872,7 +872,7 @@ module.exports = {
 
                         async function moveTokenToVoice(t, targetChannelId) {
                             const bot = runningBots.get(t.token);
-                            if (!bot?.poru) throw new Error('bot offline');
+                            if (!bot?.audio) throw new Error('bot offline');
 
                             const guild = bot.guilds.cache.get(t.Server);
                             if (!guild) throw new Error('bot outside server');
@@ -881,13 +881,13 @@ module.exports = {
                                 || await guild.channels.fetch(targetChannelId).catch(() => null);
                             if (!isVoiceChannel(targetChannel)) throw new Error('invalid voice channel');
 
-                            const poruReady = await waitForBotPoruReady(bot, 12_000);
-                            if (!poruReady) throw new Error('Lavalink not connected yet');
+                            const audioReady = await waitForBotAudioReady(bot, 12_000);
+                            if (!audioReady) throw new Error('NodeLink not connected yet');
 
                             t.channel = targetChannel.id;
                             t.backToVoice = 'on';
 
-                            const existing = bot.poru.players.get(guild.id);
+                            const existing = bot.audio.players.get(guild.id);
                             if (existing) {
                                 existing.textChannel = t.chat || existing.textChannel || targetChannel.id;
                                 existing.data = existing.data || {};
@@ -900,7 +900,7 @@ module.exports = {
                                     if (!(err instanceof ReferenceError)) throw err;
                                 }
                             } else {
-                                await bot.poru.createConnection({
+                                await bot.audio.createConnection({
                                     guildId: guild.id,
                                     voiceChannel: targetChannel.id,
                                     textChannel: t.chat || targetChannel.id,
@@ -1121,7 +1121,7 @@ module.exports = {
                                         const t = assignment.token;
                                         const chan = assignment.channel;
                                         const bot = runningBots.get(t.token);
-                                        if (!bot?.poru) throw new Error('bot offline');
+                                        if (!bot?.audio) throw new Error('bot offline');
 
                                         let targetName = null;
                                         if (state.mode === 'names') {
@@ -2169,7 +2169,7 @@ module.exports = {
                 // Apply live to running bots immediately
                 tokens.filter(t => t.code === selectedCode).forEach(entry => {
                     const bot = runningBots.get(entry.token);
-                    if (bot?.poru) bot.poru.options.defaultPlatform = plat;
+                    if (bot?.audio) bot.audio.options.defaultPlatform = plat;
                 });
 
                 return updatePanel(i);

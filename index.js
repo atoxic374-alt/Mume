@@ -103,8 +103,8 @@ process.on('SIGTERM', async () => {
         for (const [, bot] of subBots) {
             shutdownTasks.push((async () => {
                 try {
-                    if (bot.poru?.players) {
-                        for (const [, player] of bot.poru.players) {
+                    if (bot.audio?.players) {
+                        for (const [, player] of bot.audio.players) {
                             try {
                                 const msg = player.data?.nowPlayingMessage;
                                 if (msg && typeof msg.edit === 'function') {

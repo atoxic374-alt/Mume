@@ -44,10 +44,10 @@ function isMemberDeafened(member) {
 }
 
 async function ensurePlayer(client, message) {
-    if (!client.poru) throw new Error('Music player is not ready.');
+    if (!client.audio) throw new Error('Music player is not ready.');
     if (isMemberDeafened(message.member)) throw new Error('فك الديفن أولاً ثم شغّل الأغاني.');
 
-    let player = client.poru.players.get(message.guild.id);
+    let player = client.audio.players.get(message.guild.id);
     if (player) {
         player.textChannel = message.channel.id;
         player.data = player.data || {};
@@ -61,7 +61,7 @@ async function ensurePlayer(client, message) {
     if (botVoice && botVoice.id !== memberVoice.id) throw new Error('Join the same voice room as the bot.');
 
     const voiceChannel = botVoice || memberVoice;
-    player = await client.poru.createConnection({
+    player = await client.audio.createConnection({
         guildId: message.guild.id,
         voiceChannel: voiceChannel.id,
         textChannel: message.channel.id,
@@ -113,7 +113,7 @@ async function resolveLikedRows(client, rows, requester) {
     for (let b = 0; b < rows.length; b += 5) {
         const batch = rows.slice(b, b + 5);
         const resolved = await Promise.allSettled(batch.map(async row => {
-            const res = await client.poru.resolve({ query: row.uri });
+            const res = await client.audio.resolve({ query: row.uri });
             const track = res?.tracks?.[0];
             return track ? cloneTrackForQueue(track, requester) : null;
         }));
