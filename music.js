@@ -25,7 +25,7 @@ const {
 } = require('discord.js');
 
 const fs = require('fs');
-const { Poru } = require('poru');
+const { NodeLinkCompatManager } = require('./utils/nodelinkCompat');
 const { Agent: UndiciAgent, request: undiciRequest } = require('undici');
 const lavalinkKeepAlive = require('./utils/lavalinkKeepAlive');
 const lavalinkConsole = require('./utils/lavalinkConsole');
@@ -880,7 +880,7 @@ function buildBotInfoEmbed(TrueMusic, tokenObj, guildId) {
     const guild = TrueMusic.guilds.cache.get(guildId);
     const me = guild?.members?.me;
     const voiceChannel = me?.voice?.channel;
-    const player = TrueMusic.poru.players.get(guildId);
+    const player = TrueMusic.audio.players.get(guildId);
     const currentTrack = player?.currentTrack;
     const nodeName = player?.node?.options?.name || player?.node?.options?.host || 'Offline';
     const activeFilter = player?.data?.activeFilter || 'clear';
@@ -1095,20 +1095,10 @@ async function resolveNowPlayingTextChannel(client, player, tokenObj = null) {
         }
     }
 
-    const guild = client.guilds.cache.get(player?.guildId)
-        || await client.guilds.fetch(player?.guildId).catch(() => null);
-    if (!guild) return null;
-
-    const cached = guild.channels.cache.find(canSendMusicPanel);
-    if (cached) {
-        rememberTextChannel(player, cached.id);
-        return cached;
-    }
-
-    const fetched = await guild.channels.fetch().catch(() => null);
-    const fallback = fetched?.find?.(canSendMusicPanel);
-    if (fallback) rememberTextChannel(player, fallback.id);
-    return fallback || null;
+    // Do not fall back to an arbitrary guild text channel. If the configured
+    // channel candidates are missing/stale, skipping the panel is safer than
+    // posting controls into staff/log/unrelated channels based on cache order.
+    return null;
 }
 
 function ensureTrackRequester(track, player, fallbackUser) {
@@ -1370,7 +1360,7 @@ async function refreshPlayerVoiceSession(player, reason = 'play') {
     data.lastVoiceRefreshAt = Date.now();
     data.lastVoiceRefreshReason = reason;
 
-    // Fix #6: أعد إرسال الفلاتر — session جديد = Lavalink ينسى كل شيء
+    // Fix #6: أعد إرسال الفلاتر — session جديد = NodeLink ينسى كل شيء
     lavalinkKeepAlive.reapplyPlayerFilters(player).catch(() => {});
 
     return true;
@@ -1463,7 +1453,7 @@ function clampPlayerVolume(volume) {
     return Math.max(0, Math.min(1000, Math.round(value)));
 }
 
-function assertLavalinkRestOk(response, label = 'Lavalink request') {
+function assertLavalinkRestOk(response, label = 'NodeLink request') {
     if (!response) throw new Error(`${label} did not return a response`);
     if (response.error || Number(response.status) >= 400) {
         throw new Error(response.message || response.error || `${label} failed`);
@@ -1524,7 +1514,7 @@ function parseRestErrorText(text) {
     }
 }
 
-async function fastUpdateLavalinkPlayer(player, data, label = 'Lavalink update') {
+async function fastUpdateLavalinkPlayer(player, data, label = 'NodeLink update') {
     if (!LAVALINK_FAST_REST_ENABLED) throw new Error('fast rest disabled');
     const node = player?.node;
     const sessionId = node?.sessionId || node?.rest?.sessionId;
@@ -1556,7 +1546,7 @@ async function fastUpdateLavalinkPlayer(player, data, label = 'Lavalink update')
     return { status: response.statusCode, ok: true };
 }
 
-async function updateLavalinkPlayer(player, data, label = 'Lavalink update') {
+async function updateLavalinkPlayer(player, data, label = 'NodeLink update') {
     if (!player?.node?.rest) throw new Error('player is not connected');
     try {
         return await fastUpdateLavalinkPlayer(player, data, label);
@@ -1593,8 +1583,8 @@ async function setPlayerVolumeSynced(player, volume) {
     return nextVolume;
 }
 
-function waitForPlaybackTransition(poru, player, previousTrack, timeoutMs = MUSIC_CONTROL_SYNC_TIMEOUT_MS) {
-    if (!poru || !player) return Promise.resolve(false);
+function waitForPlaybackTransition(audio, player, previousTrack, timeoutMs = MUSIC_CONTROL_SYNC_TIMEOUT_MS) {
+    if (!audio || !player) return Promise.resolve(false);
     const previousId = trackIdentity(previousTrack || player.currentTrack);
 
     return new Promise(resolve => {
@@ -1605,8 +1595,8 @@ function waitForPlaybackTransition(poru, player, previousTrack, timeoutMs = MUSI
             if (settled) return;
             settled = true;
             if (timer) clearTimeout(timer);
-            poru.off?.('trackStart', onTrackStart);
-            poru.off?.('queueEnd', onQueueEnd);
+            audio.off?.('trackStart', onTrackStart);
+            audio.off?.('queueEnd', onQueueEnd);
             resolve(result);
         };
         const onTrackStart = (target, track) => {
@@ -1618,8 +1608,8 @@ function waitForPlaybackTransition(poru, player, previousTrack, timeoutMs = MUSI
             if (samePlayer(target)) cleanup(true);
         };
 
-        poru.on('trackStart', onTrackStart);
-        poru.on('queueEnd', onQueueEnd);
+        audio.on('trackStart', onTrackStart);
+        audio.on('queueEnd', onQueueEnd);
         timer = setTimeout(() => cleanup(false), timeoutMs);
 
         const currentId = trackIdentity(player.currentTrack);
@@ -1627,7 +1617,7 @@ function waitForPlaybackTransition(poru, player, previousTrack, timeoutMs = MUSI
     });
 }
 
-async function skipPlayerSynced(poru, player, currentTrack) {
+async function skipPlayerSynced(audio, player, currentTrack) {
     // Reset pause state before skipping so the next queued track starts playing
     player.isPaused = false;
     await updateLavalinkPlayer(player, { track: { encoded: null } }, 'skip update');
@@ -1666,12 +1656,12 @@ async function stopPlayerAudio(player, options = {}) {
     if (!player) return false;
     const hadTrack = !!player.currentTrack;
     // Set local state immediately before the REST call so the bot
-    // reflects stopped state even before Lavalink confirms
+    // reflects stopped state even before NodeLink confirms
     player.isPaused = false;
     player.isPlaying = false;
     let stopRequest = Promise.resolve();
     if (player.node?.rest) {
-        // Send paused:true + track:null together in one PATCH — Lavalink
+        // Send paused:true + track:null together in one PATCH — NodeLink
         // silences the audio buffer immediately instead of draining it first
         stopRequest = updateLavalinkPlayer(
             player,
@@ -1697,17 +1687,17 @@ function isProbablyUrl(value) {
     }
 }
 
-function hasConnectedPoruNode(poru) {
-    return [...(poru?.nodes?.values?.() || [])].some(node => node?.isConnected);
+function hasConnectedAudioNode(audio) {
+    return [...(audio?.nodes?.values?.() || [])].some(node => node?.isConnected);
 }
 
-function restorePoruNodes(poru, client, reason = 'restore') {
-    if (!poru) return false;
-    if (!poru.userId && client?.user?.id) poru.userId = client.user.id;
+function restoreAudioNodes(audio, client, reason = 'restore') {
+    if (!audio) return false;
+    if (!audio.userId && client?.user?.id) audio.userId = client.user.id;
 
-    lavalinkKeepAlive.prepareNodes(poru);
+    lavalinkKeepAlive.prepareNodes(audio);
 
-    const nodes = [...(poru.nodes?.values?.() || [])];
+    const nodes = [...(audio.nodes?.values?.() || [])];
     if (nodes.length > 0) {
         nodes.forEach(node => {
             try {
@@ -1723,16 +1713,16 @@ function restorePoruNodes(poru, client, reason = 'restore') {
         return true;
     }
 
-    if (!Array.isArray(poru._nodes) || poru._nodes.length === 0) return false;
+    if (!Array.isArray(audio._nodes) || audio._nodes.length === 0) return false;
 
-    if (!poru.isActivated) {
-        poru.init().catch?.(() => {});
+    if (!audio.isActivated) {
+        audio.init().catch?.(() => {});
         return true;
     }
 
-    poru._nodes.forEach(nodeOptions => {
-        if (!nodeOptions?.name || poru.nodes?.has?.(nodeOptions.name)) return;
-        Promise.resolve(poru.addNode(nodeOptions)).catch(err => {
+    audio._nodes.forEach(nodeOptions => {
+        if (!nodeOptions?.name || audio.nodes?.has?.(nodeOptions.name)) return;
+        Promise.resolve(audio.addNode(nodeOptions)).catch(err => {
             lavalinkConsole.updateBot(client, {
                 state: 'restore_failed',
                 event: 'restore_node_failed',
@@ -1764,36 +1754,36 @@ async function promiseWithTimeout(promise, ms, label = 'operation timed out') {
 }
 
 async function resolveWithNodeRetry(client, options, retries = 1) {
-    const poru = client?.poru;
-    if (!poru) throw new Error('Poru is not initialized.');
+    const audio = client?.audio;
+    if (!audio) throw new Error('NodeLink audio manager is not initialized.');
     const timeoutMs = Math.max(5000, Number(process.env.MUSIC_RESOLVE_TIMEOUT_MS || 9000));
 
     for (let attempt = 0; attempt <= retries; attempt++) {
-        if (!hasConnectedPoruNode(poru)) {
-            restorePoruNodes(poru, client, 'resolve retry');
+        if (!hasConnectedAudioNode(audio)) {
+            restoreAudioNodes(audio, client, 'resolve retry');
             if (attempt < retries) await wait(1200);
         }
 
         try {
             return await promiseWithTimeout(
-                poru.resolve(options),
+                audio.resolve(options),
                 timeoutMs,
-                `Lavalink resolve timed out after ${timeoutMs}ms`,
+                `NodeLink resolve timed out after ${timeoutMs}ms`,
             );
         } catch (err) {
             const message = err?.message || String(err || '');
             const noNodes = /no nodes are available/i.test(message);
             const retryable = noNodes || /timed out|timeout|econnreset|etimedout/i.test(message);
             if (!retryable || attempt >= retries) throw err;
-            restorePoruNodes(poru, client, 'resolve failure');
+            restoreAudioNodes(audio, client, 'resolve failure');
             await wait(1200);
         }
     }
 
     return promiseWithTimeout(
-        poru.resolve(options),
+        audio.resolve(options),
         timeoutMs,
-        `Lavalink resolve timed out after ${timeoutMs}ms`,
+        `NodeLink resolve timed out after ${timeoutMs}ms`,
     );
 }
 
@@ -1950,10 +1940,10 @@ function rankTracksForQuery(tracks, query, { strict = false } = {}) {
     return ranked.length ? ranked : unique;
 }
 
-async function resolveSmartTracks(poru, query, source, limit = 20, options = {}) {
+async function resolveSmartTracks(audio, query, source, limit = 20, options = {}) {
     const timeoutMs = Math.max(4000, Number(process.env.MUSIC_SMART_RESOLVE_TIMEOUT_MS || 8000));
     if (isProbablyUrl(query)) {
-        const result = await withTimeout(poru.resolve({ query }), timeoutMs, null);
+        const result = await withTimeout(audio.resolve({ query }), timeoutMs, null);
         return dedupeTracks(result?.tracks || []).slice(0, limit);
     }
 
@@ -1971,7 +1961,7 @@ async function resolveSmartTracks(poru, query, source, limit = 20, options = {})
         for (const variant of variants) {
             if (tracks.length >= prefetchLimit) break;
             const result = await withTimeout(
-                poru.resolve({ query: variant, source: searchSource }).catch(() => null),
+                audio.resolve({ query: variant, source: searchSource }).catch(() => null),
                 timeoutMs,
                 null,
             );
@@ -2495,7 +2485,7 @@ function shuffleTracks(tracks = []) {
     return copy;
 }
 
-async function resolveQuickAutoPlayTrack(poru, artistQuery, source, currentTrack, player) {
+async function resolveQuickAutoPlayTrack(audio, artistQuery, source, currentTrack, player) {
     const artistName = typeof artistQuery === 'string' ? artistQuery : artistQuery?.primary;
     const fallbackName = typeof artistQuery === 'object' ? artistQuery.fallback : '';
     if (!artistName) return null;
@@ -2513,7 +2503,7 @@ async function resolveQuickAutoPlayTrack(poru, artistQuery, source, currentTrack
         const query = `${artist} songs`;
         const variants = shuffleTracks([query, artist]).filter(Boolean);
         const results = await Promise.allSettled(sourceOrder.map(searchSource => withTimeout(
-            resolveSmartTracks(poru, query, searchSource, 5, {
+            resolveSmartTracks(audio, query, searchSource, 5, {
                 variants,
                 prefetchMultiplier: 1,
                 perResolveLimit: 5,
@@ -2530,7 +2520,7 @@ async function resolveQuickAutoPlayTrack(poru, artistQuery, source, currentTrack
     return null;
 }
 
-async function resolveCachedArtistQuery(poru, query, source, limit) {
+async function resolveCachedArtistQuery(audio, query, source, limit) {
     const key = artistCacheKey(source, query);
     let tracks = getCachedArtistTracks(key);
 
@@ -2538,7 +2528,7 @@ async function resolveCachedArtistQuery(poru, query, source, limit) {
         const sources = artistSearchSources(source);
         const perSourceLimit = Math.max(4, Math.min(8, limit));
         const results = await Promise.allSettled(sources.map(artistSource => withTimeout(
-            resolveSmartTracks(poru, query, artistSource, perSourceLimit, {
+            resolveSmartTracks(audio, query, artistSource, perSourceLimit, {
                 variants: [query],
                 prefetchMultiplier: 1,
                 perResolveLimit: perSourceLimit,
@@ -2553,18 +2543,18 @@ async function resolveCachedArtistQuery(poru, query, source, limit) {
     return shuffleTracks(tracks);
 }
 
-async function resolveArtistCatalogTracks(poru, artistName, source, limit) {
+async function resolveArtistCatalogTracks(audio, artistName, source, limit) {
     const queries = shuffleTracks(buildArtistCatalogQueries(artistName));
     const perQueryLimit = Math.max(4, Math.min(8, limit));
     const results = await Promise.allSettled(queries.map(query => (
-        resolveCachedArtistQuery(poru, query, source, perQueryLimit).catch(() => [])
+        resolveCachedArtistQuery(audio, query, source, perQueryLimit).catch(() => [])
     )));
     const tracks = results.flatMap(item => item.status === 'fulfilled' ? item.value || [] : []);
 
     return shuffleTracks(dedupeTracks(tracks));
 }
 
-async function resolveFreshArtistCatalogTracks(poru, artistName, source, limit) {
+async function resolveFreshArtistCatalogTracks(audio, artistName, source, limit) {
     const artist = trimArtistCandidate(artistName);
     const sources = artistSearchSources(source);
     const perSourceLimit = Math.max(4, Math.min(8, limit));
@@ -2572,7 +2562,7 @@ async function resolveFreshArtistCatalogTracks(poru, artistName, source, limit) 
     const variants = shuffleTracks([query, artist]).filter(Boolean);
 
     const tasks = sources.map(artistSource => withTimeout(
-        resolveSmartTracks(poru, query, artistSource, perSourceLimit, {
+        resolveSmartTracks(audio, query, artistSource, perSourceLimit, {
             variants,
             prefetchMultiplier: 1,
             perResolveLimit: perSourceLimit,
@@ -2585,7 +2575,7 @@ async function resolveFreshArtistCatalogTracks(poru, artistName, source, limit) 
     return shuffleTracks(dedupeTracks(results.flatMap(item => item.status === 'fulfilled' ? item.value || [] : [])));
 }
 
-async function resolveArtistTracks(poru, artistQuery, source, currentTrack, limit = 5, options = {}) {
+async function resolveArtistTracks(audio, artistQuery, source, currentTrack, limit = 5, options = {}) {
     const artistName = typeof artistQuery === 'string' ? artistQuery : artistQuery?.primary;
     const fallbackName = typeof artistQuery === 'object' ? artistQuery.fallback : '';
     if (!artistName) return [];
@@ -2593,7 +2583,7 @@ async function resolveArtistTracks(poru, artistQuery, source, currentTrack, limi
         historySet: options.historySet instanceof Set ? options.historySet : null,
     };
 
-    const tracks = await resolveFreshArtistCatalogTracks(poru, artistName, source || 'auto', Math.max(18, limit * 4));
+    const tracks = await resolveFreshArtistCatalogTracks(audio, artistName, source || 'auto', Math.max(18, limit * 4));
     const primaryTracks = filterArtistTracks(tracks, currentTrack, limit, artistName, filterOptions);
     const needsFallback = fallbackName
         && normalizeSearchText(fallbackName) !== normalizeSearchText(artistName)
@@ -2602,7 +2592,7 @@ async function resolveArtistTracks(poru, artistQuery, source, currentTrack, limi
     if (!needsFallback) return primaryTracks;
 
     const fallbackTracks = filterArtistTracks(
-        await resolveFreshArtistCatalogTracks(poru, fallbackName, source || 'auto', Math.max(18, limit * 4)),
+        await resolveFreshArtistCatalogTracks(audio, fallbackName, source || 'auto', Math.max(18, limit * 4)),
         currentTrack,
         limit,
         fallbackName,
@@ -2719,7 +2709,7 @@ module.exports = {
         }
         let hostConfig = store.get('host');
         if (process.env.LAVALINK_HOST) {
-            // ── #9: Warn if default Lavalink password is used ────────────────
+            // ── #9: Warn if default NodeLink password is used ────────────────
             if (!process.env.LAVALINK_PASS) {
                 console.warn('[Security] LAVALINK_PASS env var is not set — using default password. Set it in your environment secrets.');
             }
@@ -2733,7 +2723,7 @@ module.exports = {
         }
         hostConfig = selectLavalinkHostsForBot(hostConfig, token, idbot);
         if (hostConfig.length === 0) {
-            console.warn(`[Lavalink] no valid nodes configured for bot …${String(token).slice(-6)}`);
+            console.warn(`[NodeLink] no valid nodes configured for bot …${String(token).slice(-6)}`);
         }
 
         const TrueMusic = new Client({
@@ -2792,7 +2782,7 @@ module.exports = {
         });
         // ─────────────────────────────────────────────────────────────────────────────
 
-        TrueMusic.poru = new Poru(TrueMusic, hostConfig, {
+        TrueMusic.audio = new NodeLinkCompatManager(TrueMusic, hostConfig, {
             defaultPlatform: 'ytsearch',
             reconnectTries: 80,
             reconnectTimeout: 5000,
@@ -2801,7 +2791,7 @@ module.exports = {
             bypassChecks: false,
         });
 
-        // Poru registers its own raw listener during init(). Keep this listener
+        // Moonlink handles raw voice packets through the NodeLink adapter. Keep this listener
         // activity-only so voice packets are not processed twice.
         let lastMusicEventAt = Date.now();
         TrueMusic.on('raw', () => {
@@ -2822,7 +2812,7 @@ module.exports = {
 
         async function ensureConfiguredVoice(guild, tokenObj, reason = 'guard') {
             if (!guild || !tokenObj?.channel || tokenObj.awaitingReplacement) return null;
-            if (!TrueMusic.poru?.leastUsedNodes?.length) return null;
+            if (!TrueMusic.audio?.leastUsedNodes?.length) return null;
 
             const lockKey = `${guild.id}:${tokenObj.channel}`;
             if (voiceEnsureLocks.has(lockKey)) return voiceEnsureLocks.get(lockKey);
@@ -2832,7 +2822,7 @@ module.exports = {
                     || await guild.channels.fetch(tokenObj.channel).catch(() => null);
                 if (!targetChannel) return null;
 
-                const player = TrueMusic.poru.players.get(guild.id);
+                const player = TrueMusic.audio.players.get(guild.id);
                 const currentVoiceId = guild.members.me?.voice?.channelId;
                 const backToVoice = tokenObj.backToVoice !== 'off';
 
@@ -2853,7 +2843,7 @@ module.exports = {
                     return player;
                 }
 
-                const created = await TrueMusic.poru.createConnection({
+                const created = await TrueMusic.audio.createConnection({
                     guildId: guild.id,
                     voiceChannel: targetChannel.id,
                     textChannel: tokenObj.chat || targetChannel.id,
@@ -2877,8 +2867,8 @@ module.exports = {
 
         async function getPlayablePlayer(guild, voiceChannelId, textChannelId, tokenObj, reason = 'play') {
             if (!guild || !voiceChannelId) return null;
-            if (!TrueMusic.poru?.leastUsedNodes?.length) {
-                requestPoruInit(`${reason}: no connected Lavalink nodes`, 15_000);
+            if (!TrueMusic.audio?.leastUsedNodes?.length) {
+                requestAudioInit(`${reason}: no connected NodeLink nodes`, 15_000);
                 return null;
             }
 
@@ -2886,15 +2876,15 @@ module.exports = {
             if (playConnectionLocks.has(lockKey)) return playConnectionLocks.get(lockKey);
 
             const task = (async () => {
-                let player = TrueMusic.poru.players.get(guild.id);
+                let player = TrueMusic.audio.players.get(guild.id);
                 if (player) {
                     ensurePlayerData(player);
                     rememberTextChannel(player, textChannelId);
 
                     if (!player.node?.isConnected && !player.currentTrack && !player.isPlaying) {
                         // Fix #7: اختر الـ node الأخف تحميلاً بدل أول node في القائمة
-                        const freshNode = lavalinkKeepAlive.getBestNode(TrueMusic.poru)
-                            || TrueMusic.poru.leastUsedNodes?.[0];
+                        const freshNode = lavalinkKeepAlive.getBestNode(TrueMusic.audio)
+                            || TrueMusic.audio.leastUsedNodes?.[0];
                         if (freshNode) {
                             player.node = freshNode;
                             markPlayerNeedsVoiceRefresh(player, `${reason}:node_reassigned`);
@@ -2915,7 +2905,7 @@ module.exports = {
                     return player;
                 }
 
-                const created = await TrueMusic.poru.createConnection({
+                const created = await TrueMusic.audio.createConnection({
                     guildId: guild.id,
                     voiceChannel: voiceChannelId,
                     textChannel: textChannelId,
@@ -3001,14 +2991,14 @@ module.exports = {
             // attempting to restart player tracks.
             setTimeout(() => {
                 if (!node.isConnected) return; // node went offline again — skip
-                TrueMusic.poru.players.forEach(player => {
+                TrueMusic.audio.players.forEach(player => {
                     if (player.node !== node) return;
                     if (player.isPaused) return;
 
                     if (!player.currentTrack) {
-                        // Idle player: its Lavalink session no longer exists after
+                        // Idle player: its NodeLink session no longer exists after
                         // a reconnect. Keep the Discord voice state in place and
-                        // refresh Lavalink voice data on the next play command.
+                        // refresh NodeLink voice data on the next play command.
                         if (process.env.DEBUG_RECOVERY)
                             console.log(`[IdleCleanup] marking stale idle player after ${reason} for guild ${player.guildId}`);
                         markPlayerNeedsVoiceRefresh(player, `node_recovery:${reason}`);
@@ -3024,26 +3014,26 @@ module.exports = {
         // Was a separate 20s timer per bot — now runs inside the 15s guard loop,
         // saving one timer object per bot (100 bots = 100 fewer timers).
         const playbackWatchdog = { clear: () => {} }; // stub so clearInterval(playbackWatchdog) stays safe
-        let lastPoruInitAt = 0;
-        function requestPoruInit(reason, cooldownMs = 30_000) {
+        let lastAudioInitAt = 0;
+        function requestAudioInit(reason, cooldownMs = 30_000) {
             const now = Date.now();
-            if (now - lastPoruInitAt < cooldownMs) return false;
-            lastPoruInitAt = now;
+            if (now - lastAudioInitAt < cooldownMs) return false;
+            lastAudioInitAt = now;
             lavalinkConsole.updateBot(TrueMusic, {
                 token,
                 state: 'reinit',
-                event: 'poru_reinit',
+                event: 'audio_reinit',
                 note: reason,
             });
             try {
-                const poru = TrueMusic.poru;
-                if (!poru) return false;
+                const audio = TrueMusic.audio;
+                if (!audio) return false;
 
-                if (!poru.userId && TrueMusic.user?.id) poru.userId = TrueMusic.user.id;
+                if (!audio.userId && TrueMusic.user?.id) audio.userId = TrueMusic.user.id;
 
-                const nodes = [...(poru.nodes?.values?.() || [])];
-                if (nodes.length === 0 && Array.isArray(poru._nodes) && poru._nodes.length > 0) {
-                    restorePoruNodes(poru, TrueMusic, reason);
+                const nodes = [...(audio.nodes?.values?.() || [])];
+                if (nodes.length === 0 && Array.isArray(audio._nodes) && audio._nodes.length > 0) {
+                    restoreAudioNodes(audio, TrueMusic, reason);
                     return true;
                 }
 
@@ -3062,22 +3052,22 @@ module.exports = {
             return true;
         }
 
-        // ── Helper: wait up to timeoutMs for at least one Poru node to be ready ──
-        async function waitForPoruReady(timeoutMs = 12_000) {
-            if (TrueMusic.poru?.leastUsedNodes?.length) return true;
+        // ── Helper: wait up to timeoutMs for at least one NodeLink node to be ready ──
+        async function waitForAudioReady(timeoutMs = 12_000) {
+            if (TrueMusic.audio?.leastUsedNodes?.length) return true;
             // Trigger re-init immediately (bypass cooldown)
-            lastPoruInitAt = 0;
-            requestPoruInit('waitForPoruReady: no nodes yet', 0);
+            lastAudioInitAt = 0;
+            requestAudioInit('waitForAudioReady: no nodes yet', 0);
             const deadline = Date.now() + timeoutMs;
             while (Date.now() < deadline) {
-                if (TrueMusic.poru?.leastUsedNodes?.length) return true;
+                if (TrueMusic.audio?.leastUsedNodes?.length) return true;
                 await new Promise(r => setTimeout(r, 500));
             }
-            return !!(TrueMusic.poru?.leastUsedNodes?.length);
+            return !!(TrueMusic.audio?.leastUsedNodes?.length);
         }
 
-        TrueMusic.poru.on('nodeConnect', (node) => {
-            // Configure Lavalink v4 resume and WS keep-alive without reusing stale sessions.
+        TrueMusic.audio.on('nodeConnect', (node) => {
+            // Configure NodeLink v4-compatible resume and WS keep-alive without reusing stale sessions.
             lavalinkKeepAlive.onNodeConnect(node, TrueMusic).catch(() => {});
 
             const name = node.options.name || node.options.host;
@@ -3091,7 +3081,7 @@ module.exports = {
             lavalinkConsole.updateNode(node, 'online', {
                 event: 'node_connect',
                 reconnects: data.reconnects,
-                note: 'Connected to Lavalink',
+                note: 'Connected to NodeLink',
             });
 
             let newData = tempData.get("bots");
@@ -3100,7 +3090,7 @@ module.exports = {
             scheduleNodeRecovery(node, 'node_connect');
         });
 
-        TrueMusic.poru.on('nodeReconnect', (node) => {
+        TrueMusic.audio.on('nodeReconnect', (node) => {
             // Reapply resume and ping after every reconnect.
             lavalinkKeepAlive.onNodeConnect(node, TrueMusic).catch(() => {});
             const name = node.options.name || node.options.host;
@@ -3119,7 +3109,7 @@ module.exports = {
             scheduleNodeRecovery(node, 'node_reconnect');
         });
 
-        TrueMusic.poru.on('nodeDisconnect', (node) => {
+        TrueMusic.audio.on('nodeDisconnect', (node) => {
             // أوقف WS ping — سيُستأنف عند nodeConnect/nodeReconnect
             lavalinkKeepAlive.onNodeDisconnect(node);
             const name = node.options.name || node.options.host;
@@ -3133,14 +3123,14 @@ module.exports = {
             });
 
             // ── Ghost-player prevention ───────────────────────────────────────────
-            // When a node goes offline, Poru players on it keep isPlaying=true
-            // but Lavalink has no session — they become "ghost players": visible
+            // When a node goes offline, audio players on it keep isPlaying=true
+            // but NodeLink has no session — they become "ghost players": visible
             // in Discord voice but silent and unresponsive to REST calls.
             //
             // Fix: immediately freeze them here. scheduleNodeRecovery() (triggered
             // by nodeConnect/nodeReconnect) will restart them once the node is back.
             let ghostCount = 0;
-            TrueMusic.poru.players.forEach(player => {
+            TrueMusic.audio.players.forEach(player => {
                 if (player.node !== node) return;
                 ensurePlayerData(player);
                 if (player.isPlaying || player.isPaused) {
@@ -3160,13 +3150,13 @@ module.exports = {
                     event: 'ghost_players_frozen',
                     reconnects: data.reconnects,
                     note: `Frozen ghost players: ${ghostCount}`,
-                    players: TrueMusic.poru.players.size,
+                    players: TrueMusic.audio.players.size,
                 });
             }
             // ─────────────────────────────────────────────────────────────────────
         });
 
-        TrueMusic.poru.on('nodeError', (node, err) => {
+        TrueMusic.audio.on('nodeError', (node, err) => {
             const name = node.options.name || node.options.host;
             const prev = statusStore.getNodes().get(name) || {};
             const data = { status: 'offline', reconnects: (prev.reconnects ?? 0) + 1 };
@@ -3265,26 +3255,26 @@ module.exports = {
             }
         });
 
-        // ── Fix: Re-init Lavalink after Discord WebSocket shard resumes ──────────
+        // ── Fix: Re-init NodeLink after Discord WebSocket shard resumes ──────────
         TrueMusic.on('shardResume', () => {
-            const allOffline = TrueMusic.poru?.nodes?.size > 0 &&
-                [...(TrueMusic.poru.nodes?.values() || [])].every(n => !n.isConnected);
+            const allOffline = TrueMusic.audio?.nodes?.size > 0 &&
+                [...(TrueMusic.audio.nodes?.values() || [])].every(n => !n.isConnected);
             if (allOffline) {
-                requestPoruInit('Shard resumed with all nodes offline', 15_000);
+                requestAudioInit('Shard resumed with all nodes offline', 15_000);
             } else {
                 // Nodes are connected — recover any stalled players
-                TrueMusic.poru?.nodes?.forEach?.((node) => {
+                TrueMusic.audio?.nodes?.forEach?.((node) => {
                     if (node.isConnected) scheduleNodeRecovery(node, 'shard_resume');
                 });
             }
             // إجبار كل player على تجديد voice state (Discord لا يعيد VOICE_SERVER_UPDATE تلقائياً)
-            lavalinkKeepAlive.onShardReconnect(TrueMusic, TrueMusic.poru, 5000);
+            lavalinkKeepAlive.onShardReconnect(TrueMusic, TrueMusic.audio, 5000);
         });
 
         // ── Fix: أيضاً عند shardReconnecting (قبل اكتمال الاتصال) ───────────────
         TrueMusic.on('shardReconnecting', () => {
             // تأخير أطول لأن الـ shard لم يكتمل بعد
-            lavalinkKeepAlive.onShardReconnect(TrueMusic, TrueMusic.poru, 8000);
+            lavalinkKeepAlive.onShardReconnect(TrueMusic, TrueMusic.audio, 8000);
         });
 
         TrueMusic.once('clientReady', async () => {
@@ -3300,30 +3290,30 @@ module.exports = {
                 .catch(err => console.warn(`[EmojiSync] ${err?.message || err}`));
             warnUnavailableMusicEmojis(TrueMusic);
             warmTintCache(TINTED_ICON_FILES, [getEmbedColor(TrueMusic)]);
-            // Patch Lavalink v4 resume/keep-alive before the first node connection.
+            // Patch NodeLink v4-compatible resume/keep-alive before the first node connection.
             // No session IDs are persisted across process restarts.
-            lavalinkKeepAlive.prepareNodes(TrueMusic.poru);
+            lavalinkKeepAlive.prepareNodes(TrueMusic.audio);
             try {
-                TrueMusic.poru.init(TrueMusic);
+                TrueMusic.audio.init(TrueMusic);
             } catch (e) {
                 lavalinkConsole.updateBot(TrueMusic, {
                     token,
                     state: 'init_failed',
-                    event: 'poru_init_failed',
+                    event: 'audio_init_failed',
                     note: e?.message || e,
                 });
             }
             collection.set(TrueMusic.user.id, TrueMusic);
 
             // ── Startup Guarantee (Layer 1) ────────────────────────────────────────
-            // poru.init() fires the WS connection but doesn't wait for it.
-            // If Lavalink is briefly down (restart, deploy, cold start) the bot
+            // audio.init() fires the WS connection but doesn't wait for it.
+            // If NodeLink is briefly down (restart, deploy, cold start) the bot
             // will fail silently and stay broken forever.
             // Fix: retry up to 3 times with 8s between attempts so every new
-            // bot always ends up connected even during Lavalink hiccups at startup.
+            // bot always ends up connected even during NodeLink hiccups at startup.
             (async () => {
                 for (let startupAttempt = 1; startupAttempt <= 3; startupAttempt++) {
-                    const ready = await waitForPoruReady(8_000);
+                    const ready = await waitForAudioReady(8_000);
                     if (ready) {
                         if (startupAttempt > 1) {
                             lavalinkConsole.updateBot(TrueMusic, {
@@ -3339,19 +3329,19 @@ module.exports = {
                         lavalinkConsole.updateBot(TrueMusic, {
                             token,
                             state: 'startup_retry',
-                            event: 'lavalink_not_ready',
+                            event: 'nodelink_not_ready',
                             note: `Startup attempt ${startupAttempt}/3`,
                         });
-                        // Reset attempt counters so Poru doesn't think it already tried
-                        TrueMusic.poru?.nodes?.forEach(node => {
+                        // Reset attempt counters so the audio manager does not treat startup as exhausted
+                        TrueMusic.audio?.nodes?.forEach(node => {
                             try {
                                 node.attempt = 0;
                                 clearTimeout(node.reconnectAttempt);
                                 node.reconnectAttempt = null;
                             } catch {}
                         });
-                        lastPoruInitAt = 0; // bypass cooldown for startup retries
-                        restorePoruNodes(TrueMusic.poru, TrueMusic, 'startup retry');
+                        lastAudioInitAt = 0; // bypass cooldown for startup retries
+                        restoreAudioNodes(TrueMusic.audio, TrueMusic, 'startup retry');
                     } else {
                         lavalinkConsole.updateBot(TrueMusic, {
                             token,
@@ -3364,20 +3354,20 @@ module.exports = {
             })().catch(() => {});
             // ──────────────────────────────────────────────────────────────────────
 
-            TrueMusic.poru.players.forEach(player => {
+            TrueMusic.audio.players.forEach(player => {
                 player.queue.clear();
                 player.skip?.().catch(() => {});
             });
 
-            // ── Optional Lavalink REST health monitor ─────────────────────────────
+            // ── Optional NodeLink REST health monitor ─────────────────────────────
             // Disabled by default for large bot fleets. A REST probe per bot can
-            // overload Lavalink/Railway networking and a transient fetch failure
-            // should not disconnect an otherwise connected Poru node.
+            // overload NodeLink/Railway networking and a transient fetch failure
+            // should not disconnect an otherwise connected NodeLink node.
             if (process.env.PORU_REST_HEALTH_MONITOR === '1') {
                 const nodeRestFailures = new Map();
                 setInterval(async () => {
                     if (!TrueMusic.readyAt) return;
-                    const nodes = [...(TrueMusic.poru?.nodes?.values() || [])];
+                    const nodes = [...(TrueMusic.audio?.nodes?.values() || [])];
                     if (!nodes.length) return;
 
                     const allOffline = nodes.every(n => !n.isConnected);
@@ -3388,7 +3378,7 @@ module.exports = {
                             event: 'rest_monitor_offline',
                             note: 'REST monitor found all nodes offline',
                         });
-                        requestPoruInit('REST monitor found all nodes offline', 30_000);
+                        requestAudioInit('REST monitor found all nodes offline', 30_000);
                         return;
                     }
 
@@ -3419,9 +3409,9 @@ module.exports = {
                                 event: 'rest_probe_failed',
                                 note: `${e.message} (${failures}/3), keeping WS connected`,
                             });
-                            if (failures >= 3 && !TrueMusic.poru.players.size) {
+                            if (failures >= 3 && !TrueMusic.audio.players.size) {
                                 nodeRestFailures.set(name, 0);
-                                requestPoruInit(`REST monitor repeated failures for ${name}`, 60_000);
+                                requestAudioInit(`REST monitor repeated failures for ${name}`, 60_000);
                             }
                         }
                     }
@@ -3444,7 +3434,7 @@ module.exports = {
                         note: 'Subscription token removed',
                     });
                     clearInterval(playbackWatchdog);
-                    lavalinkKeepAlive.destroyKeepAlive(TrueMusic.poru); // Fix #8: تنظيف intervals قبل destroy
+                    lavalinkKeepAlive.destroyKeepAlive(TrueMusic.audio); // Fix #8: تنظيف intervals قبل destroy
                     await TrueMusic.destroy().catch(() => 0);
                     runningBots.delete(token);
                     return clearInterval(int);
@@ -3458,13 +3448,13 @@ module.exports = {
                         note: tokenObj.awaitingReplacement ? 'Awaiting replacement token' : 'Subscription expired',
                     });
                     clearInterval(playbackWatchdog);
-                    lavalinkKeepAlive.destroyKeepAlive(TrueMusic.poru); // Fix #8: تنظيف intervals قبل destroy
+                    lavalinkKeepAlive.destroyKeepAlive(TrueMusic.audio); // Fix #8: تنظيف intervals قبل destroy
                     await TrueMusic.destroy().catch(() => 0);
                     runningBots.delete(token);
                     return clearInterval(int);
                 }
 
-                // ── Lavalink Node Guardian (Layers 2 + 3) ────────────────────────────
+                // ── NodeLink Node Guardian (Layers 2 + 3) ────────────────────────────
                 // Runs every 15s for EVERY bot regardless of channel assignment.
                 //
                 // Layer 2 — WS readyState ground-truth check
@@ -3474,15 +3464,15 @@ module.exports = {
                 //   no cooldown — this is a lightweight per-node call, not a full init.
                 //
                 // Layer 3 — Proactive attempt-counter reset
-                //   Poru gives up permanently when node.attempt >= reconnectTries (50).
+                //   the audio manager may give up permanently when node.attempt >= reconnectTries (50).
                 //   We reset it at 30 so the bot NEVER exhausts its reconnect budget.
                 //   For truly connected nodes we reset to 0 as maintenance.
                 {
-                    const nodes = TrueMusic.poru?.nodes;
+                    const nodes = TrueMusic.audio?.nodes;
                     if (!nodes || nodes.size === 0) {
-                        // Poru was never initialized or all nodes vanished
+                        // the audio manager was never initialized or all nodes vanished
                         if (TrueMusic.readyAt) {
-                            requestPoruInit('No Poru nodes registered', 60_000);
+                            requestAudioInit('No NodeLink nodes registered', 60_000);
                         }
                     } else {
                         let connectedCount = 0;
@@ -3537,7 +3527,7 @@ module.exports = {
                                 return ws === 3 || ws === undefined || ws === null;
                             });
                             if (allSocketsClosed) {
-                                requestPoruInit('All nodes dead — full re-init fallback', 30_000);
+                                requestAudioInit('All nodes dead — full re-init fallback', 30_000);
                             }
                         }
                     }
@@ -3572,7 +3562,7 @@ module.exports = {
                 } else {
                     let guild = TrueMusic.guilds.cache.get(tokenObj.Server);
                     if (guild) {
-                        const player = TrueMusic.poru.players.get(guild.id);
+                        const player = TrueMusic.audio.players.get(guild.id);
                         if (player) {
                             // Cancel pre-fetch timer before destroy to prevent the
                             // callback from calling player.resolveTrack on a dead player
@@ -3610,10 +3600,10 @@ module.exports = {
                 // Checks stalled playback — runs every 15s here instead of
                 // spawning a dedicated setInterval per bot.
                 const wdNow = Date.now();
-                // Skip stall recovery if Lavalink is currently offline — reinit already triggered above
-                const wdNodesOnline = [...(TrueMusic.poru?.nodes?.values() || [])].some(n => n.isConnected);
+                // Skip stall recovery if NodeLink is currently offline — reinit already triggered above
+                const wdNodesOnline = [...(TrueMusic.audio?.nodes?.values() || [])].some(n => n.isConnected);
                 if (wdNodesOnline) {
-                    TrueMusic.poru.players.forEach(player => {
+                    TrueMusic.audio.players.forEach(player => {
                         if (!player.currentTrack || player.isPaused) return;
                         ensurePlayerData(player);
                         const lastProgress = player.data.lastProgressAt || player.data.trackStartedAt || wdNow;
@@ -3627,12 +3617,12 @@ module.exports = {
 
 
                 // ── Idle player cleanup ──────────────────────────────────────────
-                // A Poru player that has no current track for a long time can lose
-                // its Lavalink session. Do not destroy it because that sends
+                // A audio player that has no current track for a long time can lose
+                // its NodeLink session. Do not destroy it because that sends
                 // channel_id:null and makes the bot leave voice. Mark it so the next
-                // play command refreshes Lavalink internally before starting audio.
+                // play command refreshes NodeLink internally before starting audio.
                 if (wdNodesOnline) {
-                    TrueMusic.poru.players.forEach(player => {
+                    TrueMusic.audio.players.forEach(player => {
                         ensurePlayerData(player);
                         if (player.currentTrack || player.isPlaying) {
                             player.data.lastIdleAt = null; // reset when active
@@ -3652,10 +3642,10 @@ module.exports = {
                 // ─────────────────────────────────────────────────────────────────
 
                 // ── Zombie-connection detection for music sub-bots ────────────────
-                // Root cause of Lavalink drops for idle bots:
+                // Root cause of NodeLink drops for idle bots:
                 // Bots with no voice channel are in quiet servers that generate
                 // almost no raw gateway events. The old 4-minute threshold was
-                // firing constantly → shard reconnects → Lavalink session disruption.
+                // firing constantly → shard reconnects → NodeLink session disruption.
                 //
                 // Fix: use Discord.js's actual WebSocket ping to check if the
                 // connection is truly alive. A ping of -1 means disconnected.
@@ -3944,13 +3934,13 @@ module.exports = {
                         // Connect to voice immediately before any slow name change
                         try {
                             const guild = message.guild;
-                            const existingPlayer = TrueMusic.poru?.players?.get(guild.id);
+                            const existingPlayer = TrueMusic.audio?.players?.get(guild.id);
                             if (existingPlayer) {
                                 if (!existingPlayer.isConnected || existingPlayer.voiceChannel !== channel.id) {
                                     existingPlayer.setVoiceChannel(channel.id, { deaf: true, mute: false });
                                 }
-                            } else if (TrueMusic.poru) {
-                                await TrueMusic.poru.createConnection({
+                            } else if (TrueMusic.audio) {
+                                await TrueMusic.audio.createConnection({
                                     guildId: guild.id,
                                     voiceChannel: channel.id,
                                     textChannel: message.channel.id,
@@ -3984,21 +3974,21 @@ module.exports = {
                         });
                         store.set('tokens', data);
 
-                        // ── Wait for Poru to be ready before connecting ───────────────
-                        // New bots may still be establishing their Lavalink connection.
+                        // ── Wait for NodeLink to be ready before connecting ───────────────
+                        // New bots may still be establishing their NodeLink connection.
                         // Without this wait, createConnection throws "No nodes available".
-                        const poruReady = await waitForPoruReady(12_000);
+                        const audioReady = await waitForAudioReady(12_000);
 
                         // Connect to voice immediately
                         try {
                             const guild = message.guild;
-                            const existingPlayer = TrueMusic.poru?.players?.get(guild.id);
+                            const existingPlayer = TrueMusic.audio?.players?.get(guild.id);
                             if (existingPlayer) {
                                 if (!existingPlayer.isConnected || existingPlayer.voiceChannel !== channel.id) {
                                     existingPlayer.setVoiceChannel(channel.id, { deaf: true, mute: false });
                                 }
-                            } else if (TrueMusic.poru && poruReady) {
-                                await TrueMusic.poru.createConnection({
+                            } else if (TrueMusic.audio && audioReady) {
+                                await TrueMusic.audio.createConnection({
                                     guildId: guild.id,
                                     voiceChannel: channel.id,
                                     textChannel: message.channel.id,
@@ -4121,7 +4111,7 @@ module.exports = {
 
 
 
-    TrueMusic.poru.on('playerUpdate', (player) => {
+    TrueMusic.audio.on('playerUpdate', (player) => {
         ensurePlayerData(player);
         const position = Number(player.position || 0);
         if (position > (player.data.lastPosition || 0) + 750 || !player.data.lastProgressAt) {
@@ -4131,8 +4121,8 @@ module.exports = {
         player.data.lastPosition = position;
     });
 
-    // ── trackStuck: Poru v5 يُطلقه كـ event مستقل (منفصل عن trackError) ─────────
-    TrueMusic.poru.on('trackStuck', async (player, track, data) => {
+    // ── trackStuck: NodeLink يُطلقه كـ event مستقل (منفصل عن trackError) ─────────
+    TrueMusic.audio.on('trackStuck', async (player, track, data) => {
         ensurePlayerData(player);
         const stuckTrack = track || player.currentTrack || player.data.lastTrack;
         const identity   = trackIdentity(stuckTrack);
@@ -4161,9 +4151,9 @@ module.exports = {
         setTimeout(() => recoverPlayerPlayback(player, 'track_stuck').catch(() => {}), 1500);
     });
 
-    TrueMusic.poru.on('trackError', async (player, track, data) => {
+    TrueMusic.audio.on('trackError', async (player, track, data) => {
         if (data?.type === 'TrackStuckEvent') {
-            // Poru v5 قد يُرسل TrackStuckEvent هنا أيضاً — عالجه بنفس منطق trackStuck
+            // NodeLink قد يُرسل TrackStuckEvent هنا أيضاً — عالجه بنفس منطق trackStuck
             ensurePlayerData(player);
             const stuckTrack = track || player.currentTrack || player.data.lastTrack;
             const identity = trackIdentity(stuckTrack);
@@ -4209,7 +4199,7 @@ module.exports = {
         setTimeout(() => recoverPlayerPlayback(player, 'track_error').catch(() => {}), 2500).unref?.();
     });
 
-    TrueMusic.poru.on('trackEnd', async (player, track, data) => {
+    TrueMusic.audio.on('trackEnd', async (player, track, data) => {
       ensurePlayerData(player);
       // ── Cancel any pending pre-fetch timer for the ending track ──────────────
       if (player.data._prefetchTimer) {
@@ -4261,7 +4251,7 @@ module.exports = {
       await bumpQueueVersion(player, `track_end:${reason}`);
             });
 
-                    TrueMusic.poru.on("queueEnd", async (player) => {
+                    TrueMusic.audio.on("queueEnd", async (player) => {
                       disableIdlePlaybackModesIfAlone(TrueMusic, player, 'queue_end_alone');
                       await finalizePlayerUi(player, { complete: player?.data?.lastTrackEndNatural === true });
               await bumpQueueVersion(player, 'queue_end');
@@ -4305,7 +4295,7 @@ module.exports = {
       }
 
       const source = displaySettings(tokenObj2).platform || 'auto';
-      const nextTrack = await resolveQuickAutoPlayTrack(TrueMusic.poru, artistQuery, source, currentTrack, player);
+      const nextTrack = await resolveQuickAutoPlayTrack(TrueMusic.audio, artistQuery, source, currentTrack, player);
 
       if (!nextTrack) {
         await finalizePlayerUi(player);
@@ -4337,9 +4327,9 @@ module.exports = {
     }
 
     function assertLavalinkFilterResponse(response) {
-        if (!response) throw new Error('Lavalink did not return a player response');
+        if (!response) throw new Error('NodeLink did not return a player response');
         if (response.error || Number(response.status) >= 400) {
-            throw new Error(response.message || response.error || `Lavalink filter error ${response.status}`);
+            throw new Error(response.message || response.error || `NodeLink filter error ${response.status}`);
         }
     }
 
@@ -4374,7 +4364,7 @@ module.exports = {
     }
 
                     // ── trackStart: always publish the normal now-playing panel ──────────
-                    TrueMusic.poru.on('trackStart', async (player, track) => {
+                    TrueMusic.audio.on('trackStart', async (player, track) => {
                 ensurePlayerData(player);
                 const identity = trackIdentity(track);
                 const startLock = player.data.nowPlayingSendLock;
@@ -4452,7 +4442,7 @@ module.exports = {
                 }
 
         // ── Pre-fetch: resolve next track while current one plays ─────────────
-        // Poru's play() calls resolveTrack() when track.track is missing, adding
+        // The legacy player flow calls resolveTrack() when track.track is missing, adding
         // 100–500ms latency at every transition. We resolve the next track ~5s
         // early as a background task so it's ready the moment play() is called.
         {
@@ -4629,7 +4619,7 @@ module.exports = {
 
                 try {
                     const source = displaySettings(tokenObj2).platform;
-                    const artistTracks = await resolveArtistTracks(TrueMusic.poru, artistQuery, source || 'auto', track, 6, {
+                    const artistTracks = await resolveArtistTracks(TrueMusic.audio, artistQuery, source || 'auto', track, 6, {
                         historySet: autoPlayHistorySet(player),
                     });
             player.data.ui.artistTracks = artistTracks;
@@ -4819,7 +4809,7 @@ module.exports = {
                                 ...(isProbablyUrl(song) ? {} : { source: searchSource }),
                             }, 1);
                             if ((!res || !res.tracks || res.tracks.length === 0) && !isProbablyUrl(song)) {
-                                const fallbackTracks = await resolveSmartTracks(TrueMusic.poru, song, 'auto', 10);
+                                const fallbackTracks = await resolveSmartTracks(TrueMusic.audio, song, 'auto', 10);
                                 if (fallbackTracks.length) res = { loadType: 'search', tracks: fallbackTracks };
                             }
 
@@ -4882,7 +4872,7 @@ module.exports = {
                 }
             }
             else if (cmdsArray.stop.includes(command)) {
-                let player = TrueMusic.poru.players.get(message.guild.id);
+                let player = TrueMusic.audio.players.get(message.guild.id);
 
                 if (!player) {
                     return message.reply(musicPayload(tokenObj, {
@@ -4901,7 +4891,7 @@ module.exports = {
                                 setAutoPlayState(player, false);
                                 clearStoppedPlaybackCaches(player);
                                 clearProgressInterval(player, 'message stop');
-                                // Fire both without waiting — Lavalink stop + reaction run immediately
+                                // Fire both without waiting — NodeLink stop + reaction run immediately
                                 stopPlayerAudio(player, { wait: false });
                                 reactCustom(message, MUSIC_EMOJIS.stop, '🔴');
                                 runBackground('stop cleanup', async () => {
@@ -4914,7 +4904,7 @@ module.exports = {
 
             if (cmdsArray.nowplaying.includes(command)) {
 
-                let player = TrueMusic.poru.players.get(message.guild.id);
+                let player = TrueMusic.audio.players.get(message.guild.id);
                 if (!player || !player.currentTrack) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'No Music',
@@ -4948,7 +4938,7 @@ module.exports = {
                 }
             }
             else if (cmdsArray.loop.includes(command)) {
-                let player = TrueMusic.poru.players.get(message.guild.id);
+                let player = TrueMusic.audio.players.get(message.guild.id);
                 if (!player || !player.isPlaying) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'No Music',
@@ -4971,7 +4961,7 @@ module.exports = {
             }
 
             if (cmdsArray.pause.includes(command)) {
-                const player = TrueMusic.poru.players.get(message.guild.id);
+                const player = TrueMusic.audio.players.get(message.guild.id);
                 if (!player || !player.currentTrack) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'No Music',
@@ -5004,7 +4994,7 @@ module.exports = {
 
                 if (!memberVoiceChannel || !botVoiceChannel || memberVoiceChannel.id !== botVoiceChannel.id) return;
 
-                const player = TrueMusic.poru.players.get(message.guild.id);
+                const player = TrueMusic.audio.players.get(message.guild.id);
                 if (!player || !player.queue || player.queue.length === 0) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'Queue',
@@ -5111,7 +5101,7 @@ module.exports = {
                             }
                         });
             } else if (cmdsArray.skip.includes(command)) {
-                let player = TrueMusic.poru.players.get(message.guild.id);
+                let player = TrueMusic.audio.players.get(message.guild.id);
 
                 if (!player || (!player.isPlaying && !player.isPaused)) {
                     return message.reply(musicPayload(tokenObj, {
@@ -5131,9 +5121,9 @@ module.exports = {
 
                         if (player.queue.length === 0 && player.data?.autoPlay) {
                             const skippedTrack = currentTrack;
-                            // Lavalink + Discord reply start at the same instant
+                            // NodeLink + Discord reply start at the same instant
                             await Promise.all([
-                                skipPlayerSynced(TrueMusic.poru, player, currentTrack),
+                                skipPlayerSynced(TrueMusic.audio, player, currentTrack),
                                 message.reply(musicPayload(tokenObj, {
                                     title: 'Skipped',
                                     description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
@@ -5151,7 +5141,7 @@ module.exports = {
                             setAutoPlayState(player, false);
                             clearStoppedPlaybackCaches(player);
                             clearProgressInterval(player, 'message skip end');
-                            // Lavalink + Discord reply start at the same instant
+                            // NodeLink + Discord reply start at the same instant
                             await Promise.all([
                                 stopPlayerAudio(player, { wait: false }),
                                 message.reply(musicPayload(tokenObj, {
@@ -5169,9 +5159,9 @@ module.exports = {
                             return;
                         } else {
                             const skippedTrack = currentTrack;
-                            // Lavalink + Discord reply start at the same instant
+                            // NodeLink + Discord reply start at the same instant
                             await Promise.all([
-                                skipPlayerSynced(TrueMusic.poru, player, currentTrack),
+                                skipPlayerSynced(TrueMusic.audio, player, currentTrack),
                                 message.reply(musicPayload(tokenObj, {
                                     title: 'Skipped',
                                     description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
@@ -5187,7 +5177,7 @@ module.exports = {
 
 
             else if (cmdsArray.volume.includes(command)) {
-                let player = TrueMusic.poru.players.get(message.guild.id);
+                let player = TrueMusic.audio.players.get(message.guild.id);
 
                 if (!player || !player.isPlaying) {
                     return message.reply(musicPayload(tokenObj, {
@@ -5234,7 +5224,7 @@ module.exports = {
                     files: [`./assets/image/icons/${volume < currentVolume ? 'Volumedowwn' : 'Volumeup'}.png`],
                 }));
             } else if (cmdsArray.seek.includes(command)) {
-                const player = TrueMusic.poru.players.get(message.guild.id);
+                const player = TrueMusic.audio.players.get(message.guild.id);
 
                 if (!player || !player.currentTrack) {
                     return message.reply(musicPayload(tokenObj, {
@@ -5291,7 +5281,7 @@ module.exports = {
             }
 
             else if (cmdsArray.forward.includes(command)) {
-                const player = TrueMusic.poru.players.get(message.guild.id);
+                const player = TrueMusic.audio.players.get(message.guild.id);
                 if (!player || !player.currentTrack) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'No Music',
@@ -5344,7 +5334,7 @@ module.exports = {
             }
 
             else if (cmdsArray.remove.includes(command)) {
-                const player = TrueMusic.poru.players.get(message.guild.id);
+                const player = TrueMusic.audio.players.get(message.guild.id);
                 if (!player || !player.currentTrack) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'No Music',
@@ -5461,7 +5451,7 @@ module.exports = {
 
                 const resolveSearchTracks = async (source) => {
                     if (source !== 'auto') {
-                        return resolveSmartTracks(TrueMusic.poru, searchQuery, source, 60, {
+                        return resolveSmartTracks(TrueMusic.audio, searchQuery, source, 60, {
                             strict: false,
                             variants: [searchQuery, `${searchQuery} official audio`],
                             prefetchMultiplier: 4,
@@ -5478,7 +5468,7 @@ module.exports = {
                             ...smartSearchThumbnail,
                         })).catch(() => {});
 
-                        const tracks = await resolveSmartTracks(TrueMusic.poru, searchQuery, searchSource, 14, {
+                        const tracks = await resolveSmartTracks(TrueMusic.audio, searchQuery, searchSource, 14, {
                             strict: false,
                             variants: [searchQuery],
                             prefetchMultiplier: 3,
@@ -5731,7 +5721,7 @@ module.exports = {
                     }
                 });
             } else if (cmdsArray.autoplay.includes(command)) {
-                let player = TrueMusic.poru.players.get(message.guild.id);
+                let player = TrueMusic.audio.players.get(message.guild.id);
 
                 if (!player) {
                     return message.reply(musicPayload(tokenObj, {
@@ -5786,7 +5776,7 @@ module.exports = {
                         return replyEphemeral('**ادخل نفس الروم الصوتي أولاً.**');
                     }
 
-                            const player = TrueMusic.poru.players.get(interaction.guildId);
+                            const player = TrueMusic.audio.players.get(interaction.guildId);
                             if (!player || !player.currentTrack) {
                                 return replyEphemeral('**لا يوجد شيء يعمل الآن.**');
                             }
@@ -5912,7 +5902,7 @@ module.exports = {
                     if (interaction.customId === 'volume_down') {
                         const newVolume = clampPlayerVolume(playerVolumeValue(player) - 10);
                         responseMessage = `**Volume is now __${newVolume}%__.**`;
-                        // setPlayerVolumeSynced already updates local state + fires lavalink fire-and-forget
+                        // setPlayerVolumeSynced already updates local state + fires NodeLink fire-and-forget
                         setPlayerVolumeSynced(player, newVolume).catch(err => console.warn('[button volume down]', err?.message || err));
                         editPanel(!!ui.liked).catch(() => {});
                     }
@@ -5931,7 +5921,7 @@ module.exports = {
                                 } else if (player.queue.length === 0 && player.data?.autoPlay) {
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                     // Fire both in background — instant response
-                                    skipPlayerSynced(TrueMusic.poru, player, currentTrack).catch(() => {});
+                                    skipPlayerSynced(TrueMusic.audio, player, currentTrack).catch(() => {});
                                     editPanel(!!ui.liked).catch(() => {});
                                 } else if (player.queue.length === 0) {
                                     const finalOptions = finalUiOptionsFor(player, currentTrack);
@@ -5951,7 +5941,7 @@ module.exports = {
                                 } else {
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                     // Fire both in background — instant response
-                                    skipPlayerSynced(TrueMusic.poru, player, currentTrack).catch(() => {});
+                                    skipPlayerSynced(TrueMusic.audio, player, currentTrack).catch(() => {});
                                     editPanel(!!ui.liked).catch(() => {});
                                     runBackground('button skip cleanup', () => bumpQueueVersion(player, 'button_skip'));
                                 }
@@ -5967,9 +5957,9 @@ module.exports = {
                             player.queue.unshift(currentBeforePrev);
                             player.queue.unshift(prevTrack);
                             responseMessage = `⏮ رجعنا للأغنية السابقة.`;
-                            // Lavalink + panel in parallel — same instant
+                            // NodeLink + panel in parallel — same instant
                             await Promise.all([
-                                skipPlayerSynced(TrueMusic.poru, player, currentBeforePrev).catch(() => {}),
+                                skipPlayerSynced(TrueMusic.audio, player, currentBeforePrev).catch(() => {}),
                                 editPanel(!!ui.liked),
                             ]);
                             runBackground('button prev cleanup', () => bumpQueueVersion(player, 'button_prev'));
@@ -6110,4 +6100,4 @@ module.exports = {
 };
 module.exports.runningBots = runningBots;
 module.exports.botLastActivity = botLastActivity;
-module.exports.restorePoruNodes = restorePoruNodes;
+module.exports.restoreAudioNodes = restoreAudioNodes;

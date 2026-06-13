@@ -16,7 +16,8 @@ const {
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
-    Options
+    Options,
+    WebSocketShardStatus
 } = require('discord.js');
 
 const fs = require('fs');
@@ -102,8 +103,8 @@ process.on('SIGTERM', async () => {
         for (const [, bot] of subBots) {
             shutdownTasks.push((async () => {
                 try {
-                    if (bot.poru?.players) {
-                        for (const [, player] of bot.poru.players) {
+                    if (bot.audio?.players) {
+                        for (const [, player] of bot.audio.players) {
                             try {
                                 const msg = player.data?.nowPlayingMessage;
                                 if (msg && typeof msg.edit === 'function') {
@@ -156,7 +157,13 @@ async function zombieCheck() {
     if (elapsed < ZOMBIE_THRESHOLD_MS) return;
 
     const wsPing = client.ws?.ping ?? -1;
-    const hasDeadShard = [...(client.ws?.shards?.values?.() || [])].some(shard => shard?.status !== 0 && shard?.ping === -1);
+    const hasDeadShard = [...(client.ws?.shards?.values?.() || [])].some(shard => {
+        if (!shard) return false;
+        // discord.js v14: Ready = 3, Idle = 0. Treat only Ready as healthy;
+        // an Idle/Connecting/Resuming shard with ping -1 is a dead shard even
+        // when other shards keep the aggregate client.ws.ping healthy.
+        return shard.status !== WebSocketShardStatus.Ready && shard.ping === -1;
+    });
     if (wsPing !== -1 && !hasDeadShard) return;
 
     isReconnecting = true;

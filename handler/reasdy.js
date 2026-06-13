@@ -25,8 +25,8 @@ function printStatus() {
   console.log(`\x1b[36m║\x1b[0m  \x1b[1m📊 System Status\x1b[0m  \x1b[90m${now}\x1b[0m`);
   console.log(`\x1b[36m╚${line}╝\x1b[0m`);
 
-  // ── Lavalink (من Poru مباشرة) ──────────────────────────────────
-  console.log(`\n\x1b[33m  🎵 Lavalink Nodes\x1b[0m`);
+  // ── NodeLink (من NodeLink manager مباشرة) ──────────────────────────────────
+  console.log(`\n\x1b[33m  🎵 NodeLink Nodes\x1b[0m`);
   const liveNodes = statusStore.getNodes();
   if (hostConfig.length === 0) {
     console.log(`\x1b[31m  ✖  No nodes in host.json\x1b[0m`);
@@ -93,7 +93,7 @@ module.exports = {
       Channels: client.channels.cache.size,
     });
 
-    // انتظر 12 ثانية حتى يبدأ manager.js ويتصل Poru
+    // انتظر 12 ثانية حتى يبدأ manager.js ويتصل NodeLink manager
     setTimeout(() => {
       printStatus();
       const statusLogInterval = Number(process.env.STATUS_LOG_INTERVAL_MS || 30 * 60 * 1000);

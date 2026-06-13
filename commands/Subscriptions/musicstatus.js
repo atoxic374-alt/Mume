@@ -31,12 +31,12 @@ function fmtAgo(ts) {
 
 function nodeStatus(botClient) {
     try {
-        const nodes = [...(botClient.poru?.nodes?.values() || [])];
+        const nodes = [...(botClient.audio?.nodes?.values() || [])];
         if (!nodes.length) return { text: 'No Nodes' };
         const online = nodes.filter(n => n.isConnected).length;
-        if (online === nodes.length) return { text: `Lavalink ${online}/${nodes.length}` };
-        if (online > 0) return { text: `Lavalink ${online}/${nodes.length}` };
-        return { text: `Lavalink 0/${nodes.length}` };
+        if (online === nodes.length) return { text: `NodeLink ${online}/${nodes.length}` };
+        if (online > 0) return { text: `NodeLink ${online}/${nodes.length}` };
+        return { text: `NodeLink 0/${nodes.length}` };
     } catch {
         return { text: 'Unknown' };
     }
@@ -44,7 +44,7 @@ function nodeStatus(botClient) {
 
 function playerStatus(botClient) {
     try {
-        const players = [...(botClient.poru?.players?.values() || [])];
+        const players = [...(botClient.audio?.players?.values() || [])];
         const playing = players.filter(p => p.isPlaying && !p.isPaused);
         const paused = players.filter(p => p.isPaused);
         if (playing.length) return { text: `Playing (${playing.length})` };
@@ -70,16 +70,16 @@ function buildEmbed(client, page, perPage) {
     // ── Global stats ─────────────────────────────────────────────────────────
     const totalRunning = runningBots.size;
     const totalPlaying = [...runningBots.values()].filter(b => {
-        return [...(b.poru?.players?.values() || [])].some(p => p.isPlaying && !p.isPaused);
+        return [...(b.audio?.players?.values() || [])].some(p => p.isPlaying && !p.isPaused);
     }).length;
     const totalInVC = [...runningBots.values()].filter(b =>
         [...(b.guilds?.cache?.values() || [])].some(g => g.members?.me?.voice?.channel)
     ).length;
     const totalNodes_online = [...runningBots.values()].reduce((acc, b) => {
-        return acc + [...(b.poru?.nodes?.values() || [])].filter(n => n.isConnected).length;
+        return acc + [...(b.audio?.nodes?.values() || [])].filter(n => n.isConnected).length;
     }, 0);
     const totalNodes_all = [...runningBots.values()].reduce((acc, b) => {
-        return acc + (b.poru?.nodes?.size || 0);
+        return acc + (b.audio?.nodes?.size || 0);
     }, 0);
 
     const embed = new EmbedBuilder()
@@ -97,7 +97,7 @@ function buildEmbed(client, page, perPage) {
         name: 'Summary',
         value: [
             `Running: \`${totalRunning}\` | Playing: \`${totalPlaying}\` | In Voice: \`${totalInVC}\``,
-            `Lavalink: \`${totalNodes_online}/${totalNodes_all}\` nodes متصلة`,
+            `NodeLink: \`${totalNodes_online}/${totalNodes_all}\` nodes متصلة`,
         ].join('\n'),
         inline: false,
     });

@@ -1,4 +1,4 @@
-// Shared state — tracks live Lavalink node status from Poru events
+// Shared state — tracks live NodeLink node status from NodeLink events
 const nodes = new Map();
 // nodes: name -> { status, connectedAt, ping, reconnects }
 

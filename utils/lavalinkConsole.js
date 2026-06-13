@@ -93,12 +93,12 @@ function updateBot(client, data = {}) {
 }
 
 function updateNode(node, state, data = {}) {
-    const client = data.client || node?.poru?.client;
+    const client = data.client || node?.audioManager?.client;
     updateBot(client, {
         ...data,
         node: nodeName(node, data),
         state,
-        players: data.players ?? node?.poru?.players?.size ?? 0,
+        players: data.players ?? node?.audioManager?.players?.size ?? 0,
     });
 }
 
@@ -130,10 +130,10 @@ function flush() {
     }, {});
 
     const visibleRows = MAX_ROWS > 0 ? rows.slice(0, MAX_ROWS) : rows;
-    console.log(`[LavalinkStatus] bots=${rows.length} states=${Object.entries(counts).map(([k, v]) => `${k}:${v}`).join(', ')}`);
+    console.log(`[NodeLinkStatus] bots=${rows.length} states=${Object.entries(counts).map(([k, v]) => `${k}:${v}`).join(', ')}`);
     console.table(visibleRows);
     if (MAX_ROWS > 0 && rows.length > MAX_ROWS) {
-        console.log(`[LavalinkStatus] hidden=${rows.length - MAX_ROWS} rows; set LAVALINK_STATUS_TABLE_MAX_ROWS=0 to print all.`);
+        console.log(`[NodeLinkStatus] hidden=${rows.length - MAX_ROWS} rows; set LAVALINK_STATUS_TABLE_MAX_ROWS=0 to print all.`);
     }
 }
 
