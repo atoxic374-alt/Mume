@@ -3033,8 +3033,8 @@ module.exports = {
             };
         }
 
-        async function setConfiguredVoiceChannel(guild, channel, textChannelId, commandName, { renameToChannel = false } = {}) {
-            return setConfiguredVoiceChannelFor(TrueMusic, token, tokenObj, guild, channel, textChannelId, commandName, { renameToChannel });
+        async function setConfiguredVoiceChannel(guild, channel, textChannelId, commandName, currentTokenObj, { renameToChannel = false } = {}) {
+            return setConfiguredVoiceChannelFor(TrueMusic, token, currentTokenObj, guild, channel, textChannelId, commandName, { renameToChannel });
         }
 
         function buildVoiceSelectEmbed(commandName, actor, selectedChannel = null, state = 'waiting', reason = null) {
@@ -3081,7 +3081,7 @@ module.exports = {
                 .setFooter({ text: 'Searchable voice menu • يدعم البحث داخل قائمة الرومات' });
         }
 
-        async function promptVoiceChannelSelection(message, commandName, { renameToChannel = false } = {}) {
+        async function promptVoiceChannelSelection(message, commandName, currentTokenObj, { renameToChannel = false } = {}) {
             const customId = `voice_select:${TrueMusic.user.id}:${message.id}:${commandName}`;
             const selectRow = new ActionRowBuilder().addComponents(
                 new ChannelSelectMenuBuilder()
@@ -3153,7 +3153,7 @@ module.exports = {
                     components: [],
                 }).catch(() => {});
 
-                const result = await setConfiguredVoiceChannel(message.guild, channel, message.channel.id, commandName, { renameToChannel });
+                const result = await setConfiguredVoiceChannel(message.guild, channel, message.channel.id, commandName, currentTokenObj, { renameToChannel });
                 await panel.edit({
                     embeds: [buildVoiceSelectEmbed(commandName, message.author, channel, result.ok ? 'success' : 'failed', result.reason)],
                     components: [],
@@ -3595,14 +3595,14 @@ module.exports = {
             });
         }
 
-        async function handleAllVoiceCommand(message, commandName, allTokens, targetOverride = null, lockSuffix = 'all') {
+        async function handleAllVoiceCommand(message, commandName, allTokens, currentTokenObj, targetOverride = null, lockSuffix = 'all') {
             if (!global._voiceAllHandledMsgIds) global._voiceAllHandledMsgIds = new Map();
-            const lockKey = `${message.id}:${tokenObj.code || tokenObj.client || token}:${lockSuffix}`;
+            const lockKey = `${message.id}:${currentTokenObj?.code || currentTokenObj?.client || token}:${lockSuffix}`;
             if (global._voiceAllHandledMsgIds.has(lockKey)) return true;
             global._voiceAllHandledMsgIds.set(lockKey, Date.now());
             setTimeout(() => global._voiceAllHandledMsgIds?.delete(lockKey), 10 * 60 * 1000).unref?.();
 
-            const rawTargets = Array.isArray(targetOverride) ? targetOverride : subscriptionVoiceTargets(message, allTokens, tokenObj);
+            const rawTargets = Array.isArray(targetOverride) ? targetOverride : subscriptionVoiceTargets(message, allTokens, currentTokenObj);
             const targets = await prepareVoiceTargets(message, rawTargets);
             if (!targets.length) {
                 message.reply({ embeds: [buildAllVoiceEmbed(commandName, message.author, [], 'expired', ['❌ لا توجد بوتات اشتراك شغالة.'])] }).catch(() => {});
@@ -4473,7 +4473,7 @@ module.exports = {
                         || ['join', 'come', 'setvc', 'ادخل', 'تعال'].includes(ownerCommandNameNoMention));
                 if (isAllVoiceCommandNoMention) {
                     if (!canControlSubscription(tokenObj, message.author.id)) return;
-                    return handleAllVoiceCommand(message, ownerCommandNameNoMention === 'setup' ? 'setup' : 'join', data);
+                    return handleAllVoiceCommand(message, ownerCommandNameNoMention === 'setup' ? 'setup' : 'join', data, tokenObj);
                 }
                 if (hasMention) {
                     args = args.filter(arg => {
@@ -4497,7 +4497,7 @@ module.exports = {
                         && (ownerCommandName === 'setup'
                             || ['join', 'come', 'setvc', 'ادخل', 'تعال'].includes(ownerCommandName));
                     if (isAllVoiceCommand) {
-                        return handleAllVoiceCommand(message, ownerCommandName === 'setup' ? 'setup' : 'join', data);
+                        return handleAllVoiceCommand(message, ownerCommandName === 'setup' ? 'setup' : 'join', data, tokenObj);
                     }
                     const isVoiceCommand = ownerCommandName === 'setup'
                         || ['join', 'come', 'setvc', 'ادخل', 'تعال'].includes(ownerCommandName);
@@ -4512,6 +4512,7 @@ module.exports = {
                             message,
                             ownerCommandName === 'setup' ? 'setup' : 'join',
                             data,
+                            tokenObj,
                             targets,
                             `mentions:${mentionedBotIds.sort().join(',')}`,
                         );
@@ -4580,10 +4581,10 @@ module.exports = {
                     else if (args[0] == 'setup') {
                         let channel = message.member.voice.channel;
                         if (!channel) {
-                            return promptVoiceChannelSelection(message, 'setup', { renameToChannel: true });
+                            return promptVoiceChannelSelection(message, 'setup', tokenObj, { renameToChannel: true });
                         }
 
-                        const result = await setConfiguredVoiceChannel(message.guild, channel, message.channel.id, 'setup', { renameToChannel: true });
+                        const result = await setConfiguredVoiceChannel(message.guild, channel, message.channel.id, 'setup', tokenObj, { renameToChannel: true });
                         if (result.ok) {
                             reactCustom(message, MUSIC_EMOJIS.settings, '✅');
                         } else {
@@ -4594,10 +4595,10 @@ module.exports = {
 
                         let channel = message.member.voice.channel;
                         if (!channel) {
-                            return promptVoiceChannelSelection(message, 'join');
+                            return promptVoiceChannelSelection(message, 'join', tokenObj);
                         }
 
-                        const result = await setConfiguredVoiceChannel(message.guild, channel, message.channel.id, 'join');
+                        const result = await setConfiguredVoiceChannel(message.guild, channel, message.channel.id, 'join', tokenObj);
                         if (result.ok) {
                             reactCustom(message, MUSIC_EMOJIS.settings, '✅');
                         } else {
