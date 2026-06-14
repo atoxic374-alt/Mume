@@ -4463,9 +4463,18 @@ module.exports = {
             let tokenObj = data.find((t) => t.token == token);
             if (!data || !tokenObj) return;
 
-            let args = message.content?.trim().split(' ');
+            let args = message.content?.trim().split(/ +/).filter(Boolean);
             if (args) {
                 const hasMention = args.includes(`<@!${TrueMusic.user.id}>`) || args.includes(`<@${TrueMusic.user.id}>`);
+                const ownerCommandNameNoMention = String(args[0] || '').toLowerCase();
+                const isAllVoiceCommandNoMention = !hasMention
+                    && String(args[1] || '').toLowerCase() === 'all'
+                    && (ownerCommandNameNoMention === 'setup'
+                        || ['join', 'come', 'setvc', 'ادخل', 'تعال'].includes(ownerCommandNameNoMention));
+                if (isAllVoiceCommandNoMention) {
+                    if (!canControlSubscription(tokenObj, message.author.id)) return;
+                    return handleAllVoiceCommand(message, ownerCommandNameNoMention === 'setup' ? 'setup' : 'join', data);
+                }
                 if (hasMention) {
                     args = args.filter(arg => {
                         const mentionedId = String(arg || '').match(/^<@!?(\d{15,20})>$/)?.[1];
