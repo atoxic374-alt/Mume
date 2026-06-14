@@ -9,6 +9,8 @@ const {
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
+    ChannelSelectMenuBuilder,
+    ChannelType,
     StringSelectMenuBuilder,
     ActivityType,
     Options,
@@ -22,6 +24,7 @@ const {
     SeparatorBuilder,
     SeparatorSpacingSize,
     MessageFlags,
+    PermissionFlagsBits,
 } = require('discord.js');
 
 const fs = require('fs');
@@ -217,7 +220,6 @@ const BASE_FILTERS = {
     vibrato: null,
     rotation: null,
     distortion: null,
-    channelMix: null,
     lowPass: null,
 };
 
@@ -2729,7 +2731,7 @@ module.exports = {
         const TrueMusic = new Client({
             shards: "auto",
             allowedMentions: {
-                parse: ["roles", "users", "everyone"],
+                parse: ["users"],
                 repliedUser: false,
             },
             intents: [
@@ -2926,6 +2928,741 @@ module.exports = {
 
             playConnectionLocks.set(lockKey, task);
             return task;
+        }
+
+        async function waitForClientPoruReady(botClient, timeoutMs = 12_000) {
+            if (botClient === TrueMusic) return waitForPoruReady(timeoutMs);
+            if (botClient?.poru?.leastUsedNodes?.length) return true;
+            const deadline = Date.now() + timeoutMs;
+            while (Date.now() < deadline) {
+                if (botClient?.poru?.leastUsedNodes?.length) return true;
+                await new Promise(r => setTimeout(r, 500));
+            }
+            return !!(botClient?.poru?.leastUsedNodes?.length);
+        }
+
+        function isSupportedVoiceTarget(channel) {
+            return !!channel && [ChannelType.GuildVoice, ChannelType.GuildStageVoice].includes(channel.type);
+        }
+
+        async function validateBotVoiceChannel(botClient, guild, channel) {
+            if (!botClient?.user?.id) return { ok: false, reason: 'bot_not_ready' };
+            if (!guild) return { ok: false, reason: 'missing_guild' };
+            if (!isSupportedVoiceTarget(channel) || channel.guildId !== guild.id) return { ok: false, reason: 'invalid_voice_channel' };
+
+            const member = guild.members.cache.get(botClient.user.id)
+                || await guild.members.fetch(botClient.user.id).catch(() => null);
+            if (!member) return { ok: false, reason: 'bot_not_in_server' };
+
+            const permissions = channel.permissionsFor(member);
+            if (!permissions?.has(PermissionFlagsBits.ViewChannel)) return { ok: false, reason: 'missing_view_channel_permission' };
+            if (!permissions.has(PermissionFlagsBits.Connect)) return { ok: false, reason: 'missing_connect_permission' };
+
+            const currentVoiceId = member.voice?.channelId;
+            const userLimit = Number(channel.userLimit || 0);
+            const isFull = userLimit > 0 && channel.members?.size >= userLimit && currentVoiceId !== channel.id;
+            if (isFull && !permissions.has(PermissionFlagsBits.MoveMembers)) return { ok: false, reason: 'voice_channel_full' };
+
+            return { ok: true, member, currentVoice: member.voice?.channel || null };
+        }
+
+        async function setConfiguredVoiceChannelFor(botClient, targetToken, targetTokenObj, guild, channel, textChannelId, commandName, { renameToChannel = false } = {}) {
+            if (!guild || !channel?.id) return { ok: false, reason: 'missing_channel' };
+            const validation = await validateBotVoiceChannel(botClient, guild, channel);
+            if (!validation.ok) return { ok: false, ready: false, channel, tokenObj: targetTokenObj, reason: validation.reason };
+
+            const currentTokens = store.get('tokens') || [];
+            const updatedTokens = currentTokens.map((tokenBot) => {
+                if (tokenBot.token === targetToken) {
+                    return { ...tokenBot, channel: channel.id };
+                }
+                return tokenBot;
+            });
+            store.set('tokens', updatedTokens);
+
+            const freshTokenObj = updatedTokens.find((tokenBot) => tokenBot.token === targetToken) || targetTokenObj;
+            let connected = false;
+            let ready = false;
+            let error = null;
+
+            try {
+                ready = await waitForClientPoruReady(botClient, 12_000);
+                const member = validation.member;
+                const existingPlayer = botClient.poru?.players?.get(guild.id);
+                if (existingPlayer) {
+                    ensurePlayerData(existingPlayer);
+                    rememberTextChannel(existingPlayer, textChannelId);
+                    if (!existingPlayer.isConnected || existingPlayer.voiceChannel !== channel.id || member?.voice?.channelId !== channel.id) {
+                        existingPlayer.setVoiceChannel(channel.id, { deaf: true, mute: false });
+                        markPlayerNeedsVoiceRefresh(existingPlayer, `${commandName}:manual_voice_select`);
+                    }
+                    connected = true;
+                } else if (botClient.poru && ready) {
+                    const created = await botClient.poru.createConnection({
+                        guildId: guild.id,
+                        voiceChannel: channel.id,
+                        textChannel: textChannelId,
+                        deaf: true,
+                        group: targetToken,
+                    });
+                    ensurePlayerData(created);
+                    created.data.createdAt = Date.now();
+                    rememberTextChannel(created, textChannelId);
+                    connected = true;
+                }
+            } catch (err) {
+                error = err;
+            }
+
+            if (renameToChannel) {
+                const cooldownTime = 5000;
+                const lastChangeTime = botClient.user.lastChangeTime || 0;
+                if (Date.now() - lastChangeTime >= cooldownTime) {
+                    botClient.user.setUsername(channel.name).then(() => {
+                        botClient.user.lastChangeTime = Date.now();
+                    }).catch(() => {});
+                }
+            }
+
+            return {
+                ok: connected,
+                ready,
+                channel,
+                tokenObj: freshTokenObj,
+                reason: error?.message || (!ready ? 'no_lavalink_nodes' : null),
+            };
+        }
+
+        async function setConfiguredVoiceChannel(guild, channel, textChannelId, commandName, { renameToChannel = false } = {}) {
+            return setConfiguredVoiceChannelFor(TrueMusic, token, tokenObj, guild, channel, textChannelId, commandName, { renameToChannel });
+        }
+
+        function buildVoiceSelectEmbed(commandName, actor, selectedChannel = null, state = 'waiting', reason = null) {
+            const isSetup = commandName === 'setup';
+            const currentVoice = TrueMusic.guilds.cache
+                .map(guild => guild.members.cache.get(TrueMusic.user.id)?.voice?.channel)
+                .find(Boolean);
+            const titles = {
+                waiting: isSetup ? 'Setup Voice Room | اختيار روم الإعداد' : 'Join Voice Room | اختيار روم الدخول',
+                working: 'Connecting | جاري الاتصال',
+                success: isSetup ? 'Setup Complete | تم الإعداد' : 'Joined Voice | تم الدخول',
+                failed: 'Voice Setup Failed | فشل ضبط الروم',
+                expired: 'Voice Selection Expired | انتهى اختيار الروم',
+                skipped: 'Voice Selection Skipped | تم تخطي البوت',
+                cancelled: 'Voice Selection Cancelled | تم إلغاء الاختيار',
+            };
+            const statusLine = {
+                waiting: '*اختر روم صوت من المنيو بالأسفل لأنك لست داخل روم صوتي.*',
+                working: '*جاري حفظ الروم ومحاولة إدخال البوت...*',
+                success: '*تم حفظ الروم وتحديث حالة البوت بنجاح.*',
+                failed: '*تعذر إدخال البوت الآن، تم حفظ الاختيار إذا أمكن.*',
+                expired: '*انتهى وقت المنيو بدون اختيار روم.*',
+                skipped: '*تم تخطي هذا البوت بدون تغيير رومه الحالي.*',
+                cancelled: '*تم إلغاء العملية بدون تغيير روم البوت.*',
+            }[state] || '*بانتظار الاختيار.*';
+
+            return new EmbedBuilder()
+                .setColor(getEmbedColor(TrueMusic))
+                .setAuthor({
+                    name: TrueMusic.user?.username || 'Music Bot',
+                    iconURL: TrueMusic.user?.displayAvatarURL?.({ dynamic: true }),
+                })
+                .setTitle(titles[state] || titles.waiting)
+                .setDescription([
+                    statusLine,
+                    '',
+                    `**Bot :** <@${TrueMusic.user.id}>`,
+                    `**Request By :** <@${actor.id}>`,
+                    `**Command :** \`${commandName}\``,
+                    `**Current Voice :** ${currentVoice ? `<#${currentVoice.id}>` : '`Not Connected`'}`,
+                    `**Voice :** ${selectedChannel ? `<#${selectedChannel.id}>` : '`Not Selected`'}`,
+                    reason ? `**Note :** \`${String(reason).slice(0, 120)}\`` : null,
+                ].filter(Boolean).join('\n'))
+                .setFooter({ text: 'Searchable voice menu • يدعم البحث داخل قائمة الرومات' });
+        }
+
+        async function promptVoiceChannelSelection(message, commandName, { renameToChannel = false } = {}) {
+            const customId = `voice_select:${TrueMusic.user.id}:${message.id}:${commandName}`;
+            const selectRow = new ActionRowBuilder().addComponents(
+                new ChannelSelectMenuBuilder()
+                    .setCustomId(customId)
+                    .setPlaceholder(`Select voice room for ${TrueMusic.user?.username || 'bot'} | اختر روم صوت`)
+                    .setChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
+                    .setMinValues(1)
+                    .setMaxValues(1),
+            );
+            const controlsRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`voice_select_skip:${TrueMusic.user.id}:${message.id}:${commandName}`)
+                    .setLabel('Skip Bot')
+                    .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.skip, TrueMusic, '⏭️'))
+                    .setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder()
+                    .setCustomId(`voice_select_cancel:${TrueMusic.user.id}:${message.id}:${commandName}`)
+                    .setLabel('Cancel')
+                    .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.stop, TrueMusic, '✖️'))
+                    .setStyle(ButtonStyle.Danger),
+            );
+
+            const panel = await message.reply({
+                embeds: [buildVoiceSelectEmbed(commandName, message.author)],
+                components: [selectRow, controlsRow],
+                allowedMentions: { users: [message.author.id, TrueMusic.user.id], repliedUser: false },
+            }).catch(() => null);
+            if (!panel) return;
+
+            const collector = panel.createMessageComponentCollector({
+                filter: i => i.user.id === message.author.id
+                    && [customId, `voice_select_skip:${TrueMusic.user.id}:${message.id}:${commandName}`, `voice_select_cancel:${TrueMusic.user.id}:${message.id}:${commandName}`].includes(i.customId),
+                time: 90_000,
+                max: 1,
+            });
+
+            collector.on('collect', async (interaction) => {
+                if (interaction.customId.startsWith('voice_select_skip:')) {
+                    return interaction.update({
+                        embeds: [buildVoiceSelectEmbed(commandName, message.author, null, 'skipped')],
+                        components: [],
+                    }).catch(() => {});
+                }
+                if (interaction.customId.startsWith('voice_select_cancel:')) {
+                    return interaction.update({
+                        embeds: [buildVoiceSelectEmbed(commandName, message.author, null, 'cancelled', 'cancelled by user')],
+                        components: [],
+                    }).catch(() => {});
+                }
+                const channelId = interaction.values?.[0];
+                const channel = message.guild.channels.cache.get(channelId)
+                    || await message.guild.channels.fetch(channelId).catch(() => null);
+                if (!isSupportedVoiceTarget(channel)) {
+                    return interaction.update({
+                        embeds: [buildVoiceSelectEmbed(commandName, message.author, null, 'failed', 'invalid voice channel')],
+                        components: [],
+                    }).catch(() => {});
+                }
+                const validation = await validateBotVoiceChannel(TrueMusic, message.guild, channel);
+                if (!validation.ok) {
+                    return interaction.update({
+                        embeds: [buildVoiceSelectEmbed(commandName, message.author, channel, 'failed', validation.reason)],
+                        components: [],
+                    }).catch(() => {});
+                }
+
+                await interaction.update({
+                    embeds: [buildVoiceSelectEmbed(commandName, message.author, channel, 'working')],
+                    components: [],
+                }).catch(() => {});
+
+                const result = await setConfiguredVoiceChannel(message.guild, channel, message.channel.id, commandName, { renameToChannel });
+                await panel.edit({
+                    embeds: [buildVoiceSelectEmbed(commandName, message.author, channel, result.ok ? 'success' : 'failed', result.reason)],
+                    components: [],
+                    allowedMentions: { users: [message.author.id, TrueMusic.user.id], repliedUser: false },
+                }).catch(() => {});
+            });
+
+            collector.on('end', async (collected) => {
+                if (collected.size) return;
+                await panel.edit({
+                    embeds: [buildVoiceSelectEmbed(commandName, message.author, null, 'expired')],
+                    components: [],
+                    allowedMentions: { users: [message.author.id, TrueMusic.user.id], repliedUser: false },
+                }).catch(() => {});
+            });
+        }
+
+        function isSameVoiceAsThisBot(message) {
+            const memberVoiceId = message.member?.voice?.channelId;
+            const botVoiceId = message.guild?.members?.cache?.get(TrueMusic.user.id)?.voice?.channelId
+                || message.guild?.members?.me?.voice?.channelId;
+            return !!(memberVoiceId && botVoiceId && memberVoiceId === botVoiceId);
+        }
+
+        function markVoiceScopedUtilityHandled(message, name) {
+            if (!global._voiceScopedUtilityMsgIds) global._voiceScopedUtilityMsgIds = new Map();
+            const key = `${message.id}:${String(name || '').toLowerCase()}`;
+            if (global._voiceScopedUtilityMsgIds.has(key)) return false;
+            global._voiceScopedUtilityMsgIds.set(key, TrueMusic.user.id);
+            setTimeout(() => global._voiceScopedUtilityMsgIds?.delete(key), 30_000).unref?.();
+            return true;
+        }
+
+        function claimVoiceScopedUtility(message, name) {
+            if (!isSameVoiceAsThisBot(message)) return false;
+            return markVoiceScopedUtilityHandled(message, name);
+        }
+
+        async function sendFullHelpPanel(message, tokenObj) {
+            const botOwnerId = tokenObj.client;
+            const embedColor = getEmbedColor(TrueMusic);
+            const avatarUrl = message.author.displayAvatarURL({ dynamic: true, size: 256 });
+
+            const EN_DESC = [
+                '***Music Commands :***',
+                '',
+                '``play`` : Play a song or add it to the queue',
+                '``search`` : Search across the enabled music platforms',
+                '``autoplay`` : Toggle auto music player',
+                '``stop`` : Stop the music and clear playback',
+                '``skip`` : Skip the current song',
+                '``volume`` : Set the music volume',
+                '``nowplaying`` : Show the song playing now',
+                '``info`` : Show bot and subscription details',
+                '``queue`` : Show the server playlist',
+                '``loop`` : Loop the current song',
+                '``pause`` : Pause the music',
+                '``seek`` : Seek to a specific time',
+                '``forward`` : Move forward in the current song',
+                '``remove`` : Remove a song from the queue',
+                '``mylikes`` : Show your liked songs',
+                '',
+                '***Owner Commands :***',
+                '',
+                '``join`` : Set bot voice channel & enable 24/7',
+                '``join all`` : Set every subscription bot voice channel',
+                '``setup`` : Set bot voice channel, enable 24/7, and rename bot',
+                '``setup all`` : Setup every subscription bot',
+                '``leave`` : Leave voice channel & disable 24/7',
+                '``setchat`` : Set commands chat',
+                '``unchat`` : Clear commands chat',
+                '``setprefix`` : Change the bot prefix',
+                '``unsetprefix`` : Remove the bot prefix',
+                '``settings`` : Display subscription bot settings',
+                '``setname`` : Change the bot name',
+                '``setavatar`` : Change the bot avatar',
+                '``streaming`` : Change the bot status',
+                '``restart`` : Restart the bot',
+                '``ping`` : Show bot response speed',
+            ].join('\n');
+
+            const AR_DESC = [
+                '***أوامر الموسيقى :***',
+                '',
+                '``play`` : شغّل أغنية أو أضفها للقائمة',
+                '``search`` : ابحث في منصات الموسيقى المفعّلة',
+                '``autoplay`` : تشغيل/إيقاف التشغيل التلقائي',
+                '``stop`` : أوقف الموسيقى وامسح التشغيل',
+                '``skip`` : تخطّ الأغنية الحالية',
+                '``volume`` : اضبط مستوى الصوت',
+                '``nowplaying`` : اعرض الأغنية التي تعمل الآن',
+                '``info`` : اعرض معلومات البوت والاشتراك',
+                '``queue`` : اعرض قائمة الانتظار',
+                '``loop`` : كرّر الأغنية الحالية',
+                '``pause`` : وقّف الموسيقى مؤقتاً',
+                '``seek`` : اذهب لوقت محدد في الأغنية',
+                '``forward`` : تقدّم للأمام في الأغنية الحالية',
+                '``remove`` : احذف أغنية من القائمة',
+                '``mylikes`` : اعرض أغانيك المفضّلة',
+                '',
+                '***أوامر المالك :***',
+                '',
+                '``join`` : حدّد قناة الصوت وفعّل 24/7',
+                '``join all`` : حدّد روم كل بوتات الاشتراك',
+                '``setup`` : حدّد الروم وفعّل 24/7 وغيّر اسم البوت',
+                '``setup all`` : إعداد جماعي لكل بوتات الاشتراك',
+                '``leave`` : اخرج من القناة وأوقف 24/7',
+                '``setchat`` : حدّد قناة الأوامر',
+                '``unchat`` : امسح قناة الأوامر',
+                '``setprefix`` : غيّر البادئة',
+                '``unsetprefix`` : احذف البادئة',
+                '``settings`` : اعرض إعدادات البوت',
+                '``setname`` : غيّر اسم البوت',
+                '``setavatar`` : غيّر صورة البوت',
+                '``streaming`` : غيّر حالة البوت',
+                '``restart`` : أعد تشغيل البوت',
+                '``ping`` : اعرض سرعة استجابة البوت',
+            ].join('\n');
+
+            const buildHelpRow = (isArabic) => new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setLabel('Support Server')
+                    .setStyle(ButtonStyle.Link)
+                    .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.settings, TrueMusic, '⚙️'))
+                    .setURL('https://discord.gg/ens'),
+                new ButtonBuilder()
+                    .setCustomId('help_translate')
+                    .setLabel(isArabic ? 'English' : 'عربي')
+                    .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.smartSearch, TrueMusic, '🌐'))
+                    .setStyle(ButtonStyle.Secondary),
+            );
+
+            const buildHelpEmbed = (isArabic) => new EmbedBuilder()
+                .setColor(embedColor)
+                .setThumbnail(avatarUrl)
+                .setDescription(isArabic ? AR_DESC : EN_DESC);
+
+            const additionalEmbed = new EmbedBuilder()
+                .setColor(embedColor)
+                .setDescription(`**Bot :** <@${TrueMusic.user.id}>\n**Owner :** <@${botOwnerId}>\n**Owner ID :** \`${botOwnerId}\``);
+
+            return message.author.send({
+                embeds: [buildHelpEmbed(false), additionalEmbed],
+                components: [buildHelpRow(false)],
+                allowedMentions: { users: [TrueMusic.user.id, botOwnerId].filter(Boolean) },
+            }).then(async (dmMsg) => {
+                const helpdma = new EmbedBuilder()
+                    .setColor(embedColor)
+                    .setDescription('> **تم إرسال الاوامر في الخاص.**')
+                    .setFooter({ text: 'Ens 𝐒𝐭𝐨𝐫𝐞' });
+                message.reply({ embeds: [helpdma], allowedMentions: { repliedUser: false } }).catch(() => 0);
+
+                let isArabic = false;
+                const collector = dmMsg.createMessageComponentCollector({
+                    filter: i => i.customId === 'help_translate' && i.user.id === message.author.id,
+                    time: 10 * 60 * 1000,
+                });
+                collector.on('collect', async i => {
+                    isArabic = !isArabic;
+                    await i.update({
+                        embeds: [buildHelpEmbed(isArabic), additionalEmbed],
+                        components: [buildHelpRow(isArabic)],
+                    }).catch(() => {});
+                });
+            }).catch(() => {
+                message.react('🔒').catch(() => 0);
+            });
+        }
+
+        function subscriptionVoiceTargets(message, allTokens, baseTokenObj) {
+            const sameCode = String(baseTokenObj?.code || '');
+            const sameClient = String(baseTokenObj?.client || '');
+            const sameServer = String(baseTokenObj?.Server || '');
+            return allTokens
+                .filter(t => t?.token && (
+                    (sameCode && t.code === sameCode)
+                    || (!sameCode && sameClient && t.client === sameClient && (!sameServer || t.Server === sameServer))
+                ))
+                .map(t => ({ token: t.token, tokenObj: t, bot: runningBots.get(t.token) }))
+                .filter(t => t.bot?.user && t.bot.guilds.cache.has(message.guild.id));
+        }
+
+        async function prepareVoiceTargets(message, targets) {
+            const guild = message.guild;
+            const prepared = await Promise.all((targets || []).map(async (target, originalIndex) => {
+                const bot = target?.bot;
+                if (!bot?.user?.id || !target?.token) return null;
+                if (!bot.guilds.cache.has(guild.id)) return null;
+                const member = guild.members.cache.get(bot.user.id)
+                    || await guild.members.fetch(bot.user.id).catch(() => null);
+                if (!member) return null;
+                return {
+                    ...target,
+                    originalIndex,
+                    member,
+                    currentVoice: member.voice?.channel || null,
+                    currentVoiceId: member.voice?.channelId || null,
+                    ready: !!bot.readyAt,
+                    poruReady: !!bot.poru?.leastUsedNodes?.length,
+                };
+            }));
+
+            return prepared
+                .filter(Boolean)
+                .sort((a, b) => {
+                    const aInVoice = a.currentVoiceId ? 1 : 0;
+                    const bInVoice = b.currentVoiceId ? 1 : 0;
+                    if (aInVoice !== bInVoice) return aInVoice - bInVoice;
+                    return (a.originalIndex || 0) - (b.originalIndex || 0);
+                });
+        }
+
+        function buildAllVoiceEmbed(commandName, actor, targets, state, lines = [], activeIndex = -1) {
+            const status = {
+                choose: 'اختر هل تريد إدخال كل البوتات في رومك الحالي أو فتح منيو لكل بوت.',
+                selecting: 'اختر روم الصوت للبوت المحدد. سيتم الانتقال للبوت التالي تلقائياً.',
+                working: 'جاري تطبيق الإعداد على البوتات المحددة...',
+                success: 'اكتمل ضبط رومات البوتات.',
+                cancelled: 'تم إلغاء العملية وإغلاق القائمة.',
+                expired: 'انتهى وقت القائمة وتم إغلاقها.',
+            }[state] || 'بانتظار الاختيار.';
+
+            const activeTarget = activeIndex >= 0 ? targets[activeIndex] : null;
+            const summary = targets.reduce((acc, target) => {
+                if (target.skipped) acc.skipped++;
+                else if (target.result?.ok) acc.done++;
+                else if (target.currentVoiceId) acc.inVoice++;
+                else acc.outVoice++;
+                return acc;
+            }, { outVoice: 0, inVoice: 0, done: 0, skipped: 0 });
+            const compactTargets = targets
+                .map((target, index) => ({ target, index }))
+                .filter(({ index }) => index === activeIndex || targets.length <= 8)
+                .slice(0, 8);
+            const targetLines = compactTargets.map(({ target, index }) => {
+                const marker = index === activeIndex ? '➜' : `${index + 1}.`;
+                const currentVoice = target.currentVoice;
+                const currentText = currentVoice ? ` | Now: <#${currentVoice.id}>` : ' | Now: `Not Connected`';
+                const selectedText = target.skipped ? ' | `Skipped`' : (target.channel ? ` → <#${target.channel.id}>` : '');
+                return `${marker} <@${target.bot.user.id}>${currentText}${selectedText}`;
+            });
+            if (targets.length > compactTargets.length) {
+                targetLines.push(`… +${targets.length - compactTargets.length} bots hidden to keep embed safe`);
+            }
+
+            return new EmbedBuilder()
+                .setColor(getEmbedColor(TrueMusic))
+                .setTitle(`${commandName === 'setup' ? 'Setup All' : 'Join All'} | كل بوتات الاشتراك`)
+                .setDescription([
+                    `**Status :** ${status}`,
+                    `**Request By :** <@${actor.id}>`,
+                    `**Bots :** \`${targets.length}\``,
+                    `**Summary :** خارج الفويس \`${summary.outVoice}\` • داخل الفويس \`${summary.inVoice}\` • تم \`${summary.done}\` • تخطي \`${summary.skipped}\``,
+                    activeTarget ? [
+                        '',
+                        '**Current Turn :**',
+                        `**Bot :** <@${activeTarget.bot.user.id}>`,
+                        `**Current Voice :** ${activeTarget.currentVoice ? `<#${activeTarget.currentVoice.id}>` : '`Not Connected`'}`,
+                        `**Poru :** \`${activeTarget.poruReady ? 'Ready' : 'Waiting'}\``,
+                    ].join('\n') : null,
+                    '',
+                    targetLines.join('\n') || '`No bots found`',
+                    lines.length ? `\n**Log :**\n${lines.slice(-8).join('\n')}` : null,
+                ].filter(Boolean).join('\n'));
+        }
+
+        function allVoiceChoiceRows(messageId, commandName) {
+            return [
+                new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(`voice_all_same:${messageId}:${commandName}`)
+                        .setLabel('كلهم في رومي')
+                        .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.stg.rooms, TrueMusic, '🔊'))
+                        .setStyle(ButtonStyle.Success),
+                    new ButtonBuilder()
+                        .setCustomId(`voice_all_menu:${messageId}:${commandName}`)
+                        .setLabel('فتح منيو لكل بوت')
+                        .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.smartSearch, TrueMusic, '🔎'))
+                        .setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder()
+                        .setCustomId(`voice_all_cancel:${messageId}:${commandName}`)
+                        .setLabel('Cancel')
+                        .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.stop, TrueMusic, '✖️'))
+                        .setStyle(ButtonStyle.Danger),
+                ),
+            ];
+        }
+
+        function allVoiceSelectRows(messageId, commandName, botId) {
+            return [
+                new ActionRowBuilder().addComponents(
+                    new ChannelSelectMenuBuilder()
+                        .setCustomId(`voice_all_select:${messageId}:${commandName}:${botId}`)
+                        .setPlaceholder('اختر روم الصوت لهذا البوت')
+                        .setChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
+                        .setMinValues(1)
+                        .setMaxValues(1),
+                ),
+                new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(`voice_all_skip:${messageId}:${commandName}:${botId}`)
+                        .setLabel('Skip Bot')
+                        .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.skip, TrueMusic, '⏭️'))
+                        .setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder()
+                        .setCustomId(`voice_all_cancel:${messageId}:${commandName}`)
+                        .setLabel('Cancel')
+                        .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.stop, TrueMusic, '✖️'))
+                        .setStyle(ButtonStyle.Danger),
+                ),
+            ];
+        }
+
+        async function applyAllVoiceTargets(message, commandName, targets, channelForTarget, panel, logLines = []) {
+            await panel.edit({
+                embeds: [buildAllVoiceEmbed(commandName, message.author, targets, 'working', logLines)],
+                components: [],
+                allowedMentions: { users: [message.author.id], repliedUser: false },
+            }).catch(() => {});
+
+            for (const target of targets) {
+                if (target.skipped) {
+                    logLines.push(`⏭️ ${target.bot.user.username} skipped`);
+                    continue;
+                }
+                const targetChannel = typeof channelForTarget === 'function' ? channelForTarget(target) : channelForTarget;
+                if (!targetChannel) {
+                    logLines.push(`⏭️ ${target.bot.user.username} skipped`);
+                    continue;
+                }
+                const result = await setConfiguredVoiceChannelFor(
+                    target.bot,
+                    target.token,
+                    target.tokenObj,
+                    message.guild,
+                    targetChannel,
+                    message.channel.id,
+                    commandName,
+                    { renameToChannel: commandName === 'setup' },
+                );
+                target.channel = targetChannel;
+                target.result = result;
+                if (result.ok) {
+                    target.currentVoice = targetChannel;
+                    target.currentVoiceId = targetChannel.id;
+                }
+                logLines.push(`${result.ok ? '✅' : '❌'} ${target.bot.user.username} → ${targetChannel?.name || targetChannel?.id || 'Unknown'}${result.ok ? '' : ` (${result.reason || 'failed'})`}`);
+                await panel.edit({
+                    embeds: [buildAllVoiceEmbed(commandName, message.author, targets, 'working', logLines)],
+                    components: [],
+                    allowedMentions: { users: [message.author.id], repliedUser: false },
+                }).catch(() => {});
+            }
+
+            await panel.edit({
+                embeds: [buildAllVoiceEmbed(commandName, message.author, targets, 'success', logLines)],
+                components: [],
+                allowedMentions: { users: [message.author.id], repliedUser: false },
+            }).catch(() => {});
+        }
+
+        async function promptAllVoiceSelection(message, commandName, targets) {
+            const panel = await message.reply({
+                embeds: [buildAllVoiceEmbed(commandName, message.author, targets, 'selecting', [], 0)],
+                components: allVoiceSelectRows(message.id, commandName, targets[0].bot.user.id),
+                allowedMentions: { users: [message.author.id], repliedUser: false },
+            }).catch(() => null);
+            if (!panel) return;
+
+            let index = 0;
+            const logLines = [];
+            const collector = panel.createMessageComponentCollector({
+                filter: i => i.user.id === message.author.id && i.customId.includes(`:${message.id}:${commandName}`),
+                time: 180_000,
+            });
+
+            collector.on('collect', async (interaction) => {
+                if (interaction.customId.startsWith('voice_all_cancel:')) {
+                    collector.stop('cancelled');
+                    return interaction.update({
+                        embeds: [buildAllVoiceEmbed(commandName, message.author, targets, 'cancelled', logLines, index)],
+                        components: [],
+                    }).catch(() => {});
+                }
+
+                const target = targets[index];
+                if (interaction.customId.startsWith('voice_all_skip:')) {
+                    if (target) target.skipped = true;
+                    logLines.push(`⏭️ ${target?.bot?.user?.username || `Bot ${index + 1}`} skipped`);
+                    index++;
+                    if (index >= targets.length) {
+                        await interaction.update({
+                            embeds: [buildAllVoiceEmbed(commandName, message.author, targets, 'working', logLines)],
+                            components: [],
+                        }).catch(() => {});
+                        collector.stop('selected');
+                        return applyAllVoiceTargets(message, commandName, targets, t => t.channel, panel, logLines);
+                    }
+                    return interaction.update({
+                        embeds: [buildAllVoiceEmbed(commandName, message.author, targets, 'selecting', logLines, index)],
+                        components: allVoiceSelectRows(message.id, commandName, targets[index].bot.user.id),
+                    }).catch(() => {});
+                }
+                const channelId = interaction.values?.[0];
+                const channel = message.guild.channels.cache.get(channelId)
+                    || await message.guild.channels.fetch(channelId).catch(() => null);
+                if (!target || !isSupportedVoiceTarget(channel)) {
+                    return interaction.reply({ content: 'روم الصوت غير صحيح.', ephemeral: true }).catch(() => {});
+                }
+                const validation = await validateBotVoiceChannel(target.bot, message.guild, channel);
+                if (!validation.ok) {
+                    return interaction.reply({ content: `تعذر اختيار الروم لهذا البوت: ${validation.reason}`, ephemeral: true }).catch(() => {});
+                }
+
+                target.channel = channel;
+                index++;
+                if (index >= targets.length) {
+                    await interaction.update({
+                        embeds: [buildAllVoiceEmbed(commandName, message.author, targets, 'working', logLines)],
+                        components: [],
+                    }).catch(() => {});
+                    collector.stop('selected');
+                    return applyAllVoiceTargets(message, commandName, targets, t => t.channel, panel, logLines);
+                }
+
+                await interaction.update({
+                    embeds: [buildAllVoiceEmbed(commandName, message.author, targets, 'selecting', logLines, index)],
+                    components: allVoiceSelectRows(message.id, commandName, targets[index].bot.user.id),
+                }).catch(() => {});
+            });
+
+            collector.on('end', async (_collected, reason) => {
+                if (['selected', 'cancelled'].includes(reason)) return;
+                await panel.edit({
+                    embeds: [buildAllVoiceEmbed(commandName, message.author, targets, 'expired', logLines, index)],
+                    components: [],
+                    allowedMentions: { users: [message.author.id], repliedUser: false },
+                }).catch(() => {});
+            });
+        }
+
+        async function handleAllVoiceCommand(message, commandName, allTokens, targetOverride = null, lockSuffix = 'all') {
+            if (!global._voiceAllHandledMsgIds) global._voiceAllHandledMsgIds = new Map();
+            const lockKey = `${message.id}:${tokenObj.code || tokenObj.client || token}:${lockSuffix}`;
+            if (global._voiceAllHandledMsgIds.has(lockKey)) return true;
+            global._voiceAllHandledMsgIds.set(lockKey, Date.now());
+            setTimeout(() => global._voiceAllHandledMsgIds?.delete(lockKey), 10 * 60 * 1000).unref?.();
+
+            const rawTargets = Array.isArray(targetOverride) ? targetOverride : subscriptionVoiceTargets(message, allTokens, tokenObj);
+            const targets = await prepareVoiceTargets(message, rawTargets);
+            if (!targets.length) {
+                message.reply({ embeds: [buildAllVoiceEmbed(commandName, message.author, [], 'expired', ['❌ لا توجد بوتات اشتراك شغالة.'])] }).catch(() => {});
+                return true;
+            }
+
+            const memberChannel = message.member?.voice?.channel;
+            if (!memberChannel) {
+                await promptAllVoiceSelection(message, commandName, targets);
+                return true;
+            }
+
+            const panel = await message.reply({
+                embeds: [buildAllVoiceEmbed(commandName, message.author, targets, 'choose')],
+                components: allVoiceChoiceRows(message.id, commandName),
+                allowedMentions: { users: [message.author.id], repliedUser: false },
+            }).catch(() => null);
+            if (!panel) return true;
+
+            const collector = panel.createMessageComponentCollector({
+                filter: i => i.user.id === message.author.id && i.customId.includes(`:${message.id}:${commandName}`),
+                time: 90_000,
+                max: 1,
+            });
+
+            collector.on('collect', async (interaction) => {
+                if (interaction.customId.startsWith('voice_all_cancel:')) {
+                    return interaction.update({
+                        embeds: [buildAllVoiceEmbed(commandName, message.author, targets, 'cancelled')],
+                        components: [],
+                    }).catch(() => {});
+                }
+
+                if (interaction.customId.startsWith('voice_all_same:')) {
+                    await interaction.update({
+                        embeds: [buildAllVoiceEmbed(commandName, message.author, targets, 'working', [`⏳ ${memberChannel.name}`])],
+                        components: [],
+                    }).catch(() => {});
+                    return applyAllVoiceTargets(message, commandName, targets, memberChannel, panel, [`⏳ تطبيق نفس الروم: ${memberChannel.name}`]);
+                }
+
+                if (interaction.customId.startsWith('voice_all_menu:')) {
+                    await interaction.update({
+                        embeds: [buildAllVoiceEmbed(commandName, message.author, targets, 'selecting', ['⏳ فتح قائمة اختيار الرومات...'], 0)],
+                        components: [],
+                    }).catch(() => {});
+                    await promptAllVoiceSelection(message, commandName, targets);
+                }
+            });
+
+            collector.on('end', async (collected) => {
+                if (collected.size) return;
+                await panel.edit({
+                    embeds: [buildAllVoiceEmbed(commandName, message.author, targets, 'expired')],
+                    components: [],
+                    allowedMentions: { users: [message.author.id], repliedUser: false },
+                }).catch(() => {});
+            });
+
+            return true;
         }
 
         async function restartCurrentTrack(player, reason = 'recover') {
@@ -3730,135 +4467,47 @@ module.exports = {
             if (args) {
                 const hasMention = args.includes(`<@!${TrueMusic.user.id}>`) || args.includes(`<@${TrueMusic.user.id}>`);
                 if (hasMention) {
-                    args = args.filter(arg => arg !== `<@!${TrueMusic.user.id}>` && arg !== `<@${TrueMusic.user.id}>`);
+                    args = args.filter(arg => {
+                        const mentionedId = String(arg || '').match(/^<@!?(\d{15,20})>$/)?.[1];
+                        if (!mentionedId) return true;
+                        return !runningBots.some(bot => bot.user?.id === mentionedId);
+                    });
 
                     if (!args[0]) return;
                     if (args[0] == 'help') {
-                        const botOwnerId = tokenObj.client;
-                        const embedColor = getEmbedColor(TrueMusic);
-                        const avatarUrl = message.author.displayAvatarURL({ dynamic: true, size: 256 });
-
-                        const EN_DESC = [
-                            '***Music Commands :***',
-                            '',
-                            '``play`` : Play a song or add it to the queue',
-                            '``search`` : Search across the enabled music platforms',
-                            '``autoplay`` : Toggle auto music player',
-                            '``stop`` : Stop the music and clear playback',
-                            '``skip`` : Skip the current song',
-                            '``volume`` : Set the music volume',
-                            '``nowplaying`` : Show the song playing now',
-                            '``info`` : Show bot and subscription details',
-                            '``queue`` : Show the server playlist',
-                            '``loop`` : Loop the current song',
-                            '``pause`` : Pause the music',
-                            '``seek`` : Seek to a specific time',
-                            '``forward`` : Move forward in the current song',
-                            '``remove`` : Remove a song from the queue',
-                            '``mylikes`` : Show your liked songs',
-                            '',
-                            '***Owner Commands :***',
-                            '',
-                            '``join`` : Set bot voice channel & enable 24/7',
-                            '``leave`` : Leave voice channel & disable 24/7',
-                            '``setchat`` : Set commands chat',
-                            '``unchat`` : Clear commands chat',
-                            '``setprefix`` : Change the bot prefix',
-                            '``unsetprefix`` : Remove the bot prefix',
-                            '``settings`` : Display subscription bot settings',
-                            '``setname`` : Change the bot name',
-                            '``setavatar`` : Change the bot avatar',
-                            '``streaming`` : Change the bot status',
-                            '``restart`` : Restart the bot',
-                            '``ping`` : Show bot response speed',
-                        ].join('\n');
-
-                        const AR_DESC = [
-                            '***أوامر الموسيقى :***',
-                            '',
-                            '``play`` : شغّل أغنية أو أضفها للقائمة',
-                            '``search`` : ابحث في منصات الموسيقى المفعّلة',
-                            '``autoplay`` : تشغيل/إيقاف التشغيل التلقائي',
-                            '``stop`` : أوقف الموسيقى وامسح التشغيل',
-                            '``skip`` : تخطّ الأغنية الحالية',
-                            '``volume`` : اضبط مستوى الصوت',
-                            '``nowplaying`` : اعرض الأغنية التي تعمل الآن',
-                            '``info`` : اعرض معلومات البوت والاشتراك',
-                            '``queue`` : اعرض قائمة الانتظار',
-                            '``loop`` : كرّر الأغنية الحالية',
-                            '``pause`` : وقّف الموسيقى مؤقتاً',
-                            '``seek`` : اذهب لوقت محدد في الأغنية',
-                            '``forward`` : تقدّم للأمام في الأغنية الحالية',
-                            '``remove`` : احذف أغنية من القائمة',
-                            '``mylikes`` : اعرض أغانيك المفضّلة',
-                            '',
-                            '***أوامر المالك :***',
-                            '',
-                            '``join`` : حدّد قناة الصوت وفعّل 24/7',
-                            '``leave`` : اخرج من القناة وأوقف 24/7',
-                            '``setchat`` : حدّد قناة الأوامر',
-                            '``unchat`` : امسح قناة الأوامر',
-                            '``setprefix`` : غيّر البادئة',
-                            '``unsetprefix`` : احذف البادئة',
-                            '``settings`` : اعرض إعدادات البوت',
-                            '``setname`` : غيّر اسم البوت',
-                            '``setavatar`` : غيّر صورة البوت',
-                            '``streaming`` : غيّر حالة البوت',
-                            '``restart`` : أعد تشغيل البوت',
-                            '``ping`` : اعرض سرعة استجابة البوت',
-                        ].join('\n');
-
-                        const buildHelpRow = (isArabic) => new ActionRowBuilder().addComponents(
-                            new ButtonBuilder()
-                                .setLabel('Support Server')
-                                .setStyle(ButtonStyle.Link)
-                                .setURL('https://discord.gg/ens'),
-                            new ButtonBuilder()
-                                .setCustomId('help_translate')
-                                .setLabel(isArabic ? '🌐 English' : '🌐 عربي')
-                                .setStyle(ButtonStyle.Secondary),
-                        );
-
-                        const buildHelpEmbed = (isArabic) => new EmbedBuilder()
-                            .setColor(embedColor)
-                            .setThumbnail(avatarUrl)
-                            .setDescription(isArabic ? AR_DESC : EN_DESC);
-
-                        const additionalEmbed = new EmbedBuilder()
-                            .setColor(embedColor)
-                            .setDescription(`**Owner :** <@${botOwnerId}>\n**Owner ID :** \`${botOwnerId}\``);
-
-                        message.author.send({
-                            embeds: [buildHelpEmbed(false), additionalEmbed],
-                            components: [buildHelpRow(false)],
-                        }).then(async (dmMsg) => {
-                            const helpdma = new EmbedBuilder()
-                                .setColor(embedColor)
-                                .setDescription(`> **تم إرسال الاوامر في الخاص.**`)
-                                .setFooter({ text: 'Ens 𝐒𝐭𝐨𝐫𝐞' });
-                            message.reply({ embeds: [helpdma] }).catch(() => 0);
-
-                            let isArabic = false;
-                            const collector = dmMsg.createMessageComponentCollector({
-                                filter: i => i.customId === 'help_translate' && i.user.id === message.author.id,
-                                time: 10 * 60 * 1000,
-                            });
-                            collector.on('collect', async i => {
-                                isArabic = !isArabic;
-                                await i.update({
-                                    embeds: [buildHelpEmbed(isArabic), additionalEmbed],
-                                    components: [buildHelpRow(isArabic)],
-                                }).catch(() => {});
-                            });
-                        }).catch(() => {
-                            message.react('🔒').catch(() => 0);
-                        });
+                        if (!markVoiceScopedUtilityHandled(message, 'help')) return;
+                        return sendFullHelpPanel(message, tokenObj);
                     }
 
 
                     if (!canControlSubscription(tokenObj, message.author.id)) {
                         return;
                     }
+                    const ownerCommandName = String(args[0] || '').toLowerCase();
+                    const isAllVoiceCommand = String(args[1] || '').toLowerCase() === 'all'
+                        && (ownerCommandName === 'setup'
+                            || ['join', 'come', 'setvc', 'ادخل', 'تعال'].includes(ownerCommandName));
+                    if (isAllVoiceCommand) {
+                        return handleAllVoiceCommand(message, ownerCommandName === 'setup' ? 'setup' : 'join', data);
+                    }
+                    const isVoiceCommand = ownerCommandName === 'setup'
+                        || ['join', 'come', 'setvc', 'ادخل', 'تعال'].includes(ownerCommandName);
+                    const mentionedBotIds = [...message.mentions.users.keys()]
+                        .filter(id => id !== message.author.id && runningBots.some(bot => bot.user?.id === id));
+                    if (isVoiceCommand && mentionedBotIds.length > 1) {
+                        const targets = data
+                            .filter(t => t?.token && t.code === tokenObj.code)
+                            .map(t => ({ token: t.token, tokenObj: t, bot: runningBots.get(t.token) }))
+                            .filter(t => t.bot?.user && mentionedBotIds.includes(t.bot.user.id) && t.bot.guilds.cache.has(message.guild.id));
+                        return handleAllVoiceCommand(
+                            message,
+                            ownerCommandName === 'setup' ? 'setup' : 'join',
+                            data,
+                            targets,
+                            `mentions:${mentionedBotIds.sort().join(',')}`,
+                        );
+                    }
+
                     if (args[0] == 'restart' || args[0] == 'اعاده') {
                         await TrueMusic.destroy()
                         setTimeout(async () => {
@@ -3921,84 +4570,30 @@ module.exports = {
                     }
                     else if (args[0] == 'setup') {
                         let channel = message.member.voice.channel;
-                        if (!channel) return;
+                        if (!channel) {
+                            return promptVoiceChannelSelection(message, 'setup', { renameToChannel: true });
+                        }
 
-                        data = data.map((tokenBot) => {
-                            if (tokenBot.token == token) {
-                                tokenBot.channel = channel.id;
-                            }
-                            return tokenBot;
-                        });
-                        store.set('tokens', data);
-
-                        // Connect to voice immediately before any slow name change
-                        try {
-                            const guild = message.guild;
-                            const existingPlayer = TrueMusic.poru?.players?.get(guild.id);
-                            if (existingPlayer) {
-                                if (!existingPlayer.isConnected || existingPlayer.voiceChannel !== channel.id) {
-                                    existingPlayer.setVoiceChannel(channel.id, { deaf: true, mute: false });
-                                }
-                            } else if (TrueMusic.poru) {
-                                await TrueMusic.poru.createConnection({
-                                    guildId: guild.id,
-                                    voiceChannel: channel.id,
-                                    textChannel: message.channel.id,
-                                    deaf: true,
-                                    group: token,
-                                });
-                            }
-                        } catch {}
-
-                        reactCustom(message, MUSIC_EMOJIS.settings, '✅');
-
-                        // Rename async (rate-limited by Discord, don't block the command)
-                        const cooldownTime = 5000;
-                        const lastChangeTime = TrueMusic.user.lastChangeTime || 0;
-                        if (Date.now() - lastChangeTime >= cooldownTime) {
-                            TrueMusic.user.setUsername(channel.name).then(() => {
-                                TrueMusic.user.lastChangeTime = Date.now();
-                            }).catch(() => {});
+                        const result = await setConfiguredVoiceChannel(message.guild, channel, message.channel.id, 'setup', { renameToChannel: true });
+                        if (result.ok) {
+                            reactCustom(message, MUSIC_EMOJIS.settings, '✅');
+                        } else {
+                            message.reply({ embeds: [buildVoiceSelectEmbed('setup', message.author, channel, 'failed', result.reason)] }).catch(() => {});
                         }
 
                     } else if (args[0] == 'join' || args[0] == 'come' || args[0] == 'setvc' || args[0] == 'ادخل' || args[0] == 'تعال') {
 
                         let channel = message.member.voice.channel;
-                        if (!channel) return;
+                        if (!channel) {
+                            return promptVoiceChannelSelection(message, 'join');
+                        }
 
-                        data = data.map((tokenBot) => {
-                            if (tokenBot.token == token) {
-                                tokenBot.channel = channel.id;
-                            }
-                            return tokenBot;
-                        });
-                        store.set('tokens', data);
-
-                        // ── Wait for Poru to be ready before connecting ───────────────
-                        // New bots may still be establishing their Lavalink connection.
-                        // Without this wait, createConnection throws "No nodes available".
-                        const poruReady = await waitForPoruReady(12_000);
-
-                        // Connect to voice immediately
-                        try {
-                            const guild = message.guild;
-                            const existingPlayer = TrueMusic.poru?.players?.get(guild.id);
-                            if (existingPlayer) {
-                                if (!existingPlayer.isConnected || existingPlayer.voiceChannel !== channel.id) {
-                                    existingPlayer.setVoiceChannel(channel.id, { deaf: true, mute: false });
-                                }
-                            } else if (TrueMusic.poru && poruReady) {
-                                await TrueMusic.poru.createConnection({
-                                    guildId: guild.id,
-                                    voiceChannel: channel.id,
-                                    textChannel: message.channel.id,
-                                    deaf: true,
-                                    group: token,
-                                });
-                            }
-                        } catch {}
-
-                        reactCustom(message, MUSIC_EMOJIS.settings, '✅');
+                        const result = await setConfiguredVoiceChannel(message.guild, channel, message.channel.id, 'join');
+                        if (result.ok) {
+                            reactCustom(message, MUSIC_EMOJIS.settings, '✅');
+                        } else {
+                            message.reply({ embeds: [buildVoiceSelectEmbed('join', message.author, channel, 'failed', result.reason)] }).catch(() => {});
+                        }
                     } else if (args[0] == 'setbanner' || args[0] == 'sb' || args[0] == 'بنر') {
                         const imageUrl = message.attachments.first()?.url || args[1];
                         if (!imageUrl) return reactCustom(message, MUSIC_EMOJIS.dislike, '❌');
@@ -4685,6 +5280,21 @@ module.exports = {
                     };
 
                             const subBotCommand = parseSubBotCommand();
+                            const rawPartsForUtility = message.content.trim().split(/ +/);
+                            const rawUtilityName = (rawPartsForUtility.shift() || '').toLowerCase();
+                            const voiceUtilityNames = ['help', 'مساعدة', 'اوامر', 'أوامر', 'info', 'botinfo', 'about', 'معلومات', 'معلومه', 'تفاصيل'];
+                            const voiceUtilityCommand = subBotCommand && voiceUtilityNames.includes(subBotCommand.name)
+                                ? subBotCommand
+                                : voiceUtilityNames.includes(rawUtilityName)
+                                    ? { name: rawUtilityName, args: rawPartsForUtility }
+                                    : null;
+                            if (voiceUtilityCommand) {
+                                const utilityType = ['help', 'مساعدة', 'اوامر', 'أوامر'].includes(voiceUtilityCommand.name) ? 'help' : 'info';
+                                if (!claimVoiceScopedUtility(message, utilityType)) return;
+                                if (utilityType === 'help') return sendFullHelpPanel(message, tokenObj);
+                                const embed = buildBotInfoEmbed(TrueMusic, tokenObj, message.guild.id);
+                                return message.reply({ embeds: [embed], allowedMentions: { users: [TrueMusic.user.id], repliedUser: false } }).catch(() => {});
+                            }
                             if (subBotCommand && ['set', 'settings', 'اعدادات', 'إعدادات'].includes(subBotCommand.name)) {
                                 // Only ONE bot per subscription per message should handle settings.
                                 // Use the message ID as a lock key stored in a module-level set.
@@ -4697,10 +5307,6 @@ module.exports = {
                                 const settingsCommand = require('./commands/Subscriptions/settings');
                                 return settingsCommand.execute(TrueMusic, message, subBotCommand.args);
                             }
-                                    if (subBotCommand && ['info', 'botinfo', 'about', 'معلومات', 'معلومه', 'تفاصيل'].includes(subBotCommand.name)) {
-                                        const embed = buildBotInfoEmbed(TrueMusic, tokenObj, message.guild.id);
-                                        return message.reply({ embeds: [embed] }).catch(() => {});
-                                    }
                                     const likesCommandNames = ['mylikes', 'likes', 'liked', 'لايكاتي'];
                                     const runMyLikesCommand = (args = []) => {
                                         // If this bot IS in a VC, the user must be in the same one.
