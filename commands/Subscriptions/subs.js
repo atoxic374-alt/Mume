@@ -444,10 +444,22 @@ async function handleAddTokens(interaction, client) {
   const rawTokens = sub.fields.getTextInputValue('tokens').trim().split('\n').map(t => t.trim()).filter(Boolean);
   if (rawTokens.length === 0) return sub.reply({ content: statusText('No tokens were provided.', 'لم يتم إدخال أي توكن.'), flags: MessageFlags.Ephemeral });
 
-  await sub.reply({ content: `**Checking Tokens**\nجاري التحقق من **${rawTokens.length}** توكن...`, flags: MessageFlags.Ephemeral });
+  const total = rawTokens.length;
+  const buildProgressText = (current, added, invalid, duplicate) => {
+    const pct = Math.round((current / Math.max(1, total)) * 12);
+    const bar = '▰'.repeat(pct) + '▱'.repeat(12 - pct);
+    return [
+      `**Checking Tokens | التحقق من التوكنات** \`${current}/${total}\``,
+      `\`[${bar}]\``,
+      `✅ Added: \`${added}\`  ❌ Invalid: \`${invalid}\`  ⏭️ Duplicate: \`${duplicate}\``,
+    ].join('\n');
+  };
+
+  await sub.reply({ content: buildProgressText(0, 0, 0, 0), flags: MessageFlags.Ephemeral });
 
   try {
     const validTokens = [];
+    let invalidCount = 0;
     let duplicateCount = 0;
     const known = new Set([
       ...((store.get('bots') || []).map(b => b.token)),
@@ -461,22 +473,30 @@ async function handleAddTokens(interaction, client) {
       assets = { avatarData: null, bannerData: null };
     }
 
-    for (const token of rawTokens) {
+    for (let idx = 0; idx < rawTokens.length; idx++) {
+      const token = rawTokens[idx];
+      await sub.editReply({ content: buildProgressText(idx, validTokens.length, invalidCount, duplicateCount) }).catch(() => {});
       try {
         if (known.has(token)) { duplicateCount++; continue; }
         await applyProfileToToken(token, { profile, assets, leaveGuilds: true });
         validTokens.push(token);
         known.add(token);
       } catch {
-        await sub.followUp({ content: `**Invalid Token**\nتوكن غير صالح: \`${token.slice(0, 20)}...\``, flags: MessageFlags.Ephemeral }).catch(() => {});
+        invalidCount++;
       }
     }
 
-    if (duplicateCount > 0 && validTokens.length === 0) {
-      return sub.followUp({ content: statusText(`All tokens already exist (${duplicateCount}).`, `جميع التوكنات موجودة مسبقاً (${duplicateCount}).`), flags: MessageFlags.Ephemeral }).catch(() => {});
-    }
+    const finalBar = '▰'.repeat(12);
+    const finalText = [
+      `**Done | اكتمل** \`${total}/${total}\``,
+      `\`[${finalBar}]\``,
+      `✅ Added: \`${validTokens.length}\`  ❌ Invalid: \`${invalidCount}\`  ⏭️ Duplicate: \`${duplicateCount}\``,
+    ].join('\n');
 
-    if (validTokens.length === 0) return sub.followUp({ content: statusText('No valid tokens found.', 'لا توجد توكنات صالحة.'), flags: MessageFlags.Ephemeral }).catch(() => {});
+    if (validTokens.length === 0) {
+      const reason = duplicateCount === total ? `جميع التوكنات موجودة مسبقاً.` : invalidCount === total ? `جميع التوكنات غير صالحة.` : `لا توجد توكنات صالحة جديدة.`;
+      return sub.editReply({ content: `${finalText}\n\n⚠️ ${reason}` }).catch(() => {});
+    }
 
     let bots = [...(store.get('bots') || [])];
     for (const token of validTokens) {
@@ -484,11 +504,10 @@ async function handleAddTokens(interaction, client) {
     }
     store.set('bots', bots);
 
-    const dupNote = duplicateCount > 0 ? ` (${duplicateCount} مكرر تم تجاهله)` : '';
-    await sub.followUp({ content: `**Bots Added**\nتم إضافة **${validTokens.length}** بوت وتطبيق الاسم والصورة والبنر على البوت والـ App.${dupNote}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+    await sub.editReply({ content: `${finalText}\n\n✅ **Bots Added | تمت الإضافة** — تم تطبيق الاسم والصورة والبنر على كل البوتات الجديدة.` }).catch(() => {});
   } catch (e) {
     console.error('[Subs] addTokens error:', e);
-    await sub.followUp({ content: statusText('An error occurred while processing tokens.', 'حدث خطأ أثناء معالجة التوكنات.'), flags: MessageFlags.Ephemeral }).catch(() => {});
+    await sub.editReply({ content: statusText('An error occurred while processing tokens.', 'حدث خطأ أثناء معالجة التوكنات.') }).catch(() => {});
   }
 }
 

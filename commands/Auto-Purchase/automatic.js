@@ -869,13 +869,24 @@ async function requestAddBots(interaction, code, count) {
   }).catch(() => {});
 }
 
-async function addTokensToStock(raw) {
+function buildTokenProgressText(current, total, added, invalid, duplicate) {
+  const pct = Math.round((current / Math.max(1, total)) * 12);
+  const bar = '▰'.repeat(pct) + '▱'.repeat(12 - pct);
+  return [
+    `**Checking Tokens | التحقق من التوكنات** \`${current}/${total}\``,
+    `\`[${bar}]\``,
+    `✅ Added: \`${added}\`  ❌ Invalid: \`${invalid}\`  ⏭️ Duplicate: \`${duplicate}\``,
+  ].join('\n');
+}
+
+async function addTokensToStock(raw, onProgress = null) {
   const inputTokens = String(raw || '')
     .split(/[\s,]+/)
     .map(t => t.trim())
     .filter(Boolean);
   if (!inputTokens.length) return { added: 0, invalid: 0, duplicate: 0 };
 
+  const total = inputTokens.length;
   const bots = store.get('bots') || [];
   const tokens = store.get('tokens') || [];
   const known = new Set([...bots.map(b => b.token), ...tokens.map(t => t.token)].filter(Boolean));
@@ -890,7 +901,9 @@ async function addTokensToStock(raw) {
   } catch {
     assets = { avatarData: null, bannerData: null };
   }
-  for (const token of inputTokens) {
+  for (let idx = 0; idx < inputTokens.length; idx++) {
+    const token = inputTokens[idx];
+    if (onProgress) await onProgress(idx, total, added, invalid, duplicate).catch(() => {});
     if (known.has(token)) {
       duplicate++;
       continue;
@@ -906,6 +919,7 @@ async function addTokensToStock(raw) {
     added++;
   }
   store.set('bots', bots);
+  if (onProgress) await onProgress(total, total, added, invalid, duplicate).catch(() => {});
   return { added, invalid, duplicate };
 }
 
@@ -1911,30 +1925,46 @@ async function handleProfileAction(interaction, action) {
 
             if (stockBots.length === 0) return interaction.reply({ content: '**Apply :** *لا توجد بوتات حرة في الستوك (كلهم في اشتراكات).*', flags: MessageFlags.Ephemeral });
         
-            const secs = stockBots.length * 5;
-            const timeStr = `${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, '0')}`;
-            await interaction.reply({ content: `**Apply :** *جاري تطبيق الإعدادات على \`${stockBots.length}\` بوت حر في الستوك — الوقت المتوقع ~${timeStr} دقيقة.*`, flags: MessageFlags.Ephemeral });
-        
+            const totalApply = stockBots.length;
+            const buildApplyProgress = (cur, success, fail) => {
+              const pct = Math.round((cur / Math.max(1, totalApply)) * 12);
+              const bar = '▰'.repeat(pct) + '▱'.repeat(12 - pct);
+              return [
+                `**Applying Profile | تطبيق الإعدادات** \`${cur}/${totalApply}\``,
+                `\`[${bar}]\``,
+                `✅ Done: \`${success}\`  ❌ Failed: \`${fail}\``,
+              ].join('\n');
+            };
+            await interaction.reply({ content: buildApplyProgress(0, 0, 0), flags: MessageFlags.Ephemeral });
+
             await ensureProfileImagesLocal().catch(() => {});
             const profile = subBotProfile();
-    let assets = null;
-    try {
-      assets = await resolveProfileAssets(profile);
-    } catch {
-      assets = { avatarData: null, bannerData: null };
-    }
-    let done = 0;
-    let failed = 0;
-    for (const bot of stockBots) {
-      try {
-        await applyProfileToToken(bot.token, profile, { assets });
-        done++;
-      } catch {
-        failed++;
-      }
-      await new Promise(r => setTimeout(r, 5000));
-    }
-    return interaction.followUp({ content: `**Apply Done | تم التطبيق**\nSuccess: \`${done}\`\nFailed: \`${failed}\`\nالبوتات الموجودة داخل اشتراكات لم يتم تعديلها.`, flags: MessageFlags.Ephemeral }).catch(() => {});
+            let assets = null;
+            try {
+              assets = await resolveProfileAssets(profile);
+            } catch {
+              assets = { avatarData: null, bannerData: null };
+            }
+            let done = 0;
+            let failed = 0;
+            for (let i = 0; i < stockBots.length; i++) {
+              const bot = stockBots[i];
+              await interaction.editReply({ content: buildApplyProgress(i, done, failed) }).catch(() => {});
+              try {
+                await applyProfileToToken(bot.token, profile, { assets });
+                done++;
+              } catch {
+                failed++;
+              }
+              await new Promise(r => setTimeout(r, 5000));
+            }
+            const finalApplyBar = '▰'.repeat(12);
+            return interaction.editReply({ content: [
+              `**Apply Done | تم التطبيق** \`${totalApply}/${totalApply}\``,
+              `\`[${finalApplyBar}]\``,
+              `✅ Done: \`${done}\`  ❌ Failed: \`${failed}\``,
+              `\n*البوتات الموجودة داخل اشتراكات لم يتم تعديلها.*`,
+            ].join('\n') }).catch(() => {});
   }
 }
 
@@ -2299,16 +2329,21 @@ async function handleInteraction(interaction) {
         time: 120000,
       }).catch(() => null);
       if (!submit) return;
-      const result = await addTokensToStock(submit.fields.getTextInputValue('tokens'));
+      const rawInput = submit.fields.getTextInputValue('tokens');
+      const totalCount = String(rawInput || '').split(/[\s,]+/).map(t => t.trim()).filter(Boolean).length;
+      await submit.reply({ content: buildTokenProgressText(0, totalCount, 0, 0, 0), flags: MessageFlags.Ephemeral });
+      const result = await addTokensToStock(rawInput, (cur, tot, a, inv, dup) =>
+        submit.editReply({ content: buildTokenProgressText(cur, tot, a, inv, dup) })
+      );
       const req = readRequests().find(item => item.id === reqId);
-      await submit.reply({
-        content: [
-          `**Stock :** *تم إضافة \`${result.added}\` توكن للمخزون.*`,
-          `**Invalid :** *\`${result.invalid}\`*`,
-          `**Duplicate :** *\`${result.duplicate}\`*`,
-        ].join('\n'),
-        flags: MessageFlags.Ephemeral,
-      });
+      const finalBar = '▰'.repeat(12);
+      const finalSummary = [
+        `**Done | اكتمل** \`${totalCount}/${totalCount}\``,
+        `\`[${finalBar}]\``,
+        `✅ Added: \`${result.added}\`  ❌ Invalid: \`${result.invalid}\`  ⏭️ Duplicate: \`${result.duplicate}\``,
+        result.added > 0 ? `\n✅ **تمت إضافة \`${result.added}\` توكن للمخزون.**` : `\n⚠️ لم يُضف أي توكن.`,
+      ].join('\n');
+      await submit.editReply({ content: finalSummary }).catch(() => {});
       if (req) {
         await interaction.message.edit({
           embeds: [buildAddBotsRequestEmbed(interaction.client, req)],
