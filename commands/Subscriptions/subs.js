@@ -281,7 +281,7 @@ async function handleRemoveSub(interaction, client) {
       if (j.customId === `sr_cancel_${mid}`) { await j.update({ content: statusText('Cancelled.', 'تم الإلغاء.'), embeds: [], components: [] }); return coll2.stop(); }
       if (j.customId === `sr_confirm_${code}_${mid}`) {
         await j.update({ content: null, embeds: [basePanelEmbed(client, 'Removing... | جاري الحذف')], components: [] }); coll2.stop();
-        await executeRemoval(code, interaction, client);
+        await executeRemoval(code, j, client);
       }
     });
   });
@@ -382,12 +382,12 @@ async function handleAddTime(interaction, client) {
           const dur = ms(durStr);
           if (!dur || dur <= 0) return s2.reply({ content: statusText('Invalid time.', 'الوقت غير صحيح.'), flags: MessageFlags.Ephemeral });
           await s2.update({ content: null, embeds: [basePanelEmbed(client, 'Processing... | جاري المعالجة')], components: [] }); coll2.stop();
-          await executeAddTime(code, dur, durStr, interaction, client);
+          await executeAddTime(code, dur, durStr, s2, client);
         } catch {}
       } else {
         const dur = ms(durStr);
         await j.update({ content: null, embeds: [basePanelEmbed(client, 'Processing... | جاري المعالجة')], components: [] }); coll2.stop();
-        await executeAddTime(code, dur, durStr, interaction, client);
+        await executeAddTime(code, dur, durStr, j, client);
       }
     });
   });
