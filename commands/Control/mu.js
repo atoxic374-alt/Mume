@@ -513,238 +513,7 @@ module.exports = {
                     if (selectedOption === 'updateServerId') return moveServerWithModal(interaction);
                     if (selectedOption === 'transferOwnership') return transferOwnershipWithModal(interaction);
 
-                    if (selectedOption === 'mylinks') {
-
-
-                        const selectMenu = new StringSelectMenuBuilder()
-                            .setCustomId('vipOptions')
-                            .setPlaceholder('يرجى الاختيار ..')
-                            .addOptions([
-                                {
-                                    label: 'روابط',
-                                    emoji: '1264908026679136360',
-                                    description: 'إرسال جميع روابط البوتات التي تمتكلها',
-                                    value: 'allBotsLinks',
-                                }, {
-                                    label: 'روابط خارج السيرفر',
-                                    emoji: '1264908028369702935',
-                                    description: 'إرسال جميع روابط البوتات خارج سيرفرك',
-                                    value: 'Off-serverlinks',
-                                }
-                            ]);
-
-                        const cancelButton = new ButtonBuilder()
-                            .setCustomId('cancel')
-                            .setLabel('إلغاء')
-                            .setStyle('Danger');
-
-                        const replyMessage = await interaction.update({
-                            content: `**أخـتـر الأمـر.**`,
-                            components: [
-                                new ActionRowBuilder().addComponents(selectMenu),
-                                new ActionRowBuilder().addComponents(cancelButton)
-                            ]
-                        });
-
-                                                const filter = (i) => i.user.id === message.author.id;
-                                                const collector = replyMessage.createMessageComponentCollector({ filter, time: 60000 });
-
-                                                collector.on('collect', async (interaction) => {
-                                                        // زر الإلغاء
-                                                        if (interaction.isButton() && interaction.customId === 'cancel') {
-                                                                await interaction.deferUpdate().catch(() => {});
-                                                                await interaction.message.delete().catch(() => {});
-                                                                collector.stop('cancel');
-                                                                return;
-                                                        }
-
-                                                        if (!interaction.isStringSelectMenu() || interaction.customId !== 'vipOptions') return;
-                                                        const selectedOption = interaction.values[0];
-                            if (selectedOption === 'allBotsLinks') {
-                                const lastClaimTime = await db.get(`linktime_${message.author.id}`) || 0;
-                                const currentTime = Date.now();
-                                const timeDifference = currentTime - lastClaimTime;
-
-                                if (timeDifference < 240000) {
-                                    const remainingTime = 240000 - timeDifference;
-                                    const minutes = Math.floor(remainingTime / (1000 * 60));
-                                    const seconds = Math.ceil((remainingTime % (1000 * 60)) / 1000);
-
-                                    const formattedTime = `${minutes < 10 ? '0' : ''}${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
-
-                                    if (!interaction.replied && !interaction.deferred) {
-                                        interaction.message.delete();
-                                        return message.reply({ content: `⌛ يجب أن تنتظر ${formattedTime} قبل إستخدام هذا الأمر مرة أخرى` });
-                                    }
-                                    return;
-                                }
-
-                                await interaction.deferUpdate();
-
-                                let totalBots = userTokens.length;
-
-                                let botInfoPromises = [];
-                                for (let [index, token] of userTokens.entries()) {
-                                    const botIntents = [
-                                        GatewayIntentBits.Guilds,
-                                        GatewayIntentBits.GuildVoiceStates,
-                                        GatewayIntentBits.GuildMessages,
-                                        GatewayIntentBits.MessageContent,
-                                    ];
-                                    const bot = new Client({ intents: botIntents });
-
-                                    botInfoPromises.push(new Promise(async (resolve, reject) => {
-                                        try {
-                                            await bot.login(token.token);
-                                            const botInfo = `\`${bot.user?.username || "غير معروف"}\` https://discord.com/api/oauth2/authorize?client_id=${bot.user?.id}&permissions=0&scope=bot`;
-                                            resolve(botInfo);
-                                        } catch (err) {
-                                            reject(err);
-                                        }
-                                    }));
-                                }
-
-                                const disabledComponentsLinks = interaction.message.components.map(row => {
-                                    return new ActionRowBuilder().addComponents(
-                                        row.components.map(component => {
-                                            if (component.type === ComponentType.Button) {
-                                                return ButtonBuilder.from(component).setDisabled(true);
-                                            } else if (component.type === ComponentType.StringSelect) {
-                                                return StringSelectMenuBuilder.from(component).setDisabled(true);
-                                            } else {
-                                                return component;
-                                            }
-                                        })
-                                    );
-                                });
-
-                                Promise.all(botInfoPromises)
-                                    .then(botInfos => {
-                                        botInfos.forEach((botInfo, index) => {
-                                            interaction.user.send(`**🔗 : رابط بوت الميوزك رقم ${index + 1} :**\n${botInfo}`)
-                                                .catch((sendErr) => {
-                                                    console.error("حدث خطأ أثناء إرسال الرابط:", sendErr);
-                                                });
-                                        });
-
-                                        db.set(`linktime_${message.author.id}`, currentTime);
-
-                                        interaction.followUp({ content: `تم إرسال **${totalBots}** من الروابط إلى الخاص.` });
-                                        interaction.editReply({ components: disabledComponentsLinks });
-                                    })
-                                    .catch(err => {
-                                        console.error("حدث خطأ أثناء جمع روابط البوتات:", err);
-                                        interaction.followUp({ content: `\`\`\`.حدث خطأ، يرجى التواصل مع الدعم الفني\`\`\`` });
-                                        interaction.editReply({ components: disabledComponentsLinks });
-                                    });
-                            } else if (selectedOption === 'Off-serverlinks') {
-
-                                const lastClaimTime = await db.get(`Off-serverlinks-${message.author.id}`) || 0;
-                                const currentTime = Date.now();
-                                const timeDifference = currentTime - lastClaimTime;
-
-                                if (timeDifference < 240000) {
-                                    const remainingTime = 240000 - timeDifference;
-                                    const minutes = Math.floor(remainingTime / (1000 * 60));
-                                    const seconds = Math.ceil((remainingTime % (1000 * 60)) / 1000);
-
-                                    const formattedTime = `${minutes < 10 ? '0' : ''}${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
-
-                                    if (!interaction.replied && !interaction.deferred) {
-                                        interaction.message.delete();
-                                        return message.reply({ content: `⌛ يجب أن تنتظر ${formattedTime} قبل إستخدام هذا الأمر مرة أخرى` });
-                                    }
-                                    return;
-                                }
-
-                                await interaction.deferUpdate();
-
-
-                                let totalBots = userTokens.length;
-                                let totalSentBots = 0;
-                                let botInfoPromises = [];
-
-                                for (let [index, token] of userTokens.entries()) {
-                                    const botIntents = [
-                                        GatewayIntentBits.Guilds,
-                                        GatewayIntentBits.GuildVoiceStates,
-                                        GatewayIntentBits.GuildMessages,
-                                        GatewayIntentBits.MessageContent,
-                                    ];
-                                    const bot = new Client({ intents: botIntents });
-
-                                    botInfoPromises.push(new Promise(async (resolve, reject) => {
-                                        try {
-                                            await bot.login(token.token);
-                                            const serverId = token.Server;
-                                            const guild = bot.guilds.cache.get(serverId);
-
-                                            if (!guild) {
-                                                const botInfo = `\`${bot.user?.username || "غير معروف"}\` https://discord.com/api/oauth2/authorize?client_id=${bot.user?.id}&permissions=0&scope=bot`;
-                                                resolve(botInfo);
-                                            } else {
-                                                resolve(null);
-                                            }
-                                        } catch (err) {
-                                            reject(err);
-                                        }
-                                    }));
-                                }
-
-                                const disabledComponentsOff = interaction.message.components.map(row => {
-                                    return new ActionRowBuilder().addComponents(
-                                        row.components.map(component => {
-                                            if (component.type === ComponentType.Button) {
-                                                return ButtonBuilder.from(component).setDisabled(true);
-                                            } else if (component.type === ComponentType.StringSelect) {
-                                                return StringSelectMenuBuilder.from(component).setDisabled(true);
-                                            } else {
-                                                return component;
-                                            }
-                                        })
-                                    );
-                                });
-
-                                Promise.all(botInfoPromises)
-                                    .then(botInfos => {
-                                        botInfos.forEach((botInfo, index) => {
-                                            if (botInfo) {
-                                                interaction.user.send(`**🔗 : رابط بوت الميوزك رقم ${index + 1} :**\n${botInfo}`)
-                                                    .catch((sendErr) => {
-                                                        console.error("حدث خطأ أثناء إرسال الرابط:", sendErr);
-                                                    });
-                                                totalSentBots++;
-                                            }
-                                        });
-
-                                        db.set(`Off-serverlinks-${message.author.id}`, currentTime);
-
-                                        if (totalSentBots > 0) {
-                                            interaction.followUp({ content: `تم إرسال **${totalSentBots}** من الروابط إلى الخاص.` });
-                                        } else {
-                                            interaction.followUp({ content: `جميع البوتات موجودة بالسيرفر بالفعل.` });
-                                        }
-                                        interaction.editReply({ components: disabledComponentsOff });
-                                    })
-                                    .catch(err => {
-                                        console.error("حدث خطأ أثناء جمع روابط البوتات:", err);
-                                        interaction.followUp({ content: `\`\`\`.حدث خطأ، يرجى التواصل مع الدعم الفني\`\`\`` });
-                                        interaction.editReply({ components: disabledComponentsOff });
-                                    });
-                            }
-
-
-                        });
-
-
-                        collector.on('end', (collected, reason) => {
-                            if (reason === 'time') {
-                            }
-                        });
-
-
-                    }
-                    else if (selectedOption === 'appearance') {
+                    if (selectedOption === 'appearance') {
 
                         const selectMenu = new StringSelectMenuBuilder()
                             .setCustomId('vipOptions')
@@ -856,12 +625,12 @@ module.exports = {
                                     store.set('tokens', tokens);
                                     const botCount = currentTokenData.length;
                                     db.set(`editbuttons_${message.author.id}`, currentTime);
-                                    await interaction.followUp({ content: `تم ${newButtonState === 'on' ? 'تفعيل' : 'إيقاف'} جميع الازرار لبوتات الميوزك بنجاح، البوتات المتأثرة : **${botCount}**` });
+                                    await interaction.followUp({ content: `**Buttons ${newButtonState === 'on' ? 'Enabled' : 'Disabled'} | ${newButtonState === 'on' ? 'تفعيل' : 'إيقاف'} الأزرار**\n✅ *البوتات المتأثرة : \`${botCount}\`*` });
                                     interaction.editReply({ components: disabledComponents });
 
                                 } catch (error) {
                                     console.error('حدث خطأ أثناء تحديث ملف التوكنات:', error);
-                                    await interaction.followUp({ content: '```.حدث خطأ أثناء تحديث الأزرار، يرجى التواصل مع الدعم الفني```' });
+                                    await interaction.followUp({ content: `❌ **حدث خطأ أثناء تحديث الأزرار،** يرجى التواصل مع الدعم الفني.` });
                                     interaction.editReply({ components: disabledComponents });
                                 }
 
@@ -905,37 +674,45 @@ module.exports = {
                                 const filter = (message) => message.author.id === interaction.user.id && message.attachments.size > 0;
                                 const messageCollector = interaction.channel.createMessageCollector({ filter, time: 60000 });
 
-                                let changedBotCount = 0;
-
                                 messageCollector.on('collect', async (message) => {
                                     const imageUrl = message.attachments.first().url;
+                                    const total = userTokens.length;
+                                    let done = 0, failed = 0;
 
-                                    for (const tokenData of userTokens) {
-                                        const botIntents = [
-                                            GatewayIntentBits.Guilds,
-                                            GatewayIntentBits.GuildVoiceStates,
-                                            GatewayIntentBits.GuildMessages,
-                                            GatewayIntentBits.MessageContent,
-                                        ];
-                                        const bot = new Client({ intents: botIntents });
+                                    const buildProgress = (cur) => {
+                                        const pct = Math.round((cur / Math.max(1, total)) * 12);
+                                        const bar = '▰'.repeat(pct) + '▱'.repeat(12 - pct);
+                                        return [
+                                            `**Changing Avatar | تغيير الصورة** \`${cur}/${total}\``,
+                                            `\`[${bar}]\``,
+                                            `✅ Done : \`${done}\`  ❌ Failed : \`${failed}\``,
+                                        ].join('\n');
+                                    };
 
+                                    await interaction.editReply({ content: buildProgress(0), components: [] }).catch(() => {});
+
+                                    for (let i = 0; i < userTokens.length; i++) {
+                                        const tokenData = userTokens[i];
+                                        const bot = new Client({ intents: [GatewayIntentBits.Guilds] });
                                         try {
                                             await bot.login(tokenData.token);
                                             await bot.user.setAvatar(imageUrl);
-                                            changedBotCount++;
+                                            done++;
                                             await bot.destroy();
                                         } catch (err) {
-                                            console.error(`حدث خطأ أثناء تغيير صورة البوت: ${bot.user?.username || "غير معروف"} - ${err.message}`);
+                                            failed++;
+                                            console.error(`[mu] avatar error: ${err.message}`);
+                                            try { await bot.destroy(); } catch {}
                                         }
+                                        await interaction.editReply({ content: buildProgress(i + 1) }).catch(() => {});
                                     }
 
-                                    try {
-                                        await interaction.editReply({ content: `تم تغيير صور جميع البوتات بنجاح، البوتات المتأثرة: **${changedBotCount}**`, components: [] });
-                                    } catch (error) {
-                                        console.error('Error editing reply:', error);
-                                    }
+                                    await interaction.editReply({
+                                        content: `**Avatar Changed | تم تغيير الصورة** \`${total}/${total}\`\n\`[▰▰▰▰▰▰▰▰▰▰▰▰]\`\n✅ Done : \`${done}\`  ❌ Failed : \`${failed}\``,
+                                        components: [],
+                                    }).catch(() => {});
                                     db.set(`editavatar_${message.author.id}`, currentTime);
-                                    await message.delete();
+                                    await message.delete().catch(() => {});
                                     messageCollector.stop();
                                 });
 
@@ -980,54 +757,45 @@ module.exports = {
                                 const filter = (message) => message.author.id === interaction.user.id;
                                 const messageCollector = interaction.channel.createMessageCollector({ filter, time: 60000 });
 
-                                let changedBotCount = 0;
-                                let failedBotCount = 0;
-
                                 messageCollector.on('collect', async (message) => {
                                     const newName = message.content.trim();
+                                    const total = userTokens.length;
+                                    let done = 0, failed = 0;
 
-                                    for (const tokenData of userTokens) {
-                                        const botIntents = [
-                                            GatewayIntentBits.Guilds,
-                                            GatewayIntentBits.GuildVoiceStates,
-                                            GatewayIntentBits.GuildMessages,
-                                            GatewayIntentBits.MessageContent,
-                                        ];
-                                        const bot = new Client({ intents: botIntents });
+                                    const buildProgress = (cur) => {
+                                        const pct = Math.round((cur / Math.max(1, total)) * 12);
+                                        const bar = '▰'.repeat(pct) + '▱'.repeat(12 - pct);
+                                        return [
+                                            `**Changing Name | تغيير الاسم** \`${cur}/${total}\``,
+                                            `\`[${bar}]\``,
+                                            `✅ Done : \`${done}\`  ❌ Failed : \`${failed}\``,
+                                        ].join('\n');
+                                    };
 
+                                    await interaction.editReply({ content: buildProgress(0), components: [] }).catch(() => {});
+
+                                    for (let i = 0; i < userTokens.length; i++) {
+                                        const tokenData = userTokens[i];
+                                        const bot = new Client({ intents: [GatewayIntentBits.Guilds] });
                                         try {
                                             await bot.login(tokenData.token);
                                             await bot.user.setUsername(newName);
-                                            changedBotCount++;
+                                            done++;
                                             await bot.destroy();
                                         } catch (err) {
-                                            console.error(`حدث خطأ أثناء تغيير اسم البوت: ${bot.user?.username || "غير معروف"} - ${err.message}`);
-
-                                            if (err.message.includes('USERNAME_RATE_LIMIT')) {
-                                                failedBotCount++;
-                                            }
+                                            failed++;
+                                            console.error(`[mu] name error: ${err.message}`);
+                                            try { await bot.destroy(); } catch {}
                                         }
+                                        await interaction.editReply({ content: buildProgress(i + 1) }).catch(() => {});
                                     }
 
-                                    if (changedBotCount === 0) {
-                                        await interaction.editReply({ content: 'حدث خطأ، لا يمكنك تغيير أسماء بعض البوتات في الوقت الحالي حاول لاحقًا.', components: [] });
-                                    } else {
-                                        if (changedBotCount > 0 && failedBotCount > 0) {
-                                            await interaction.editReply({
-                                                content: `تم تغيير أسماء بعض البوتات بنجاح، البوتات المتأثرة: **${changedBotCount}** من أصل **${userTokens.length}**.`,
-                                                components: []
-                                            });
-                                        }
-                                        else if (changedBotCount === userTokens.length) {
-                                            await interaction.editReply({
-                                                content: `تم تغيير أسماء جميع البوتات بنجاح، البوتات المتأثرة: **${changedBotCount}**.`,
-                                                components: []
-                                            });
-                                        }
-                                    }
-
+                                    await interaction.editReply({
+                                        content: `**Name Changed | تم تغيير الاسم** \`${total}/${total}\`\n\`[▰▰▰▰▰▰▰▰▰▰▰▰]\`\n✅ Done : \`${done}\`  ❌ Failed : \`${failed}\``,
+                                        components: [],
+                                    }).catch(() => {});
                                     db.set(`editname_${message.author.id}`, currentTime);
-                                    await message.delete();
+                                    await message.delete().catch(() => {});
                                     messageCollector.stop();
                                 });
 
@@ -1075,48 +843,57 @@ module.exports = {
                                 const messageCollectorFilter = (message) => message.author.id === interaction.user.id && message.attachments.size > 0;
                                 const messageCollector = interaction.channel.createMessageCollector({ filter: messageCollectorFilter, time: 60000 });
 
-                                let changedBotCount = 0;
-
-                                const changeBanner = async (imageUrl) => {
-                                    for (const tokenData of userTokens) {
-                                        try {
-                                            const base64_banner_image = await axios.get(imageUrl, { responseType: 'arraybuffer' })
-                                                .then((res) => Buffer.from(res.data, 'binary').toString('base64'));
-
-                                            await axios.patch(`https://discord.com/api/v10/users/@me`, {
-                                                banner: `data:image/jpeg;base64,${base64_banner_image}`
-                                            }, {
-                                                headers: {
-                                                    'Authorization': `Bot ${tokenData.token}`
-                                                }
-                                            });
-
-                                            changedBotCount++;
-                                        } catch (err) {
-                                            console.error(`حدث خطأ أثناء تغيير بنر البوت: ${err.message}`);
-                                        }
-                                    }
-                                };
-
                                 messageCollector.on('collect', async (message) => {
                                     const imageUrl = message.attachments.first()?.url;
-                                    if (!imageUrl) {
+                                    if (!imageUrl) return;
+
+                                    const total = userTokens.length;
+                                    let done = 0, failed = 0;
+
+                                    const buildProgress = (cur) => {
+                                        const pct = Math.round((cur / Math.max(1, total)) * 12);
+                                        const bar = '▰'.repeat(pct) + '▱'.repeat(12 - pct);
+                                        return [
+                                            `**Changing Banner | تغيير البنر** \`${cur}/${total}\``,
+                                            `\`[${bar}]\``,
+                                            `✅ Done : \`${done}\`  ❌ Failed : \`${failed}\``,
+                                        ].join('\n');
+                                    };
+
+                                    await interaction.editReply({ content: buildProgress(0), components: [] }).catch(() => {});
+
+                                    const base64Image = await axios.get(imageUrl, { responseType: 'arraybuffer' })
+                                        .then((res) => Buffer.from(res.data, 'binary').toString('base64'))
+                                        .catch(() => null);
+
+                                    if (!base64Image) {
+                                        await interaction.editReply({ content: '❌ **فشل تحميل الصورة، يرجى المحاولة مرة أخرى.**', components: [] }).catch(() => {});
+                                        messageCollector.stop();
                                         return;
                                     }
 
-                                    await changeBanner(imageUrl);
+                                    for (let i = 0; i < userTokens.length; i++) {
+                                        const tokenData = userTokens[i];
+                                        try {
+                                            await axios.patch(`https://discord.com/api/v10/users/@me`, {
+                                                banner: `data:image/jpeg;base64,${base64Image}`
+                                            }, {
+                                                headers: { 'Authorization': `Bot ${tokenData.token}` }
+                                            });
+                                            done++;
+                                        } catch (err) {
+                                            failed++;
+                                            console.error(`[mu] banner error: ${err.message}`);
+                                        }
+                                        await interaction.editReply({ content: buildProgress(i + 1) }).catch(() => {});
+                                    }
 
-                                    try {
-                                        await interaction.editReply({ content: `تم تغيير بنر جميع البوتات بنجاح، البوتات المتأثرة : **${changedBotCount}**`, components: [] });
-                                    } catch (error) {
-                                        console.error('Error editing reply:', error);
-                                    }
+                                    await interaction.editReply({
+                                        content: `**Banner Changed | تم تغيير البنر** \`${total}/${total}\`\n\`[▰▰▰▰▰▰▰▰▰▰▰▰]\`\n✅ Done : \`${done}\`  ❌ Failed : \`${failed}\``,
+                                        components: [],
+                                    }).catch(() => {});
                                     db.set(`bannerstime_${message.author.id}`, currentTime);
-                                    try {
-                                        await message.delete();
-                                    } catch (error) {
-                                        console.error('Error deleting message:', error);
-                                    }
+                                    await message.delete().catch(() => {});
                                     messageCollector.stop();
                                 });
 
@@ -1189,36 +966,45 @@ module.exports = {
                         const filter = (message) => message.author.id === interaction.user.id;
                         const messageCollector = interaction.channel.createMessageCollector({ filter, time: 70000 });
 
-                        let changedBotCount = 0;
-
                         messageCollector.on('collect', async (message) => {
                             const newName = message.content.trim();
+                            const total = userTokens.length;
+                            let done = 0, failed = 0;
 
-                            for (const tokenData of userTokens) {
-                                const botGatewayIntentBits = new GatewayIntentBits([
-                                    GatewayIntentBits.FLAGS.GUILDS,
-                                    GatewayIntentBits.FLAGS.GUILD_MESSAGES,
-                                    GatewayIntentBits.FLAGS.GUILD_MESSAGE_REACTIONS
-                                ]);
-                                const bot = new Client({ intents: botGatewayIntentBits });
+                            const buildProgress = (cur) => {
+                                const pct = Math.round((cur / Math.max(1, total)) * 12);
+                                const bar = '▰'.repeat(pct) + '▱'.repeat(12 - pct);
+                                return [
+                                    `**Changing Name | تغيير الاسم** \`${cur}/${total}\``,
+                                    `\`[${bar}]\``,
+                                    `✅ Done : \`${done}\`  ❌ Failed : \`${failed}\``,
+                                ].join('\n');
+                            };
 
+                            await interaction.editReply({ content: buildProgress(0), components: [] }).catch(() => {});
+
+                            for (let i = 0; i < userTokens.length; i++) {
+                                const tokenData = userTokens[i];
+                                const bot = new Client({ intents: [GatewayIntentBits.Guilds] });
                                 try {
                                     await bot.login(tokenData.token);
                                     await bot.user.setUsername(newName);
-                                    changedBotCount++;
+                                    done++;
                                     await bot.destroy();
                                 } catch (err) {
-                                    console.error(`حدث خطأ أثناء تغيير اسم البوت: ${bot.user?.username || "غير معروف"} - ${err.message}`);
+                                    failed++;
+                                    console.error(`[mu] name error: ${err.message}`);
+                                    try { await bot.destroy(); } catch {}
                                 }
+                                await interaction.editReply({ content: buildProgress(i + 1) }).catch(() => {});
                             }
 
-                            try {
-                                await interaction.editReply({ content: `تم تغيير أسماء جميع البوتات بنجاح، البوتات المتأثرة: **${changedBotCount}**`, components: [] });
-                            } catch (error) {
-                                console.error('Error editing reply:', error);
-                            }
+                            await interaction.editReply({
+                                content: `**Name Changed | تم تغيير الاسم** \`${total}/${total}\`\n\`[▰▰▰▰▰▰▰▰▰▰▰▰]\`\n✅ Done : \`${done}\`  ❌ Failed : \`${failed}\``,
+                                components: [],
+                            }).catch(() => {});
                             db.set(`nametime_${message.author.id}`, currentTime);
-                            await message.delete();
+                            await message.delete().catch(() => {});
                             messageCollector.stop();
                         });
 
@@ -1399,14 +1185,14 @@ module.exports = {
                                     const expectedSeconds = Math.round(expectedTimeInSeconds % 60);
 
                                     botInviteLinks.forEach((botInviteLink, index) => {
-                                        message.author.send(`**🔗 : رابط بوت الميوزك رقم ${index + 1}:**\n${botInviteLink}`)
+                                        message.author.send(`**🔗 رابط البوت \`${index + 1}\` :**\n${botInviteLink}`)
                                             .catch((sendErr) => {
                                                 console.error("حدث خطأ أثناء إرسال رابط البوت:", sendErr);
                                             });
                                     });
 
                                     db.set(`updateServerIdtime_${message.author.id}`, currentTime);
-                                    interaction.editReply({ content: `تم نقل **${totalBots}** بوت بنجاح. الوقت المتوقع لإرسال الروابط (\`${expectedMinutes}:${expectedSeconds < 10 ? '0' : ''}${expectedSeconds}\`) دقيقة تقريبًا`, components: [] });
+                                    interaction.editReply({ content: `**Server Updated | تم تحديث السيرفر**\n✅ *تم نقل \`${totalBots}\` بوت بنجاح — الروابط أُرسلت إلى الخاص.*`, components: [] });
 
                                 })
                                 .catch(err => {
@@ -1591,9 +1377,9 @@ module.exports = {
                         fs.copyFileSync('./settings/tokens.json', backupFile);
 
 
-	                        const reply = await interaction.followUp({
-	                            content: ` جاري إعادة تشغيل **${userTokens.length}** بوتات، الوقت المُقدر لتشغيلها (\`0:20\`) ثانيا تقريبًا`
-	                        });
+                                const reply = await interaction.followUp({
+                                    content: `**Restarting | جاري إعادة التشغيل**\n\`[▱▱▱▱▱▱▱▱▱▱▱▱]\` \`0/${userTokens.length}\`\n⏳ *الوقت المُقدر : \`~20\` ثانية*`
+                                });
 
                         const disabledComponents = interaction.message.components.map(row => {
                             return new ActionRowBuilder().addComponents(
@@ -1620,7 +1406,7 @@ module.exports = {
 
 
                             await reply.edit({
-                                content: `إستخدام ناجح، تم إعادة تشغيل البوتات بنجاح، البوتات المتأثرة: **${userTokens.length}**`
+                                content: `**Restarted | تمت إعادة التشغيل** \`${userTokens.length}/${userTokens.length}\`\n\`[▰▰▰▰▰▰▰▰▰▰▰▰]\`\n✅ Done : \`${userTokens.length}\``
                             });
 
                         }, 20000);
@@ -1713,11 +1499,11 @@ module.exports = {
                                     store.set('tokens', tokens);
                                     const botCount = currentTokenData.length;
                                     db.set(`YouTubeeditbuttons_${message.author.id}`, currentTime);
-                                    await interaction.followUp({ content: `تم تعيين منصة التشغيل الأساسية لجميع البوتات إلى يوتيوب، البوتات المتأثرة : **${botCount}**` });
+                                    await interaction.followUp({ content: `**Platform Set | تم تحديد المنصة**\n✅ *تم تعيين منصة التشغيل إلى **يوتيوب** — البوتات المتأثرة : \`${botCount}\`*` });
                                     interaction.editReply({ components: disabledComponents });
                                 } catch (error) {
                                     console.error('حدث خطأ أثناء تحديث ملف التوكنات:', error);
-                                    interaction.followUp({ content: `\`\`\`.حدث خطأ، يرجى التواصل مع الدعم الفني\`\`\``, components: [] });
+                                    interaction.followUp({ content: `❌ **حدث خطأ،** يرجى التواصل مع الدعم الفني.` });
                                     interaction.editReply({ components: disabledComponents });
                                 }
 
@@ -1766,11 +1552,11 @@ module.exports = {
                                     store.set('tokens', tokens);
                                     const botCount = currentTokenData.length;
                                     db.set(`soundcloudeditbuttons_${message.author.id}`, currentTime);
-                                    await interaction.followUp({ content: `تم تعيين منصة التشغيل الأساسية لجميع البوتات إلى ساندكلاود، البوتات المتأثرة : **${botCount}**` });
+                                    await interaction.followUp({ content: `**Platform Set | تم تحديد المنصة**\n✅ *تم تعيين منصة التشغيل إلى **ساندكلاود** — البوتات المتأثرة : \`${botCount}\`*` });
                                     interaction.editReply({ components: disabledComponents });
                                 } catch (error) {
                                     console.error('حدث خطأ أثناء تحديث ملف التوكنات:', error);
-                                    interaction.followUp({ content: `\`\`\`.حدث خطأ، يرجى التواصل مع الدعم الفني\`\`\``, components: [] });
+                                    interaction.followUp({ content: `❌ **حدث خطأ،** يرجى التواصل مع الدعم الفني.` });
                                     interaction.editReply({ components: disabledComponents });
                                 }
                             }
