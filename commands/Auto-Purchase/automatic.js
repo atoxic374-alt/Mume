@@ -780,7 +780,8 @@ async function showControlPanel(interaction, code) {
     components: controlRows(entry),
   };
   if (interaction.replied || interaction.deferred) return interaction.editReply(payload).catch(() => {});
-  if (interaction.isStringSelectMenu() || interaction.isButton()) return interaction.update(payload).catch(() => {});
+  const _isEphSrcCtrl = interaction.message?.flags?.has?.(MessageFlags.Ephemeral);
+  if (interaction.isStringSelectMenu() || (interaction.isButton() && _isEphSrcCtrl)) return interaction.update(payload).catch(() => {});
   return interaction.reply({ ...payload, flags: MessageFlags.Ephemeral }).catch(() => {});
 }
 
@@ -939,6 +940,21 @@ async function approveAddBots(interaction, reqId) {
   store.set('bots', bots);
   store.set('tokens', tokens);
   store.set('time', store.get('time') || []);
+
+  // ── تشغيل البوتات الجديدة فوراً إذا الاشتراك غير متوقف ─────────────────
+  if (!paused) {
+    try {
+      const { runsys } = require('../../music');
+      for (const bot of given) {
+        runsys(bot.token, entry.server).catch(e =>
+          console.error('[approveAddBots] runsys error:', e?.message || e),
+        );
+      }
+    } catch (e) {
+      console.error('[approveAddBots] failed to trigger bots:', e?.message || e);
+    }
+  }
+  // ──────────────────────────────────────────────────────────────────────────
 
   const updated = updateRequest(req.id, { status: 'approved' });
   await interaction.update({
@@ -1419,7 +1435,7 @@ async function transferSubscriptionOwnership(interaction, code, rawUser) {
   await newUser.send({
     embeds: [buildOwnershipTransferredDm(interaction.client, {
       oldOwnerId: interaction.user.id,
-      newOwnerId,
+      newOwnerId: newUserId,
       codes: [code],
       botCount: entry.botsCount || subTokens.length,
     })],
@@ -2011,7 +2027,7 @@ async function handleContactSupport(interaction) {
 
 async function handlePricingCalculator(interaction) {
   const modal = new ModalBuilder()
-    .setCustomId('auto_pricing_modal')
+    .setCustomId('auto_user_pricing_modal')
     .setTitle('Price Calculator | حاسبة السعر');
   modal.addComponents(
     new ActionRowBuilder().addComponents(
@@ -2034,7 +2050,7 @@ async function handlePricingCalculator(interaction) {
   );
   await interaction.showModal(modal);
   const submit = await interaction.awaitModalSubmit({
-    filter: i => i.customId === 'auto_pricing_modal' && i.user.id === interaction.user.id,
+    filter: i => i.customId === 'auto_user_pricing_modal' && i.user.id === interaction.user.id,
     time: 120000,
   }).catch(() => null);
   if (!submit) return;
@@ -2099,6 +2115,22 @@ async function handleInteraction(interaction) {
     if (id === 'auto_profile_banner') return handleProfileAction(interaction, 'banner');
     if (id === 'auto_profile_streaming') return handleProfileAction(interaction, 'streaming');
     if (id === 'auto_profile_applyall') return handleProfileAction(interaction, 'applyall');
+
+    // ── Rate limiting for public user buttons ────────────────────────────────
+    const _userPublicBtns = [
+      'auto_user_buy', 'auto_user_my', 'auto_user_renew',
+      'auto_user_links', 'auto_user_pause', 'auto_user_pricing', 'auto_user_support',
+    ];
+    if (_userPublicBtns.includes(id)) {
+      if (!check(interaction.user.id, id, 3000)) {
+        return interaction.reply({
+          content: '**Rate Limit :** *انتظر ثلاث ثوان قبل الضغط مرة أخرى.*',
+          flags: MessageFlags.Ephemeral,
+        }).catch(() => {});
+      }
+    }
+    // ──────────────────────────────────────────────────────────────────────────
+
     if (id === 'auto_user_buy') {
       // منع الطلبات المكررة قبل عرض أزرار المدة
       const existingBuy = readRequests().find(r =>
