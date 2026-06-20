@@ -446,40 +446,50 @@ async function handleAddTokens(interaction, client) {
 
   await sub.reply({ content: `**Checking Tokens**\nجاري التحقق من **${rawTokens.length}** توكن...`, flags: MessageFlags.Ephemeral });
 
-  const validTokens = [];
-  const known = new Set([
-    ...((store.get('bots') || []).map(b => b.token)),
-    ...((store.get('tokens') || []).map(t => t.token)),
-  ].filter(Boolean));
-  const profile = getSubBotProfile();
-  let assets = null;
   try {
-    assets = await resolveProfileAssets(profile);
-  } catch {
-    assets = { avatarData: null, bannerData: null };
-  }
-
-  for (const token of rawTokens) {
+    const validTokens = [];
+    let duplicateCount = 0;
+    const known = new Set([
+      ...((store.get('bots') || []).map(b => b.token)),
+      ...((store.get('tokens') || []).map(t => t.token)),
+    ].filter(Boolean));
+    const profile = getSubBotProfile();
+    let assets = null;
     try {
-      if (known.has(token)) continue;
-      await applyProfileToToken(token, { profile, assets, leaveGuilds: true });
-      validTokens.push(token);
-      known.add(token);
+      assets = await resolveProfileAssets(profile);
     } catch {
-      await sub.followUp({ content: `**Invalid Token**\nتوكن غير صالح: \`${token.slice(0, 20)}...\``, flags: MessageFlags.Ephemeral }).catch(() => {});
+      assets = { avatarData: null, bannerData: null };
     }
+
+    for (const token of rawTokens) {
+      try {
+        if (known.has(token)) { duplicateCount++; continue; }
+        await applyProfileToToken(token, { profile, assets, leaveGuilds: true });
+        validTokens.push(token);
+        known.add(token);
+      } catch {
+        await sub.followUp({ content: `**Invalid Token**\nتوكن غير صالح: \`${token.slice(0, 20)}...\``, flags: MessageFlags.Ephemeral }).catch(() => {});
+      }
+    }
+
+    if (duplicateCount > 0 && validTokens.length === 0) {
+      return sub.followUp({ content: statusText(`All tokens already exist (${duplicateCount}).`, `جميع التوكنات موجودة مسبقاً (${duplicateCount}).`), flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
+
+    if (validTokens.length === 0) return sub.followUp({ content: statusText('No valid tokens found.', 'لا توجد توكنات صالحة.'), flags: MessageFlags.Ephemeral }).catch(() => {});
+
+    let bots = [...(store.get('bots') || [])];
+    for (const token of validTokens) {
+      if (!bots.some(b => b.token === token)) bots.push({ token });
+    }
+    store.set('bots', bots);
+
+    const dupNote = duplicateCount > 0 ? ` (${duplicateCount} مكرر تم تجاهله)` : '';
+    await sub.followUp({ content: `**Bots Added**\nتم إضافة **${validTokens.length}** بوت وتطبيق الاسم والصورة والبنر على البوت والـ App.${dupNote}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+  } catch (e) {
+    console.error('[Subs] addTokens error:', e);
+    await sub.followUp({ content: statusText('An error occurred while processing tokens.', 'حدث خطأ أثناء معالجة التوكنات.'), flags: MessageFlags.Ephemeral }).catch(() => {});
   }
-
-  if (validTokens.length === 0) return sub.followUp({ content: statusText('No valid tokens found.', 'لا توجد توكنات صالحة.'), flags: MessageFlags.Ephemeral }).catch(() => {});
-
-  let bots = [...(store.get('bots') || [])];
-  for (const token of validTokens) {
-    if (!bots.some(b => b.token === token)) bots.push({ token });
-  }
-  store.set('bots', bots);
-
-  await sub.followUp({ content: `**Bots Added**\nتم إضافة **${validTokens.length}** بوت وتطبيق الاسم والصورة والبنر على البوت والـ App.`, flags: MessageFlags.Ephemeral }).catch(() => {});
-
 }
 
 // ─── Flow: All Subscriptions ──────────────────────────────────────────────────
