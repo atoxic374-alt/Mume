@@ -1004,7 +1004,8 @@ async function startRenewal(interaction, code) {
       : '**طلب قيد المراجعة**\nطلب تجديدك وصل للإدارة وبانتظار الرد. يرجى الانتظار.';
     const ep = { embeds: [quickEmbed(interaction.client, interaction.user, 'warning', desc)], flags: MessageFlags.Ephemeral };
     if (interaction.replied || interaction.deferred) return interaction.editReply(ep).catch(() => {});
-    if (interaction.isStringSelectMenu() || interaction.isButton()) return interaction.update(ep).catch(() => {});
+    const _isEphSrc1 = interaction.message?.flags?.has?.(MessageFlags.Ephemeral);
+    if (interaction.isStringSelectMenu() || (interaction.isButton() && _isEphSrc1)) return interaction.update(ep).catch(() => {});
     return interaction.reply(ep).catch(() => {});
   }
 
@@ -1022,7 +1023,8 @@ async function startRenewal(interaction, code) {
   );
   const payload = { embeds: [durEmbed], components: durationRenewRows(code, interaction.id), flags: MessageFlags.Ephemeral };
   if (interaction.replied || interaction.deferred) return interaction.editReply(payload).catch(() => {});
-  if (interaction.isStringSelectMenu() || interaction.isButton()) return interaction.update(payload).catch(() => {});
+  const _isEphSrc2 = interaction.message?.flags?.has?.(MessageFlags.Ephemeral);
+  if (interaction.isStringSelectMenu() || (interaction.isButton() && _isEphSrc2)) return interaction.update(payload).catch(() => {});
   return interaction.reply(payload).catch(() => {});
 }
 
@@ -1169,6 +1171,19 @@ async function acceptPurchase(interaction, reqId) {
   store.set('time', timeArray);
   store.set('tokens', tokens);
   store.set('bots', bots);
+
+  // ── تشغيل البوتات فوراً مثل madd-sub بدون انتظار الـ manager ──────────────
+  try {
+    const { runsys } = require('../../music');
+    for (const bot of given) {
+      runsys(bot.token, req.serverId).catch(e =>
+        console.error('[acceptPurchase] runsys error:', e?.message || e),
+      );
+    }
+  } catch (e) {
+    console.error('[acceptPurchase] failed to trigger bots:', e?.message || e);
+  }
+  // ──────────────────────────────────────────────────────────────────────────
 
   const updated = updateRequest(reqId, { status: 'approved', duration: durationLabel, code });
   await interaction.reply({
