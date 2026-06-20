@@ -910,18 +910,26 @@ module.exports = {
                                 const last = await db.get(`statustime_${userId}`) || 0, now = Date.now();
                                 if (now - last < 240000)
                                     return interaction.followUp({ content: `⌛`, flags: MessageFlags.Ephemeral });
-                                const sentMsg = await interaction.update({ content: `يَرجى أرفاق إسم الحالة الجديدة.`, components: [] });
+                                const sentMsg = await interaction.update({ content: `<@${interaction.user.id}> - يرجى إرفاق نص الحالة الجديدة للبوتات.`, components: [] });
                                 const msgCollector = message.channel.createMessageCollector({ filter: m => m.author.id === message.author.id, time: 60000 });
                                 msgCollector.on('collect', async (msg) => {
                                     const status = msg.content.trim();
-                                    userTokens.forEach(t => t.status = status);
+                                    const total = userTokens.length;
+                                    let done = 0;
+                                    for (let i = 0; i < userTokens.length; i++) {
+                                        userTokens[i].status = status;
+                                        done++;
+                                        const pct = Math.round((done / Math.max(1, total)) * 12);
+                                        const bar = '▰'.repeat(pct) + '▱'.repeat(12 - pct);
+                                        await sentMsg.edit({ content: `**Updating Status | تحديث الحالة** \`${done}/${total}\`\n\`[${bar}]\`` }).catch(() => {});
+                                    }
                                     store.set('tokens', tokens);
                                     db.set(`statustime_${userId}`, now);
                                     msgCollector.stop();
-                                    await sentMsg.edit({ content: `تم تغيير الحالة لـ **${userTokens.length}** بوت.` });
-                                    await msg.react('✅');
+                                    await sentMsg.edit({ content: `**Status Changed | تم تغيير الحالة** \`${total}/${total}\`\n\`[▰▰▰▰▰▰▰▰▰▰▰▰]\`\n✅ Done : \`${total}\`` }).catch(() => {});
+                                    await msg.react('✅').catch(() => {});
                                 });
-                                msgCollector.on('end', c => { if (!c.size) sentMsg.edit({ content: "**أنـتـهى وقـت الأرسـال ⏳.**" }); });
+                                msgCollector.on('end', c => { if (!c.size) sentMsg.edit({ content: '**أنـتـهى وقـت الأرسـال ⏳.**' }).catch(() => {}); });
 
 
 
@@ -1067,8 +1075,8 @@ module.exports = {
                             store.set('tokens', tokens);
 
                             db.set(`installBottime_${message.author.id}`, currentTime);
-                            await interaction.editReply({ content: `تم تحديث قناة الصوت لِـ **${transferredBotCount}** بوت بنجاح.`, components: [] });
-                            response.delete();
+                            await interaction.editReply({ content: `**Voice Channel Set | تم تحديد قناة الصوت**\n✅ *تم تحديث قناة الصوت لـ \`${transferredBotCount}\` بوت بنجاح.*`, components: [] });
+                            response.delete().catch(() => {});
 
                             voiceIdCollector.stop();
                         });
@@ -1197,7 +1205,7 @@ module.exports = {
                                 })
                                 .catch(err => {
                                     console.error("حدث خطأ أثناء تسجيل الدخول:", err);
-                                    interaction.update({ content: `\`\`\`.حدث خطأ، يرجى التواصل مع الدعم الفني\`\`\``, components: [] });
+                                    interaction.editReply({ content: `❌ **حدث خطأ،** يرجى التواصل مع الدعم الفني.`, components: [] });
 
                                 });
 
@@ -1291,7 +1299,7 @@ module.exports = {
                             newUserId = newUser;
                         } else {
                             await response.first().delete();
-                            return interaction.editReply({ content: 'إستخدام خطأ، يرجى إرفاق منشن شخص صحيح.', components: [] });
+                            return interaction.editReply({ content: '❌ **إستخدام خطأ،** يرجى إرفاق منشن أو ID شخص صحيح.', components: [] });
                         }
 
                         let transferredBotsCount = 0;
@@ -1308,7 +1316,7 @@ module.exports = {
                             store.set('time', subscriptions);
 
                             await interaction.editReply({
-                                content: `تم نقل ملكية جميع البوتات بنجاح، البوتات المتأثرة: **${transferredBotsCount}**`,
+                                content: `**Ownership Transferred | تم نقل الملكية**\n✅ *تم نقل \`${transferredBotsCount}\` بوت إلى <@${newUserId}> بنجاح.*`,
                                 components: []
                             });
 
@@ -1329,7 +1337,7 @@ module.exports = {
                             }
 
                         } catch (error) {
-                            return interaction.update({ content: `\`\`\`.حدث خطأ، يرجى التواصل مع الدعم الفني\`\`\``, components: [] });
+                            return interaction.editReply({ content: `❌ **حدث خطأ،** يرجى التواصل مع الدعم الفني.`, components: [] });
                         }
 
 
