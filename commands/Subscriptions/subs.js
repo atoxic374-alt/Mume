@@ -61,24 +61,24 @@ function statusText(en, ar) {
   return `**${en}**\n${ar}`;
 }
 
-	function buildPanelRows() {
-	  return [
-	    new ActionRowBuilder().addComponents(
-	      new ButtonBuilder().setCustomId(BTN.ADD_SUB).setLabel('Add Sub | إضافة').setStyle(ButtonStyle.Success),
-	      new ButtonBuilder().setCustomId(BTN.REMOVE_SUB).setLabel('Remove Sub | حذف').setStyle(ButtonStyle.Danger),
-	      new ButtonBuilder().setCustomId(BTN.ADD_TIME).setLabel('Add Time | وقت').setStyle(ButtonStyle.Primary),
-	    ),
-	    new ActionRowBuilder().addComponents(
-	      new ButtonBuilder().setCustomId(BTN.ADD_TOKENS).setLabel('Add Bots | بوتات').setStyle(ButtonStyle.Secondary),
-	      new ButtonBuilder().setCustomId(BTN.ALL_SUBS).setLabel('List | القائمة').setStyle(ButtonStyle.Secondary),
-	      new ButtonBuilder().setCustomId(BTN.STOCK).setLabel('Stock | الستوك').setStyle(ButtonStyle.Secondary),
-	    ),
-	  ];
-	}
+        function buildPanelRows() {
+          return [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId(BTN.ADD_SUB).setLabel('Add Sub | إضافة').setStyle(ButtonStyle.Success),
+              new ButtonBuilder().setCustomId(BTN.REMOVE_SUB).setLabel('Remove Sub | حذف').setStyle(ButtonStyle.Danger),
+              new ButtonBuilder().setCustomId(BTN.ADD_TIME).setLabel('Add Time | وقت').setStyle(ButtonStyle.Primary),
+            ),
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId(BTN.ADD_TOKENS).setLabel('Add Bots | بوتات').setStyle(ButtonStyle.Secondary),
+              new ButtonBuilder().setCustomId(BTN.ALL_SUBS).setLabel('List | القائمة').setStyle(ButtonStyle.Secondary),
+              new ButtonBuilder().setCustomId(BTN.STOCK).setLabel('Stock | الستوك').setStyle(ButtonStyle.Secondary),
+            ),
+          ];
+        }
 
 // ─── Flow: Add Subscription ───────────────────────────────────────────────────
 async function handleAddSub(interaction, client) {
-	  const modal = new ModalBuilder().setCustomId('subs_add_uid').setTitle('Add Subscription | اشتراك');
+          const modal = new ModalBuilder().setCustomId('subs_add_uid').setTitle('Add Subscription | اشتراك');
   modal.addComponents(new ActionRowBuilder().addComponents(
     new TextInputBuilder().setCustomId('uid').setLabel('User ID | ايدي المستخدم').setPlaceholder('Example: 123456789012345678').setStyle(TextInputStyle.Short).setRequired(true).setMinLength(17).setMaxLength(20)
   ));
@@ -102,48 +102,48 @@ async function handleAddSub(interaction, client) {
   const baseEmbed = () => new EmbedBuilder()
     .setAuthor({ name: interaction.user.username, iconURL: interaction.user.displayAvatarURL({ dynamic: true }) })
     .setThumbnail(fetchedUser.displayAvatarURL({ dynamic: true, size: 512 }))
-	    .addFields({ name: 'User | المستخدم', value: `<@${userId}>`, inline: true })
-	    .setColor(getEmbedColor(client));
+            .addFields({ name: 'User | المستخدم', value: `<@${userId}>`, inline: true })
+            .setColor(getEmbedColor(client));
 
   const genContent = () => {
     const bots = getBots();
     const max = Math.min(bots.length, 5);
     const embeds = [], components = [];
     if (state === 'COUNT') {
-	      embeds.push(baseEmbed().setTitle('Add Subscription | إضافة اشتراك').setDescription(`Choose the bot count.\nاختر عدد البوتات.`).addFields({ name: 'Available Bots | البوتات المتاحة', value: `\`${bots.length}\``, inline: true }));
+              embeds.push(baseEmbed().setTitle('Add Subscription | إضافة اشتراك').setDescription(`Choose the bot count.\nاختر عدد البوتات.`).addFields({ name: 'Available Bots | البوتات المتاحة', value: `\`${bots.length}\``, inline: true }));
       const r1 = new ActionRowBuilder();
       for (let i = 1; i <= max; i++) r1.addComponents(new ButtonBuilder().setCustomId(`sa_c_${i}_${mid}`).setLabel(`${i}`).setStyle(ButtonStyle.Secondary));
       const r2 = new ActionRowBuilder().addComponents(
-	        new ButtonBuilder().setCustomId(`sa_c_x_${mid}`).setLabel('Custom | مخصص').setStyle(ButtonStyle.Primary),
-	        new ButtonBuilder().setCustomId(`sa_cancel_${mid}`).setLabel('Cancel | إلغاء').setStyle(ButtonStyle.Danger)
-	      );
+                new ButtonBuilder().setCustomId(`sa_c_x_${mid}`).setLabel('Custom | مخصص').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId(`sa_cancel_${mid}`).setLabel('Cancel | إلغاء').setStyle(ButtonStyle.Danger)
+              );
       if (r1.components.length) components.push(r1);
       components.push(r2);
     } else if (state === 'TIME') {
-	      embeds.push(baseEmbed().setTitle('Subscription Duration | مدة الاشتراك').addFields({ name: 'Bot Count | عدد البوتات', value: `\`${selectedCount}\``, inline: true }));
-	      components.push(
-	        new ActionRowBuilder().addComponents(
-	          new ButtonBuilder().setCustomId(`sa_t_1d_${mid}`).setLabel('1 Day | يوم').setStyle(ButtonStyle.Secondary),
-	          new ButtonBuilder().setCustomId(`sa_t_7d_${mid}`).setLabel('7 Days | أسبوع').setStyle(ButtonStyle.Secondary),
-	          new ButtonBuilder().setCustomId(`sa_t_30d_${mid}`).setLabel('30 Days | شهر').setStyle(ButtonStyle.Secondary),
-	          new ButtonBuilder().setCustomId(`sa_t_90d_${mid}`).setLabel('90 Days | 3 أشهر').setStyle(ButtonStyle.Secondary),
-	        ),
-	        new ActionRowBuilder().addComponents(
-	          new ButtonBuilder().setCustomId(`sa_t_x_${mid}`).setLabel('Custom | مخصص').setStyle(ButtonStyle.Primary),
-	          new ButtonBuilder().setCustomId(`sa_back_COUNT_${mid}`).setLabel('Back | رجوع').setStyle(ButtonStyle.Secondary),
-	          new ButtonBuilder().setCustomId(`sa_cancel_${mid}`).setLabel('Cancel | إلغاء').setStyle(ButtonStyle.Danger)
-	        )
-	      );
-	    } else if (state === 'SERVER') {
-	      embeds.push(baseEmbed().setTitle('Subscription Server | سيرفر الاشتراك').addFields(
-	        { name: 'Bot Count | عدد البوتات', value: `\`${selectedCount}\``, inline: true },
-	        { name: 'Duration | المدة', value: `\`${formatDuration(selectedDuration)}\``, inline: true }
-	      ));
-	      components.push(new ActionRowBuilder().addComponents(
-	        new ButtonBuilder().setCustomId(`sa_srv_${mid}`).setLabel('Set Server | السيرفر').setStyle(ButtonStyle.Primary),
-	        new ButtonBuilder().setCustomId(`sa_back_TIME_${mid}`).setLabel('Back | رجوع').setStyle(ButtonStyle.Secondary),
-	        new ButtonBuilder().setCustomId(`sa_cancel_${mid}`).setLabel('Cancel | إلغاء').setStyle(ButtonStyle.Danger)
-	      ));
+              embeds.push(baseEmbed().setTitle('Subscription Duration | مدة الاشتراك').addFields({ name: 'Bot Count | عدد البوتات', value: `\`${selectedCount}\``, inline: true }));
+              components.push(
+                new ActionRowBuilder().addComponents(
+                  new ButtonBuilder().setCustomId(`sa_t_1d_${mid}`).setLabel('1 Day | يوم').setStyle(ButtonStyle.Secondary),
+                  new ButtonBuilder().setCustomId(`sa_t_7d_${mid}`).setLabel('7 Days | أسبوع').setStyle(ButtonStyle.Secondary),
+                  new ButtonBuilder().setCustomId(`sa_t_30d_${mid}`).setLabel('30 Days | شهر').setStyle(ButtonStyle.Secondary),
+                  new ButtonBuilder().setCustomId(`sa_t_90d_${mid}`).setLabel('90 Days | 3 أشهر').setStyle(ButtonStyle.Secondary),
+                ),
+                new ActionRowBuilder().addComponents(
+                  new ButtonBuilder().setCustomId(`sa_t_x_${mid}`).setLabel('Custom | مخصص').setStyle(ButtonStyle.Primary),
+                  new ButtonBuilder().setCustomId(`sa_back_COUNT_${mid}`).setLabel('Back | رجوع').setStyle(ButtonStyle.Secondary),
+                  new ButtonBuilder().setCustomId(`sa_cancel_${mid}`).setLabel('Cancel | إلغاء').setStyle(ButtonStyle.Danger)
+                )
+              );
+            } else if (state === 'SERVER') {
+              embeds.push(baseEmbed().setTitle('Subscription Server | سيرفر الاشتراك').addFields(
+                { name: 'Bot Count | عدد البوتات', value: `\`${selectedCount}\``, inline: true },
+                { name: 'Duration | المدة', value: `\`${formatDuration(selectedDuration)}\``, inline: true }
+              ));
+              components.push(new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`sa_srv_${mid}`).setLabel('Set Server | السيرفر').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId(`sa_back_TIME_${mid}`).setLabel('Back | رجوع').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId(`sa_cancel_${mid}`).setLabel('Cancel | إلغاء').setStyle(ButtonStyle.Danger)
+              ));
     }
     return { embeds, components };
   };
@@ -153,47 +153,47 @@ async function handleAddSub(interaction, client) {
 
   coll.on('collect', async i => {
     const cid = i.customId;
-	    if (cid === `sa_cancel_${mid}`) { await i.update({ embeds: [basePanelEmbed(client, 'Cancelled | تم الإلغاء')], components: [] }); return coll.stop(); }
+            if (cid === `sa_cancel_${mid}`) { await i.update({ embeds: [basePanelEmbed(client, 'Cancelled | تم الإلغاء')], components: [] }); return coll.stop(); }
     if (cid.startsWith(`sa_back_`)) { state = cid.split('_')[2]; return i.update(genContent()); }
 
     if (state === 'COUNT') {
       if (cid === `sa_c_x_${mid}`) {
-	        const m2 = new ModalBuilder().setCustomId(`sa_mc_${mid}`).setTitle('Bot Count | عدد البوتات');
+                const m2 = new ModalBuilder().setCustomId(`sa_mc_${mid}`).setTitle('Bot Count | عدد البوتات');
         m2.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('v').setLabel(`Count | العدد (${getBots().length})`).setStyle(TextInputStyle.Short).setRequired(true)));
         await i.showModal(m2);
         try {
           const s2 = await i.awaitModalSubmit({ filter: mi => mi.customId === `sa_mc_${mid}`, time: 60000 });
           const v = parseInt(s2.fields.getTextInputValue('v').trim(), 10);
           if (isNaN(v) || v <= 0 || v > getBots().length) return s2.reply({ content: statusText('Invalid bot count.', 'عدد البوتات غير صحيح.'), flags: MessageFlags.Ephemeral });
-          selectedCount = v; state = 'TIME'; await s2.deferUpdate(); await prompt.edit(genContent());
+          selectedCount = v; state = 'TIME'; await s2.update(genContent());
         } catch {}
       } else {
         selectedCount = parseInt(cid.split('_')[2], 10); state = 'TIME'; return i.update(genContent());
       }
     } else if (state === 'TIME') {
       if (cid === `sa_t_x_${mid}`) {
-	        const m2 = new ModalBuilder().setCustomId(`sa_mt_${mid}`).setTitle('Duration | المدة');
+                const m2 = new ModalBuilder().setCustomId(`sa_mt_${mid}`).setTitle('Duration | المدة');
         m2.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('v').setLabel('Duration | المدة').setPlaceholder('Example: 30d, 1h').setStyle(TextInputStyle.Short).setRequired(true)));
         await i.showModal(m2);
         try {
           const s2 = await i.awaitModalSubmit({ filter: mi => mi.customId === `sa_mt_${mid}`, time: 60000 });
           const raw = s2.fields.getTextInputValue('v').trim(); const dur = ms(raw);
           if (!dur || dur <= 0) return s2.reply({ content: statusText('Invalid duration format.', 'صيغة المدة غير صحيحة.'), flags: MessageFlags.Ephemeral });
-          selectedDuration = dur; selectedDurationLabel = raw; state = 'SERVER'; await s2.deferUpdate(); await prompt.edit(genContent());
+          selectedDuration = dur; selectedDurationLabel = raw; state = 'SERVER'; await s2.update(genContent());
         } catch {}
       } else {
         const val = cid.split('_')[2]; selectedDuration = ms(val); selectedDurationLabel = val; state = 'SERVER'; return i.update(genContent());
       }
     } else if (state === 'SERVER') {
       if (cid === `sa_srv_${mid}`) {
-	        const m2 = new ModalBuilder().setCustomId(`sa_ms_${mid}`).setTitle('Server ID | ايدي السيرفر');
+                const m2 = new ModalBuilder().setCustomId(`sa_ms_${mid}`).setTitle('Server ID | ايدي السيرفر');
         m2.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('v').setLabel('Server ID | ايدي السيرفر').setStyle(TextInputStyle.Short).setRequired(true).setMinLength(17).setMaxLength(20)));
         await i.showModal(m2);
         try {
           const s2 = await i.awaitModalSubmit({ filter: mi => mi.customId === `sa_ms_${mid}`, time: 60000 });
           const val = s2.fields.getTextInputValue('v').trim();
           if (!/^\d{17,20}$/.test(val)) return s2.reply({ content: statusText('Invalid server ID.', 'ايدي السيرفر غير صحيح.'), flags: MessageFlags.Ephemeral });
-          serverId = val; await s2.deferUpdate(); coll.stop('FINISH');
+          serverId = val; await s2.update({ content: null, embeds: [baseEmbed().setTitle('Processing... | جاري المعالجة')], components: [] }); coll.stop('FINISH');
         } catch {}
       }
     }
@@ -202,7 +202,7 @@ async function handleAddSub(interaction, client) {
   coll.on('end', async (_, reason) => {
     if (reason !== 'FINISH') return;
     const bots = getBots();
-	    if (bots.length < selectedCount) return prompt.edit({ embeds: [basePanelEmbed(client, 'Not Enough Bots | لا توجد بوتات كافية')], components: [] });
+            if (bots.length < selectedCount) return prompt.edit({ embeds: [basePanelEmbed(client, 'Not Enough Bots | لا توجد بوتات كافية')], components: [] });
 
     const code = `#${generateCode(5)}`;
     const expirationTime = Date.now() + selectedDuration;
@@ -224,22 +224,22 @@ async function handleAddSub(interaction, client) {
     })] }).catch(() => {});
 
     const logCh = client.channels.cache.get(logChannelId);
-	    if (logCh) logCh.send({ embeds: [basePanelEmbed(client, 'Subscription Added | تمت إضافة اشتراك').addFields(
-	      { name: 'User | المستخدم', value: `<@${userId}>`, inline: true },
-	      { name: 'Server | السيرفر', value: `\`${serverId}\``, inline: true },
-	      { name: 'Bot Count | عدد البوتات', value: `\`${selectedCount}\``, inline: true },
-	      { name: 'Duration | المدة', value: `\`${formatDuration(selectedDuration)}\``, inline: true },
-	      { name: 'Subscription ID | رقم الاشتراك', value: `\`${code}\``, inline: true },
-	      { name: 'By | بواسطة', value: `<@${interaction.user.id}>`, inline: true }
-	    )] });
-	
-	    await prompt.edit({ embeds: [basePanelEmbed(client, 'Subscription Added | تمت إضافة الاشتراك').addFields(
-	      { name: 'User | المستخدم', value: `<@${userId}>`, inline: true },
-	      { name: 'Server | السيرفر', value: `\`${serverId}\``, inline: true },
-	      { name: 'Bot Count | عدد البوتات', value: `\`${selectedCount}\``, inline: true },
-	      { name: 'Duration | المدة', value: `\`${formatDuration(selectedDuration)}\``, inline: true },
-	      { name: 'Subscription ID | رقم الاشتراك', value: `\`${code}\``, inline: true }
-	    )], components: [] });
+            if (logCh) logCh.send({ embeds: [basePanelEmbed(client, 'Subscription Added | تمت إضافة اشتراك').addFields(
+              { name: 'User | المستخدم', value: `<@${userId}>`, inline: true },
+              { name: 'Server | السيرفر', value: `\`${serverId}\``, inline: true },
+              { name: 'Bot Count | عدد البوتات', value: `\`${selectedCount}\``, inline: true },
+              { name: 'Duration | المدة', value: `\`${formatDuration(selectedDuration)}\``, inline: true },
+              { name: 'Subscription ID | رقم الاشتراك', value: `\`${code}\``, inline: true },
+              { name: 'By | بواسطة', value: `<@${interaction.user.id}>`, inline: true }
+            )] });
+        
+            await sub.editReply({ embeds: [basePanelEmbed(client, 'Subscription Added | تمت إضافة الاشتراك').addFields(
+              { name: 'User | المستخدم', value: `<@${userId}>`, inline: true },
+              { name: 'Server | السيرفر', value: `\`${serverId}\``, inline: true },
+              { name: 'Bot Count | عدد البوتات', value: `\`${selectedCount}\``, inline: true },
+              { name: 'Duration | المدة', value: `\`${formatDuration(selectedDuration)}\``, inline: true },
+              { name: 'Subscription ID | رقم الاشتراك', value: `\`${code}\``, inline: true }
+            )], components: [], content: null });
   });
 }
 
@@ -280,18 +280,18 @@ async function handleRemoveSub(interaction, client) {
     coll2.on('collect', async j => {
       if (j.customId === `sr_cancel_${mid}`) { await j.update({ content: statusText('Cancelled.', 'تم الإلغاء.'), embeds: [], components: [] }); return coll2.stop(); }
       if (j.customId === `sr_confirm_${code}_${mid}`) {
-        await j.deferUpdate(); coll2.stop();
-        await executeRemoval(code, interaction, client, prompt);
+        await j.update({ content: null, embeds: [basePanelEmbed(client, 'Removing... | جاري الحذف')], components: [] }); coll2.stop();
+        await executeRemoval(code, interaction, client);
       }
     });
   });
 }
 
-async function executeRemoval(code, interaction, client, prompt) {
+async function executeRemoval(code, interaction, client) {
   try {
     let timeArray = store.get('time') || [];
     const idx = timeArray.findIndex(e => e.code === code);
-    if (idx === -1) return prompt.edit({ content: statusText('Subscription was not found.', 'لم يتم العثور على الاشتراك.'), embeds: [], components: [] });
+    if (idx === -1) return interaction.editReply({ content: statusText('Subscription was not found.', 'لم يتم العثور على الاشتراك.'), embeds: [], components: [] });
     const sub = timeArray[idx];
     timeArray.splice(idx, 1); store.set('time', timeArray);
 
@@ -302,7 +302,7 @@ async function executeRemoval(code, interaction, client, prompt) {
     toRemove.forEach(t => bots.push({ token: t.token }));
     store.set('bots', bots);
 
-    await prompt.edit({ content: `**Subscription Removed**\nتم حذف الاشتراك \`${code}\` بنجاح. سيتم تنظيف البوتات.`, embeds: [], components: [] });
+    await interaction.editReply({ content: `**Subscription Removed**\nتم حذف الاشتراك \`${code}\` بنجاح. سيتم تنظيف البوتات.`, embeds: [], components: [] });
 
     client.users.fetch(sub.user)
       .then(u => u.send({ embeds: [buildSubscriptionRemovedDm(client, {
@@ -381,19 +381,19 @@ async function handleAddTime(interaction, client) {
           durStr = s2.fields.getTextInputValue('v').trim();
           const dur = ms(durStr);
           if (!dur || dur <= 0) return s2.reply({ content: statusText('Invalid time.', 'الوقت غير صحيح.'), flags: MessageFlags.Ephemeral });
-          await s2.deferUpdate(); coll2.stop();
-          await executeAddTime(code, dur, durStr, interaction, client, prompt);
+          await s2.update({ content: null, embeds: [basePanelEmbed(client, 'Processing... | جاري المعالجة')], components: [] }); coll2.stop();
+          await executeAddTime(code, dur, durStr, interaction, client);
         } catch {}
       } else {
         const dur = ms(durStr);
-        await j.deferUpdate(); coll2.stop();
-        await executeAddTime(code, dur, durStr, interaction, client, prompt);
+        await j.update({ content: null, embeds: [basePanelEmbed(client, 'Processing... | جاري المعالجة')], components: [] }); coll2.stop();
+        await executeAddTime(code, dur, durStr, interaction, client);
       }
     });
   });
 }
 
-async function executeAddTime(code, durationMs, durationStr, interaction, client, prompt) {
+async function executeAddTime(code, durationMs, durationStr, interaction, client) {
   try {
     const timeArray = store.get('time') || [];
     const entry = timeArray.find(e => e.code === code);
@@ -402,11 +402,11 @@ async function executeAddTime(code, durationMs, durationStr, interaction, client
     entry.expirationTime += durationMs;
     store.set('time', timeArray);
 
-    await prompt.edit({ embeds: [basePanelEmbed(client, 'Subscription Time Updated | تم تحديث وقت الاشتراك').addFields(
+    await interaction.editReply({ embeds: [basePanelEmbed(client, 'Subscription Time Updated | تم تحديث وقت الاشتراك').addFields(
       { name: 'Subscription ID | رقم الاشتراك', value: `\`${code}\``, inline: true },
       { name: 'Added Time | الوقت المضاف', value: `\`${durationStr}\``, inline: true },
       { name: 'New Expiry | الانتهاء الجديد', value: `<t:${Math.floor(entry.expirationTime / 1000)}:F>` }
-    )], components: [] });
+    )], components: [], content: null });
 
     const logCh = client.channels.cache.get(logChannelId);
     if (logCh) logCh.send({ embeds: [basePanelEmbed(client, 'Subscription Time Updated | تم تحديث وقت الاشتراك').addFields(
