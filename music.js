@@ -4058,11 +4058,13 @@ module.exports = {
             const tkObj = (store.get('tokens') || []).find(t => t.token === token);
             if (!tkObj?.channel || tkObj.channel !== newState.channelId) return;
 
-            const channel = newState.channel;
-            if (!channel?.userLimit) return; // لا يوجد لمت — تجاهل
+            // نحل الروم من guild cache مباشرة — مُحدَّث دائماً عبر gateway CHANNEL_UPDATE
+            const channel = newState.guild?.channels.cache.get(newState.channelId) ?? newState.channel;
+            if (!channel?.userLimit) return; // 0 أو غير محدد = لا يوجد لمت
 
-            // عدّ الأشخاص فقط (بدون بوتات) — بدون API call، من الكاش
+            // عدّ البشر فقط (بدون بوتات) من الكاش — بدون API call
             const humanCount = channel.members.filter(m => !m.user.bot).size;
+            // humanCount > userLimit (تجاوز فعلي، مو مساواة)
             if (humanCount <= channel.userLimit) return;
 
             // cooldown لمنع الإزعاج (30 ثانية لكل شخص في نفس الروم)
