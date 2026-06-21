@@ -4089,9 +4089,9 @@ module.exports = {
                 .setDescription(
                     `⚠️ **تجاوز الحد المسموح**\n\n` +
                     `**الروم :** <#${newState.channelId}>\n` +
-                    `**الحد الأقصى :** ${channel.userLimit} مستخدم\n` +
-                    `**العدد الحالي :** ${humanCount} مستخدم\n\n` +
-                    `يرجى مغادرة الروم وعدم تجاوز اللمت الخاص بالروم.`
+                    `**الحد الأقصى :** \`${channel.userLimit}\` شخص\n` +
+                    `**العدد الحالي :** \`${humanCount}\` شخص\n\n` +
+                    `**يرجى مغادرة الروم وعدم تجاوز اللمت الخاص بالروم.**`
                 )
                 .setFooter({
                     text: _guild.name,
