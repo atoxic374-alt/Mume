@@ -10,6 +10,39 @@ const { liftDiscordClientLimits } = require('./discordClientTuning');
 const AUTO_SETTINGS_FILE = path.join(process.cwd(), 'settings', 'automatic.json');
 const IMAGE_TIMEOUT_MS = Math.max(3000, Number(process.env.PROFILE_IMAGE_TIMEOUT_MS || 10000));
 const IMAGE_MAX_BYTES = Math.max(256 * 1024, Number(process.env.PROFILE_IMAGE_MAX_BYTES || 8 * 1024 * 1024));
+const PROFILE_MAX_RETRIES = 4;
+const PROFILE_MAX_WAIT_MS = 90_000;
+
+/** Extract retry-after ms from a discord.js or axios 429 error. Returns null if not a rate-limit. */
+function profileExtractRetryAfterMs(err) {
+  const djsRa = err?.rawError?.retry_after ?? err?.retryAfter;
+  if (djsRa != null) return Math.min(Math.ceil(Number(djsRa) * 1000) + 1500, PROFILE_MAX_WAIT_MS);
+  if (err?.response?.status === 429) {
+    const ra = err?.response?.data?.retry_after
+      ?? err?.response?.headers?.['retry-after']
+      ?? err?.response?.headers?.['x-ratelimit-reset-after'];
+    return Math.min(Math.ceil(Number(ra ?? 5) * 1000) + 1500, PROFILE_MAX_WAIT_MS);
+  }
+  if (err?.status === 429 || err?.httpStatus === 429) {
+    const ra = String(err?.message || '').match(/(\d+(?:\.\d+)?)\s*second/i)?.[1];
+    return ra ? Math.min(Math.ceil(parseFloat(ra) * 1000) + 1500, PROFILE_MAX_WAIT_MS) : 5_000;
+  }
+  return null;
+}
+
+/** Retry an async fn up to maxRetries. On 429 waits retry_after; otherwise exponential backoff. */
+async function profileWithRetry(fn, maxRetries = PROFILE_MAX_RETRIES) {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try { return await fn(); } catch (err) {
+      lastErr = err;
+      if (attempt >= maxRetries) break;
+      const waitMs = profileExtractRetryAfterMs(err) ?? Math.min(1500 * attempt, 10_000);
+      await new Promise(r => setTimeout(r, waitMs));
+    }
+  }
+  throw lastErr;
+}
 const IMAGE_MIME_BY_EXT = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -101,11 +134,11 @@ function twitchUrl() {
 }
 
 async function patchCurrentApplication(token, payload) {
-  const request = async (body) => axios.patch('https://discord.com/api/v10/applications/@me', body, {
+  const request = async (body) => profileWithRetry(() => axios.patch('https://discord.com/api/v10/applications/@me', body, {
     headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' },
     timeout: IMAGE_TIMEOUT_MS,
     validateStatus: status => status >= 200 && status < 300,
-  });
+  }));
 
   const primary = {};
   if (payload.name) primary.name = String(payload.name).slice(0, 32);
@@ -125,11 +158,11 @@ async function patchCurrentApplication(token, payload) {
 
 async function patchBotBanner(token, bannerData) {
   if (!bannerData) return false;
-  await axios.patch('https://discord.com/api/v10/users/@me', { banner: bannerData }, {
+  await profileWithRetry(() => axios.patch('https://discord.com/api/v10/users/@me', { banner: bannerData }, {
     headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' },
     timeout: IMAGE_TIMEOUT_MS,
     validateStatus: status => status >= 200 && status < 300,
-  });
+  }));
   return true;
 }
 
@@ -140,9 +173,11 @@ async function applyProfileToClient(botClient, token, options = {}) {
   const result = { name: botName, username: false, avatar: false, banner: false, app: false, status: false };
 
   if (botClient?.user) {
-    await botClient.user.setUsername(botName).then(() => { result.username = true; }).catch(() => {});
+    await profileWithRetry(() => botClient.user.setUsername(botName))
+      .then(() => { result.username = true; }).catch(() => {});
     if (assets.avatarData) {
-      await botClient.user.setAvatar(assets.avatarData).then(() => { result.avatar = true; }).catch(() => {});
+      await profileWithRetry(() => botClient.user.setAvatar(assets.avatarData))
+        .then(() => { result.avatar = true; }).catch(() => {});
     }
     if (profile.status) {
       botClient.user.setPresence({

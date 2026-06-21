@@ -2683,8 +2683,8 @@ module.exports = {
                                 if (parseCustomEmojiInput(emoji)) {
                                     await runBotProcess('Sync Status Emoji', selected, async (t, bot) => {
                                         if (!bot?.user) throw new Error('bot offline');
-                                        t.voiceStatusEmoji = await syncCustomEmojiToBotApplication(bot, emoji);
-                                    }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: modalCode });
+                                        t.voiceStatusEmoji = await stgWithRetry(() => syncCustomEmojiToBotApplication(bot, emoji));
+                                    }, { concurrency: SETTINGS_IMAGE_CONCURRENCY, code: modalCode });
                                 } else {
                                     selected.forEach(t => { t.voiceStatusEmoji = emoji; });
                                 }
@@ -2701,12 +2701,12 @@ module.exports = {
                                     data = await fetchImageDataUri(url, 'Banner');
 
                                             await runBotProcess('Change Banners', getSelectedTokens({ code: modalCode }), async (t) => {
-                                                await axios.patch('https://discord.com/api/v10/users/@me', { banner: data }, {
+                                                await stgWithRetry(() => axios.patch('https://discord.com/api/v10/users/@me', { banner: data }, {
                                                     headers: { Authorization: `Bot ${t.token}`, 'Content-Type': 'application/json' },
                                                     timeout: SETTINGS_IMAGE_TIMEOUT_MS,
-                                                });
+                                                }));
                                                 await patchCurrentApplication(t.token, { cover_image: data }).catch(() => {});
-                                            }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: modalCode });
+                                            }, { concurrency: SETTINGS_IMAGE_CONCURRENCY, code: modalCode });
                                 } catch (e) {
                                     await mainMsg.edit({ content: `❌ فشل تحديث البانر: ${e.message}` });
                                 }
