@@ -1101,7 +1101,9 @@ module.exports = {
                                         ? (state.namesWithNumbers ? 'أسماء الرومات + أرقام' : 'أسماء الرومات')
                                         : state.mode === 'numbers'
                                             ? (state.namePrefix
-                                                ? `${state.namePrefix}${_numStart}, ${state.namePrefix}${_numStart + 1}...`
+                                                ? (state.numberPosition === 'before'
+                                                    ? `${_numStart}${state.namePrefix}, ${_numStart + 1}${state.namePrefix}...`
+                                                    : `${state.namePrefix}${_numStart}, ${state.namePrefix}${_numStart + 1}...`)
                                                 : `${_numStart}, ${_numStart + 1}, ${_numStart + 2}...`)
                                             : 'بدون تغيير أسماء';
 
@@ -1114,9 +1116,11 @@ module.exports = {
                                         }
                                         if (state.mode === 'numbers') {
                                             const num = idx + 1 + (state.numberOffset || 0);
-                                            return state.namePrefix
-                                                ? `${state.namePrefix}${num}`.slice(0, 32)
-                                                : String(num);
+                                            if (!state.namePrefix) return String(num);
+                                            return (state.numberPosition === 'before'
+                                                ? `${num}${state.namePrefix}`
+                                                : `${state.namePrefix}${num}`
+                                            ).slice(0, 32);
                                         }
                                         return null;
                                     }
@@ -1435,6 +1439,7 @@ module.exports = {
                         namePrefix: null,
                         namesWithNumbers: null,
                         numberOffset: 0,
+                        numberPosition: 'after',
                     };
                     activeDistributionState = state;
 
@@ -1619,6 +1624,15 @@ module.exports = {
                                     .setCustomId('start_from')
                                     .setLabel('هل تريد التكملة على آخر رقم؟')
                                     .setPlaceholder('نعم / ن / Yes / Y   —   لا / ل / No / N')
+                                    .setRequired(false)
+                                    .setStyle(TextInputStyle.Short)
+                                    .setMaxLength(10)
+                            ),
+                            new ActionRowBuilder().addComponents(
+                                new TextInputBuilder()
+                                    .setCustomId('num_position')
+                                    .setLabel('موضع الرقم (بعد الكلمة أو قبلها)')
+                                    .setPlaceholder('قبل / ق / before / b   —   بعد / ع / after / a  (الافتراضي: بعد)')
                                     .setRequired(false)
                                     .setStyle(TextInputStyle.Short)
                                     .setMaxLength(10)
@@ -2630,8 +2644,22 @@ module.exports = {
                                     return;
                                 }
                                 const input = interaction.fields.getTextInputValue('prefix').trim();
-                                activeDistributionState.namePrefix = input === '0' ? '' : input;
+                                const hasPrefix = input !== '0' && input !== '';
+                                activeDistributionState.namePrefix = hasPrefix ? input : '';
 
+                                // ── موضع الرقم (فقط لو في كلمة مميزة) ──────────────────
+                                const posRaw = (interaction.fields.getTextInputValue('num_position').trim() || '').toLowerCase();
+                                if (!hasPrefix) {
+                                    // لا كلمة → الموضع ما يفيد، نثبته على after
+                                    activeDistributionState.numberPosition = 'after';
+                                } else if (['قبل', 'ق', 'before', 'b'].includes(posRaw)) {
+                                    activeDistributionState.numberPosition = 'before';
+                                } else {
+                                    // بعد / ع / after / a / فاضي → الافتراضي
+                                    activeDistributionState.numberPosition = 'after';
+                                }
+
+                                // ── التكملة على آخر رقم ──────────────────────────────────
                                 const startFromRaw = (interaction.fields.getTextInputValue('start_from').trim() || '').toLowerCase();
                                 const _isYes = ['نعم', 'ن', 'yes', 'y'].includes(startFromRaw);
                                 if (_isYes) {
