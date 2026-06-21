@@ -4081,8 +4081,10 @@ module.exports = {
             const _guild = newState.guild;
             const _iconURL = _guild.iconURL({ dynamic: true, size: 128 }) ?? undefined;
             const { EmbedBuilder } = require('discord.js');
+            // لون رول البوت في السيرفر → accentColor → Discord blurple كـ fallback
+            const _botColor = _guild.members.me?.displayColor || TrueMusic.user?.accentColor || 0x5865F2;
             const _limitEmbed = new EmbedBuilder()
-                .setColor(0xE74C3C)
+                .setColor(_botColor)
                 .setThumbnail(_iconURL ?? null)
                 .setDescription(
                     `⚠️ **تجاوز الحد المسموح**\n\n` +
