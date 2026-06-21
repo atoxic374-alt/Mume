@@ -1,2 +1,3 @@
 - [Performance Architecture](perf-arch.md) — store.js singleton replaces all JSON sync I/O; makeCache+sweepers+compress on every Discord client; lazy bot unloading in manager.js.
 - [automatic.js interaction rules](automatic-interactions.md) — rules for update() vs reply() in automatic.js to prevent public panel modification.
+- [Rate Limit Retry Pattern](rate-limit-retry.md) — all bulk API ops in mu.js/settings.js now wrap with muWithRetry/stgWithRetry; extractRetryAfterMs handles djs+axios 429; max wait 90s.

@@ -13,6 +13,56 @@ const { runningBots } = require('../../music');
 const MU_BATCH_SIZE = 8;
 const MU_NAME_DELAY_MS = 700;
 const MU_AVATAR_TIMEOUT_MS = 12000;
+const MU_MAX_RETRIES = 4;
+const MU_MAX_WAIT_MS = 90_000;
+
+/**
+ * Extract retry-after delay (ms) from a discord.js or axios error.
+ * Returns null if the error is not a rate-limit.
+ */
+function extractRetryAfterMs(err) {
+    // discord.js DiscordAPIError
+    const djsRa = err?.rawError?.retry_after ?? err?.retryAfter;
+    if (djsRa != null) return Math.min(Math.ceil(Number(djsRa) * 1000) + 1500, MU_MAX_WAIT_MS);
+
+    // axios response
+    const axiosStatus = err?.response?.status;
+    if (axiosStatus === 429) {
+        const ra = err?.response?.data?.retry_after
+            ?? err?.response?.headers?.['retry-after']
+            ?? err?.response?.headers?.['x-ratelimit-reset-after'];
+        if (ra != null) return Math.min(Math.ceil(Number(ra) * 1000) + 1500, MU_MAX_WAIT_MS);
+        return 5_000; // fallback 5s for unknown 429
+    }
+
+    // HTTP status from discord.js
+    if (err?.status === 429 || err?.httpStatus === 429) {
+        const ra = String(err?.message || '').match(/(\d+(\.\d+)?)\s*second/i)?.[1];
+        return ra ? Math.min(Math.ceil(parseFloat(ra) * 1000) + 1500, MU_MAX_WAIT_MS) : 5_000;
+    }
+    return null;
+}
+
+/**
+ * Retry an async fn up to maxRetries times.
+ * On 429: waits for retry_after then retries.
+ * On other errors: exponential backoff then retries.
+ */
+async function muWithRetry(fn, maxRetries = MU_MAX_RETRIES) {
+    let lastErr;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            return await fn();
+        } catch (err) {
+            lastErr = err;
+            if (attempt >= maxRetries) break;
+            const ratelimitWait = extractRetryAfterMs(err);
+            const waitMs = ratelimitWait ?? Math.min(1500 * attempt, 10_000);
+            await new Promise(r => setTimeout(r, waitMs));
+        }
+    }
+    throw lastErr;
+}
 
 async function muRunBatched(items, batchSize, worker) {
     for (let i = 0; i < items.length; i += batchSize) {
@@ -21,36 +71,41 @@ async function muRunBatched(items, batchSize, worker) {
 }
 
 async function muSetAvatar(token, dataUri) {
-    const bot = runningBots.get(token);
-    if (bot?.user) {
-        await bot.user.setAvatar(dataUri);
-        return;
-    }
-    await axios.patch('https://discord.com/api/v10/users/@me', { avatar: dataUri }, {
-        headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' },
-        timeout: MU_AVATAR_TIMEOUT_MS,
+    await muWithRetry(async () => {
+        const bot = runningBots.get(token);
+        if (bot?.user) {
+            await bot.user.setAvatar(dataUri);
+            return;
+        }
+        await axios.patch('https://discord.com/api/v10/users/@me', { avatar: dataUri }, {
+            headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' },
+            timeout: MU_AVATAR_TIMEOUT_MS,
+        });
     });
 }
 
 async function muSetName(token, name) {
     const safeName = String(name).trim().slice(0, 32);
-    const bot = runningBots.get(token);
-    if (bot?.user) {
-        const result = await bot.user.setUsername(safeName).catch(err => ({ _err: err }));
-        if (result?._err) throw result._err;
-        return;
-    }
-    const res = await axios.patch('https://discord.com/api/v10/users/@me', { username: safeName }, {
-        headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' },
-        timeout: 10000,
+    await muWithRetry(async () => {
+        const bot = runningBots.get(token);
+        if (bot?.user) {
+            const result = await bot.user.setUsername(safeName).catch(err => ({ _err: err }));
+            if (result?._err) throw result._err;
+            return;
+        }
+        await axios.patch('https://discord.com/api/v10/users/@me', { username: safeName }, {
+            headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' },
+            timeout: 10000,
+        });
     });
-    return res.data;
 }
 
 async function muSetBanner(token, dataUri) {
-    await axios.patch('https://discord.com/api/v10/users/@me', { banner: dataUri }, {
-        headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' },
-        timeout: MU_AVATAR_TIMEOUT_MS,
+    await muWithRetry(async () => {
+        await axios.patch('https://discord.com/api/v10/users/@me', { banner: dataUri }, {
+            headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' },
+            timeout: MU_AVATAR_TIMEOUT_MS,
+        });
     });
 }
 

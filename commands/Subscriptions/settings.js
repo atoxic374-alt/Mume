@@ -26,7 +26,40 @@ const SETTINGS_PROCESS_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PRO
 const SETTINGS_PROFILE_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PROFILE_CONCURRENCY || 4));
 const SETTINGS_IMAGE_CONCURRENCY  = Math.max(1, Number(process.env.SETTINGS_IMAGE_CONCURRENCY  || 10));
 const SETTINGS_NAME_CONCURRENCY   = 1; // sequential — Discord username rate-limit is per-bot but global bucket is strict
+const SETTINGS_MAX_RETRIES        = 4;
+const SETTINGS_MAX_WAIT_MS        = 90_000;
 const SETTINGS_DISTRIBUTION_BATCH_SIZE = Math.max(1, Number(process.env.SETTINGS_DISTRIBUTION_BATCH_SIZE || 12));
+
+/** Extract retry-after ms from a discord.js or axios 429 error. Returns null if not a rate-limit. */
+function stgExtractRetryAfterMs(err) {
+    const djsRa = err?.rawError?.retry_after ?? err?.retryAfter;
+    if (djsRa != null) return Math.min(Math.ceil(Number(djsRa) * 1000) + 1500, SETTINGS_MAX_WAIT_MS);
+    if (err?.response?.status === 429) {
+        const ra = err?.response?.data?.retry_after
+            ?? err?.response?.headers?.['retry-after']
+            ?? err?.response?.headers?.['x-ratelimit-reset-after'];
+        return Math.min(Math.ceil(Number(ra ?? 5) * 1000) + 1500, SETTINGS_MAX_WAIT_MS);
+    }
+    if (err?.status === 429 || err?.httpStatus === 429) {
+        const ra = String(err?.message || '').match(/(\d+(?:\.\d+)?)\s*second/i)?.[1];
+        return ra ? Math.min(Math.ceil(parseFloat(ra) * 1000) + 1500, SETTINGS_MAX_WAIT_MS) : 5_000;
+    }
+    return null;
+}
+
+/** Retry an async fn up to maxRetries. On 429 waits retry_after; otherwise exponential backoff. */
+async function stgWithRetry(fn, maxRetries = SETTINGS_MAX_RETRIES) {
+    let lastErr;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try { return await fn(); } catch (err) {
+            lastErr = err;
+            if (attempt >= maxRetries) break;
+            const waitMs = stgExtractRetryAfterMs(err) ?? Math.min(1500 * attempt, 10_000);
+            await new Promise(r => setTimeout(r, waitMs));
+        }
+    }
+    throw lastErr;
+}
 const SETTINGS_IMAGE_TIMEOUT_MS = Math.max(3000, Number(process.env.SETTINGS_IMAGE_TIMEOUT_MS || 10000));
 const SETTINGS_IMAGE_MAX_BYTES = Math.max(256 * 1024, Number(process.env.SETTINGS_IMAGE_MAX_BYTES || 8 * 1024 * 1024));
 const SETTINGS_SELECT_PAGE_SIZE = 25;
@@ -2323,7 +2356,7 @@ module.exports = {
                                         }
                                         await runBotProcess('Change Avatars', getSelectedTokens({ code: selectedCode }), async (t, bot) => {
                                             if (!bot?.user) throw new Error('bot offline');
-                                            await bot.user.setAvatar(imageData);
+                                            await stgWithRetry(() => bot.user.setAvatar(imageData));
                                             await patchCurrentApplication(t.token, { icon: imageData }).catch(() => bot.application?.edit?.({ icon: imageData }).catch(() => {}));
                                             refreshEmbedColor(bot).catch(() => {});
                                         }, { concurrency: SETTINGS_IMAGE_CONCURRENCY, code: selectedCode });
@@ -2364,10 +2397,10 @@ module.exports = {
                                             return;
                                         }
                                         await runBotProcess('Change Banners', getSelectedTokens({ code: selectedCode }), async (t) => {
-                                            await axios.patch('https://discord.com/api/v10/users/@me', { banner: data }, {
+                                            await stgWithRetry(() => axios.patch('https://discord.com/api/v10/users/@me', { banner: data }, {
                                                 headers: { Authorization: `Bot ${t.token}`, 'Content-Type': 'application/json' },
                                                 timeout: SETTINGS_IMAGE_TIMEOUT_MS,
-                                            });
+                                            }));
                                             await patchCurrentApplication(t.token, { cover_image: data }).catch(() => {});
                                         }, { concurrency: SETTINGS_IMAGE_CONCURRENCY, code: selectedCode });
                                         setTimeout(() => updatePanel(), 3000);
