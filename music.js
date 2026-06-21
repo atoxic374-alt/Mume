@@ -86,6 +86,15 @@ function selectLavalinkHostsForBot(hostConfig, token, serverId) {
     return selected;
 }
 
+// ── limitGuard: over-limit DM cooldown (shared across all bot instances) ─────
+// مشترك بين كل البوتات في نفس العملية — يمنع إرسال أكثر من رسالة للشخص الواحد
+const _limitGuardCooldown = new Map(); // `${channelId}:${userId}` → timestamp
+const _LIMIT_GUARD_COOLDOWN_MS = 30_000;
+setInterval(() => {
+    const cutoff = Date.now() - _LIMIT_GUARD_COOLDOWN_MS;
+    for (const [k, ts] of _limitGuardCooldown) if (ts < cutoff) _limitGuardCooldown.delete(k);
+}, 5 * 60_000).unref?.();
+
 // ── onlyBot: audit-log cache per guild (TTL 2.5s) ────────────────────────────
 // يُشارك بين كل البوتات في نفس الغيلد — يمنع مئات الطلبات المتزامنة
 const _movedByBotCache = new Map(); // guildId → { result: bool, ts: number, pending: Promise|null }
@@ -4036,6 +4045,34 @@ module.exports = {
             } finally {
                 setTimeout(() => { voiceReturnLock = false; }, 800);
             }
+        });
+
+        // ── limitGuard: أبلغ المستخدم عند تجاوز لمت الروم ──────────────────────
+        TrueMusic.on('voiceStateUpdate', (oldState, newState) => {
+            // فقط عند الدخول لروم جديد (ليس البوت نفسه)
+            if (!newState.channelId) return;
+            if (newState.channelId === oldState.channelId) return;
+            if (newState.member?.user?.bot) return;
+
+            // فقط الروم المخصص لهذا البوت
+            const tkObj = (store.get('tokens') || []).find(t => t.token === token);
+            if (!tkObj?.channel || tkObj.channel !== newState.channelId) return;
+
+            const channel = newState.channel;
+            if (!channel?.userLimit) return; // لا يوجد لمت — تجاهل
+
+            // عدّ الأشخاص فقط (بدون بوتات) — بدون API call، من الكاش
+            const humanCount = channel.members.filter(m => !m.user.bot).size;
+            if (humanCount <= channel.userLimit) return;
+
+            // cooldown لمنع الإزعاج (30 ثانية لكل شخص في نفس الروم)
+            const ck = `${newState.channelId}:${newState.member.id}`;
+            const now = Date.now();
+            if (_limitGuardCooldown.has(ck) && now - _limitGuardCooldown.get(ck) < _LIMIT_GUARD_COOLDOWN_MS) return;
+            _limitGuardCooldown.set(ck, now);
+
+            // إرسال فوري — fire and forget بدون await
+            newState.member.send('⚠️ يرجى الخروج من الروم وعدم تجاوز لمت الروم.').catch(() => {});
         });
 
         // ── Fix: Re-init Lavalink after Discord WebSocket shard resumes ──────────
