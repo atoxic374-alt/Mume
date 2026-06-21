@@ -86,6 +86,41 @@ function selectLavalinkHostsForBot(hostConfig, token, serverId) {
     return selected;
 }
 
+// ── onlyBot: audit-log cache per guild (TTL 2.5s) ────────────────────────────
+// يُشارك بين كل البوتات في نفس الغيلد — يمنع مئات الطلبات المتزامنة
+const _movedByBotCache = new Map(); // guildId → { result: bool, ts: number, pending: Promise|null }
+const _MOVED_BY_BOT_TTL = 2500;
+
+async function checkMovedByBot(guild) {
+    if (!guild) return false;
+    const guildId = guild.id;
+    const now = Date.now();
+    const cached = _movedByBotCache.get(guildId);
+
+    // نتيجة محفوظة وما زالت صالحة
+    if (cached && !cached.pending && now - cached.ts < _MOVED_BY_BOT_TTL) return cached.result;
+
+    // طلب جارٍ بالفعل — أرجع نتيجته بدون طلب ثانٍ
+    if (cached?.pending) return cached.pending;
+
+    const pending = (async () => {
+        try {
+            const { AuditLogEvent } = require('discord.js');
+            const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberMove, limit: 1 });
+            const entry = logs.entries.first();
+            const result = !!(entry && Date.now() - entry.createdTimestamp < 3000 && entry.executor?.bot === true);
+            _movedByBotCache.set(guildId, { result, ts: Date.now(), pending: null });
+            return result;
+        } catch {
+            _movedByBotCache.set(guildId, { result: false, ts: Date.now(), pending: null });
+            return false;
+        }
+    })();
+
+    _movedByBotCache.set(guildId, { result: false, ts: now, pending });
+    return pending;
+}
+
 // ── B: resolveTrack cache (1-hour TTL, max 500 entries) ──────────────────────
 const _resolveTrackCache = new Map();
 const RESOLVE_TRACK_TTL = 60 * 60 * 1000;
@@ -3971,8 +4006,19 @@ module.exports = {
                 voiceRejoinRetryTimer = null;
                 return;
             }
-            // تم نقله لروم ثاني وـ backToVoice مغلق — لا نرجعه
-            if (newState.channelId && tokenObj.backToVoice === 'off') return;
+            // تم نقله لروم ثاني — تحقق من onlyBot و backToVoice
+            if (newState.channelId) {
+                if (tokenObj.onlyBot === 'on') {
+                    // onlyBot: لو بوت سحبه يبقى في الروم الجديد حتى ينطرد
+                    // لو إنسان سحبه يرجع لرومه الأصلي فوراً
+                    const guild = newState.guild || oldState.guild;
+                    const movedByBot = await checkMovedByBot(guild);
+                    if (movedByBot) return; // بوت سحبه — لا نرجعه
+                    // إنسان سحبه — نكمل للرجوع أدناه
+                } else if (tokenObj.backToVoice === 'off') {
+                    return;
+                }
+            }
 
             // ── البوت طُرد أو خرج من الروم — أرجعه فوراً بغض النظر عن isStopped ──
             // isStopped() تعني "أوقف التشغيل" لا "اخرج من الروم"

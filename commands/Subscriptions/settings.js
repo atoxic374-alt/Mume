@@ -77,6 +77,7 @@ const SETTINGS_EMOJI = {
     distribute:    MUSIC_EMOJIS.stg.rooms,
     moveIdle:      MUSIC_EMOJIS.stg.rooms,
     backToVoice:   MUSIC_EMOJIS.stg.rooms,
+    onlyBot:       MUSIC_EMOJIS.stg.rooms,
     toggleSetting: MUSIC_EMOJIS.stg.rooms,
     commandChat:   MUSIC_EMOJIS.stg.rooms,
     statusEmoji:   MUSIC_EMOJIS.stg.rooms,
@@ -465,6 +466,17 @@ module.exports = {
 
                 function backToVoiceSummary(selectedTokens = getSelectedTokens({ includeWaiting: true })) {
                     const enabled = selectedTokens.filter(t => t.backToVoice !== 'off').length;
+                    const total = selectedTokens.length;
+                    if (!total) return { enabled: false, label: '`OFF`', details: 'لا توجد بوتات نشطة حالياً.' };
+                    return {
+                        enabled: enabled > 0,
+                        label: enabled === total ? '`ON`' : enabled === 0 ? '`OFF`' : '`Mixed`',
+                        details: `مفعل في **${enabled}/${total}** بوت.`,
+                    };
+                }
+
+                function onlyBotSummary(selectedTokens = getSelectedTokens({ includeWaiting: true })) {
+                    const enabled = selectedTokens.filter(t => t.onlyBot === 'on').length;
                     const total = selectedTokens.length;
                     if (!total) return { enabled: false, label: '`OFF`', details: 'لا توجد بوتات نشطة حالياً.' };
                     return {
@@ -2133,6 +2145,7 @@ module.exports = {
                                 else if (currentPanel === 'ROOMS') {
                                     const chat = chatSummary();
                                     const backVoice = backToVoiceSummary();
+                                    const onlyBot = onlyBotSummary();
                                     const display = getDisplay(selectedCode);
                                     const embed = new EmbedBuilder()
                                         .setTitle(`Room Settings — ${selectedCode}`)
@@ -2145,11 +2158,16 @@ module.exports = {
                                             `   *Status :*  ${backVoice.label}`,
                                             `   *Info :*  *${backVoice.details}*`,
                                             '',
-                                            '**3. Voice Status**',
+                                            '**3. Only Bot**',
+                                            `   *Status :*  ${onlyBot.label}`,
+                                            `   *Info :*  *${onlyBot.details}*`,
+                                            `   *Note :*  *فقط البوتات تقدر تسحبه — لو إنسان سحبه يرجع لرومه الأصلي. لو انطرد يرجع لرومه الأصلي دايماً.*`,
+                                            '',
+                                            '**4. Voice Status**',
                                             `   *Status :*  \`${display.voiceStatus ? 'ON' : 'OFF'}\`  ${display.voiceStatusEmoji || '🎵'}`,
                                             `   *Info :*  *عند تشغيل أغنية يتم تحديث Status الروم باسم مختصر للأغنية.*`,
                                             '',
-                                            '**4. Options Guide**',
+                                            '**5. Options Guide**',
                                             `   **Voice Status —** *عرض مكان كل بوت داخل روم أو خارجه.*`,
                                             `   **Smart Distribution —** *توزيع البوتات على نطاق رومات تختاره.*`,
                                             `   **Move Idle —** *تحريك البوتات الخاملة إلى روم أو أكثر.*`,
@@ -2167,6 +2185,7 @@ module.exports = {
                                                     settingsOption(client, { label: 'Smart Distribution', value: 'distribute', description: 'توزيع البوتات على نطاق رومات' }, SETTINGS_EMOJI.distribute),
                                                     settingsOption(client, { label: 'Move Idle', value: 'moveidle', description: 'تحريك البوتات الخاملة إلى روم' }, SETTINGS_EMOJI.moveIdle),
                                                     settingsOption(client, { label: `Back to Voice : ${backVoice.enabled ? 'ON' : 'OFF'}`, value: 'toggle_back_voice', description: 'تفعيل أو تعطيل الرجوع التلقائي للروم' }, SETTINGS_EMOJI.backToVoice),
+                                                    settingsOption(client, { label: `Only Bot : ${onlyBot.enabled ? 'ON' : 'OFF'}`, value: 'toggle_only_bot', description: 'فقط البوتات تسحبه — الإنسان يسحبه يرجع لرومه الأصلي' }, SETTINGS_EMOJI.onlyBot),
                                                     settingsOption(client, { label: `Voice Status : ${display.voiceStatus ? 'ON' : 'OFF'}`, value: 'toggle_voice_status', description: 'تفعيل أو تعطيل كتابة اسم الأغنية على Status' }, SETTINGS_EMOJI.toggleSetting),
                                                     settingsOption(client, { label: 'Command Chat', value: 'panel_chat', description: 'تحديد الشات الذي يستقبل الأوامر' }, SETTINGS_EMOJI.commandChat),
                                                     settingsOption(client, { label: 'Status Emoji', value: 'voice_status_emoji', description: 'تغيير إيموجي Status الروم' }, SETTINGS_EMOJI.statusEmoji),
@@ -2493,6 +2512,14 @@ module.exports = {
                     const sel = tokens.filter(t => t.code === selectedCode);
                     const enabled = sel.some(t => t.backToVoice !== 'off');
                     sel.forEach(t => { t.backToVoice = enabled ? 'off' : 'on'; });
+                    store.set('tokens', tokens);
+                    return updatePanel(i);
+                }
+                if (val === 'toggle_only_bot') {
+                    tokens = store.get('tokens') || [];
+                    const sel = tokens.filter(t => t.code === selectedCode);
+                    const enabled = sel.some(t => t.onlyBot === 'on');
+                    sel.forEach(t => { t.onlyBot = enabled ? 'off' : 'on'; });
                     store.set('tokens', tokens);
                     return updatePanel(i);
                 }
