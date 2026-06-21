@@ -24,6 +24,8 @@ const { getEmbedColor, refreshEmbedColor } = require('../../utils/embedColor');
 
 const SETTINGS_PROCESS_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PROCESS_CONCURRENCY || 16));
 const SETTINGS_PROFILE_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PROFILE_CONCURRENCY || 4));
+const SETTINGS_IMAGE_CONCURRENCY  = Math.max(1, Number(process.env.SETTINGS_IMAGE_CONCURRENCY  || 10));
+const SETTINGS_NAME_CONCURRENCY   = 1; // sequential — Discord username rate-limit is per-bot but global bucket is strict
 const SETTINGS_DISTRIBUTION_BATCH_SIZE = Math.max(1, Number(process.env.SETTINGS_DISTRIBUTION_BATCH_SIZE || 12));
 const SETTINGS_IMAGE_TIMEOUT_MS = Math.max(3000, Number(process.env.SETTINGS_IMAGE_TIMEOUT_MS || 10000));
 const SETTINGS_IMAGE_MAX_BYTES = Math.max(256 * 1024, Number(process.env.SETTINGS_IMAGE_MAX_BYTES || 8 * 1024 * 1024));
@@ -2292,9 +2294,18 @@ module.exports = {
                                         const safeName = text.slice(0, 32);
                                         await runBotProcess('Change Names', getSelectedTokens({ code: selectedCode }), async (t, bot) => {
                                             if (!bot?.user) throw new Error('bot offline');
-                                            await bot.user.setUsername(safeName);
+                                            let lastErr = null;
+                                            for (let attempt = 1; attempt <= 4; attempt++) {
+                                                const r = await bot.user.setUsername(safeName).catch(e => ({ _err: e }));
+                                                if (!r?._err) break;
+                                                lastErr = r._err;
+                                                const ra = lastErr?.rawError?.retry_after ?? lastErr?.retryAfter;
+                                                const waitMs = ra ? Math.min(Math.ceil(ra * 1000) + 1500, 90_000) : Math.min(2000 * attempt, 10_000);
+                                                if (attempt < 4) await new Promise(res => setTimeout(res, waitMs));
+                                            }
+                                            if (lastErr && bot.user.username !== safeName) throw lastErr;
                                             await patchCurrentApplication(t.token, { name: safeName }).catch(() => bot.application?.edit?.({ name: safeName }).catch(() => {}));
-                                        }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: selectedCode });
+                                        }, { concurrency: SETTINGS_NAME_CONCURRENCY, code: selectedCode });
                                         setTimeout(() => updatePanel(), 3000);
                                         return;
                                     }
@@ -2315,7 +2326,7 @@ module.exports = {
                                             await bot.user.setAvatar(imageData);
                                             await patchCurrentApplication(t.token, { icon: imageData }).catch(() => bot.application?.edit?.({ icon: imageData }).catch(() => {}));
                                             refreshEmbedColor(bot).catch(() => {});
-                                        }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: selectedCode });
+                                        }, { concurrency: SETTINGS_IMAGE_CONCURRENCY, code: selectedCode });
                                         setTimeout(() => updatePanel(), 3000);
                                         return;
                                     }
@@ -2358,7 +2369,7 @@ module.exports = {
                                                 timeout: SETTINGS_IMAGE_TIMEOUT_MS,
                                             });
                                             await patchCurrentApplication(t.token, { cover_image: data }).catch(() => {});
-                                        }, { concurrency: SETTINGS_PROFILE_CONCURRENCY, code: selectedCode });
+                                        }, { concurrency: SETTINGS_IMAGE_CONCURRENCY, code: selectedCode });
                                         setTimeout(() => updatePanel(), 3000);
                                         return;
                                     }

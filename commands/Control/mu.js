@@ -7,6 +7,59 @@ const axios = require("axios");
 const db = require('../../utils/db');
 const Discord = require('discord.js');
 const path = require('path');
+const { runningBots } = require('../../music');
+
+// ── batch concurrency helper ────────────────────────────────────────────────
+const MU_BATCH_SIZE = 8;
+const MU_NAME_DELAY_MS = 700;
+const MU_AVATAR_TIMEOUT_MS = 12000;
+
+async function muRunBatched(items, batchSize, worker) {
+    for (let i = 0; i < items.length; i += batchSize) {
+        await Promise.allSettled(items.slice(i, i + batchSize).map((item, j) => worker(item, i + j)));
+    }
+}
+
+async function muSetAvatar(token, dataUri) {
+    const bot = runningBots.get(token);
+    if (bot?.user) {
+        await bot.user.setAvatar(dataUri);
+        return;
+    }
+    await axios.patch('https://discord.com/api/v10/users/@me', { avatar: dataUri }, {
+        headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' },
+        timeout: MU_AVATAR_TIMEOUT_MS,
+    });
+}
+
+async function muSetName(token, name) {
+    const safeName = String(name).trim().slice(0, 32);
+    const bot = runningBots.get(token);
+    if (bot?.user) {
+        const result = await bot.user.setUsername(safeName).catch(err => ({ _err: err }));
+        if (result?._err) throw result._err;
+        return;
+    }
+    const res = await axios.patch('https://discord.com/api/v10/users/@me', { username: safeName }, {
+        headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' },
+        timeout: 10000,
+    });
+    return res.data;
+}
+
+async function muSetBanner(token, dataUri) {
+    await axios.patch('https://discord.com/api/v10/users/@me', { banner: dataUri }, {
+        headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' },
+        timeout: MU_AVATAR_TIMEOUT_MS,
+    });
+}
+
+async function muFetchImageDataUri(url) {
+    const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 15000 });
+    const mime = res.headers['content-type'] || 'image/jpeg';
+    const base64 = Buffer.from(res.data).toString('base64');
+    return `data:${mime};base64,${base64}`;
+}
 const {
     buildOwnershipTransferredDm,
     buildServerUpdatedDm,
@@ -678,6 +731,7 @@ module.exports = {
                                     const imageUrl = message.attachments.first().url;
                                     const total = userTokens.length;
                                     let done = 0, failed = 0;
+                                    let lastEdit = 0;
 
                                     const buildProgress = (cur) => {
                                         const pct = Math.round((cur / Math.max(1, total)) * 12);
@@ -691,21 +745,29 @@ module.exports = {
 
                                     await interaction.editReply({ content: buildProgress(0), components: [] }).catch(() => {});
 
-                                    for (let i = 0; i < userTokens.length; i++) {
-                                        const tokenData = userTokens[i];
-                                        const bot = new Client({ intents: [GatewayIntentBits.Guilds] });
+                                    let dataUri;
+                                    try {
+                                        dataUri = await muFetchImageDataUri(imageUrl);
+                                    } catch (err) {
+                                        await interaction.editReply({ content: `❌ **فشل تحميل الصورة:** ${err.message}`, components: [] }).catch(() => {});
+                                        messageCollector.stop();
+                                        return;
+                                    }
+
+                                    await muRunBatched(userTokens, MU_BATCH_SIZE, async (tokenData, i) => {
                                         try {
-                                            await bot.login(tokenData.token);
-                                            await bot.user.setAvatar(imageUrl);
+                                            await muSetAvatar(tokenData.token, dataUri);
                                             done++;
-                                            await bot.destroy();
                                         } catch (err) {
                                             failed++;
                                             console.error(`[mu] avatar error: ${err.message}`);
-                                            try { await bot.destroy(); } catch {}
                                         }
-                                        await interaction.editReply({ content: buildProgress(i + 1) }).catch(() => {});
-                                    }
+                                        const now = Date.now();
+                                        if (now - lastEdit >= 1200) {
+                                            lastEdit = now;
+                                            await interaction.editReply({ content: buildProgress(done + failed) }).catch(() => {});
+                                        }
+                                    });
 
                                     await interaction.editReply({
                                         content: `**Avatar Changed | تم تغيير الصورة** \`${total}/${total}\`\n\`[▰▰▰▰▰▰▰▰▰▰▰▰]\`\n✅ Done : \`${done}\`  ❌ Failed : \`${failed}\``,
@@ -776,18 +838,15 @@ module.exports = {
 
                                     for (let i = 0; i < userTokens.length; i++) {
                                         const tokenData = userTokens[i];
-                                        const bot = new Client({ intents: [GatewayIntentBits.Guilds] });
                                         try {
-                                            await bot.login(tokenData.token);
-                                            await bot.user.setUsername(newName);
+                                            await muSetName(tokenData.token, newName);
                                             done++;
-                                            await bot.destroy();
                                         } catch (err) {
                                             failed++;
                                             console.error(`[mu] name error: ${err.message}`);
-                                            try { await bot.destroy(); } catch {}
                                         }
                                         await interaction.editReply({ content: buildProgress(i + 1) }).catch(() => {});
+                                        if (i < userTokens.length - 1) await new Promise(r => setTimeout(r, MU_NAME_DELAY_MS));
                                     }
 
                                     await interaction.editReply({
@@ -872,21 +931,21 @@ module.exports = {
                                         return;
                                     }
 
-                                    for (let i = 0; i < userTokens.length; i++) {
-                                        const tokenData = userTokens[i];
+                                    let lastBannerEdit = 0;
+                                    await muRunBatched(userTokens, MU_BATCH_SIZE, async (tokenData, i) => {
                                         try {
-                                            await axios.patch(`https://discord.com/api/v10/users/@me`, {
-                                                banner: `data:image/jpeg;base64,${base64Image}`
-                                            }, {
-                                                headers: { 'Authorization': `Bot ${tokenData.token}` }
-                                            });
+                                            await muSetBanner(tokenData.token, `data:image/jpeg;base64,${base64Image}`);
                                             done++;
                                         } catch (err) {
                                             failed++;
                                             console.error(`[mu] banner error: ${err.message}`);
                                         }
-                                        await interaction.editReply({ content: buildProgress(i + 1) }).catch(() => {});
-                                    }
+                                        const now = Date.now();
+                                        if (now - lastBannerEdit >= 1200) {
+                                            lastBannerEdit = now;
+                                            await interaction.editReply({ content: buildProgress(done + failed) }).catch(() => {});
+                                        }
+                                    });
 
                                     await interaction.editReply({
                                         content: `**Banner Changed | تم تغيير البنر** \`${total}/${total}\`\n\`[▰▰▰▰▰▰▰▰▰▰▰▰]\`\n✅ Done : \`${done}\`  ❌ Failed : \`${failed}\``,
@@ -993,18 +1052,15 @@ module.exports = {
 
                             for (let i = 0; i < userTokens.length; i++) {
                                 const tokenData = userTokens[i];
-                                const bot = new Client({ intents: [GatewayIntentBits.Guilds] });
                                 try {
-                                    await bot.login(tokenData.token);
-                                    await bot.user.setUsername(newName);
+                                    await muSetName(tokenData.token, newName);
                                     done++;
-                                    await bot.destroy();
                                 } catch (err) {
                                     failed++;
                                     console.error(`[mu] name error: ${err.message}`);
-                                    try { await bot.destroy(); } catch {}
                                 }
                                 await interaction.editReply({ content: buildProgress(i + 1) }).catch(() => {});
+                                if (i < userTokens.length - 1) await new Promise(r => setTimeout(r, MU_NAME_DELAY_MS));
                             }
 
                             await interaction.editReply({
