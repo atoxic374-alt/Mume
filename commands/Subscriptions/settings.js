@@ -2634,7 +2634,6 @@ module.exports = {
 
                                 const startFromRaw = (interaction.fields.getTextInputValue('start_from').trim() || '').toLowerCase();
                                 const _isYes = ['نعم', 'ن', 'yes', 'y'].includes(startFromRaw);
-                                const _isNo  = ['لا', 'ل', 'no', 'n', ''].includes(startFromRaw);
                                 if (_isYes) {
                                     const detectedMax = detectNumberOffset(
                                         activeDistributionState.namePrefix,

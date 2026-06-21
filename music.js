@@ -99,6 +99,10 @@ setInterval(() => {
 // يُشارك بين كل البوتات في نفس الغيلد — يمنع مئات الطلبات المتزامنة
 const _movedByBotCache = new Map(); // guildId → { result: bool, ts: number, pending: Promise|null }
 const _MOVED_BY_BOT_TTL = 2500;
+setInterval(() => {
+    const cutoff = Date.now() - _MOVED_BY_BOT_TTL * 4; // احتياط: 10 ثواني
+    for (const [k, v] of _movedByBotCache) if (!v.pending && v.ts < cutoff) _movedByBotCache.delete(k);
+}, 60_000).unref?.();
 
 async function checkMovedByBot(guild) {
     if (!guild) return false;
