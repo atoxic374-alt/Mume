@@ -4,30 +4,33 @@ const { EmbedBuilder } = require('discord.js');
 const { applyProfileToToken, getSubBotProfile, resolveProfileAssets } = require('../../utils/subBotProfile');
 const { getEmbedColor } = require('../../utils/embedColor');
 
-const RESTART_CONCURRENCY = 5;
+// ── constants ────────────────────────────────────────────────────────────────
+const RESTART_BATCH_SIZE  = 5;    // bots processed in parallel per batch
+const RESTART_BATCH_DELAY = 1200; // ms pause between batches (avoids API flood)
+const RESTART_EDIT_DELAY  = 2500; // ms minimum between progress edits
 
-async function runLimited(items, concurrency, worker) {
-    let index = 0;
-    let active = 0;
-    let resolve;
-    const done = new Promise(r => { resolve = r; });
-    if (items.length === 0) { resolve(); return done; }
+// ── helpers ──────────────────────────────────────────────────────────────────
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-    function next() {
-        while (active < concurrency && index < items.length) {
-            const i = index++;
-            active++;
-            Promise.resolve(worker(items[i], i)).finally(() => {
-                active--;
-                if (index >= items.length && active === 0) resolve();
-                else next();
-            });
-        }
-    }
-    next();
-    return done;
+function buildBar(current, total, width = 20) {
+    const filled = total > 0 ? Math.round((current / total) * width) : 0;
+    return `\`[${'▰'.repeat(filled)}${'▱'.repeat(width - filled)}]\` \`${current}/${total}\``;
 }
 
+function fmtTime(ms) {
+    if (!ms || ms < 0) return '—';
+    const s = Math.ceil(ms / 1000);
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return m > 0 ? `${m}m ${String(sec).padStart(2, '0')}s` : `${sec}s`;
+}
+
+function fmtSpeed(done, elapsedMs) {
+    if (!elapsedMs || done === 0) return '—';
+    return `${(done / (elapsedMs / 1000)).toFixed(1)}/s`;
+}
+
+// ── command ──────────────────────────────────────────────────────────────────
 module.exports = {
     name: 'musicrestart',
     aliases: ['musicrestart'],
@@ -35,87 +38,116 @@ module.exports = {
         if (!owners.includes(message.author.id)) return;
 
         try {
-            const allBots = store.get('bots') || [];
+            const allBots   = store.get('bots') || [];
             const activeSubs = new Set((store.get('tokens') || []).map(t => t.token));
-            const botsArray = allBots.filter(b => !activeSubs.has(b.token));
-            const skipped = allBots.length - botsArray.length;
+            const botsArray  = allBots.filter(b => !activeSubs.has(b.token));
+            const skipped    = allBots.length - botsArray.length;
+            const total      = botsArray.length;
 
-            if (botsArray.length === 0) {
+            if (total === 0) {
                 return message.reply({
                     embeds: [new EmbedBuilder()
                         .setTitle('Restart Stock Bots')
-                        .setDescription(`لا توجد بوتات حرة في الستوك حالياً.${skipped > 0 ? `\n\nتم تجاهل \`${skipped}\` بوت لأنها ضمن اشتراكات نشطة.` : ''}`)
+                        .setDescription(
+                            `لا توجد بوتات حرة في الستوك حالياً.` +
+                            (skipped > 0 ? `\n\nتم تجاهل \`${skipped}\` بوت لأنها ضمن اشتراكات نشطة.` : ''))
                         .setColor(getEmbedColor(client))],
                 });
             }
 
-            const total = botsArray.length;
-            const estSecs = Math.ceil((total / RESTART_CONCURRENCY) * 5);
-            const estMin = Math.floor(estSecs / 60);
-            const estSec = estSecs % 60;
+            // Batch math for ETA estimate
+            const totalBatches = Math.ceil(total / RESTART_BATCH_SIZE);
+            const estMs        = totalBatches * (5000 + RESTART_BATCH_DELAY);
 
             const progressMsg = await message.reply({
                 embeds: [new EmbedBuilder()
-                    .setTitle('Restart Stock Bots')
-                    .setDescription('جاري إعادة تهيئة البوتات الحرة في الستوك وتطبيق إعدادات الاسم والصورة والبنر.')
+                    .setTitle('Restart Stock Bots — Starting')
+                    .setDescription('جاري إعادة تهيئة البوتات الحرة وتطبيق الاسم والصورة والبنر.')
                     .addFields(
-                        { name: 'Stock Bots', value: `\`${total}\``, inline: true },
-                        { name: 'Concurrency', value: `\`${RESTART_CONCURRENCY}\``, inline: true },
-                        { name: 'Estimated Time', value: `\`${estMin}:${String(estSec).padStart(2, '0')}\``, inline: true },
-                        { name: 'Skipped Active', value: `\`${skipped}\``, inline: true },
-                        { name: 'Progress', value: `\`0/${total}\``, inline: true },
+                        { name: 'Total',         value: `\`${total}\``,                                      inline: true },
+                        { name: 'Batch Size',    value: `\`${RESTART_BATCH_SIZE}\``,                         inline: true },
+                        { name: 'Total Batches', value: `\`${totalBatches}\``,                               inline: true },
+                        { name: 'Batch Delay',   value: `\`${RESTART_BATCH_DELAY}ms\``,                      inline: true },
+                        { name: 'Skipped Active',value: `\`${skipped}\``,                                    inline: true },
+                        { name: 'ETA (est)',      value: `\`${fmtTime(estMs)}\``,                             inline: true },
                     )
                     .setColor(getEmbedColor(client))],
             });
 
-            // Resolve profile + assets once (download image once for all bots)
+            // Resolve profile + assets ONCE (one image download for all bots)
             const profile = getSubBotProfile();
             let assets = { avatarData: null, bannerData: null };
             try { assets = await resolveProfileAssets(profile); } catch {}
 
-            let done = 0;
-            let failed = 0;
+            let done     = 0;
+            let failed   = 0;
             let lastEdit = 0;
+            const startMs = Date.now();
 
-            const buildBar = (current, total) => {
-                const pct = total > 0 ? Math.round((current / total) * 20) : 0;
-                return `\`[${'▰'.repeat(pct)}${'▱'.repeat(20 - pct)}]\` \`${current}/${total}\``;
+            const buildProgressEmbed = (title, batchNum) => {
+                const elapsedMs = Date.now() - startMs;
+                const processed = done + failed;
+                const remaining = total - processed;
+                const speed     = elapsedMs > 0 && processed > 0 ? processed / (elapsedMs / 1000) : 0;
+                const etaMs     = speed > 0 ? (remaining / speed) * 1000 : null;
+
+                return new EmbedBuilder()
+                    .setTitle(title)
+                    .addFields(
+                        { name: 'Progress',       value: buildBar(processed, total),              inline: false },
+                        { name: '✅ Done',         value: `\`${done}\``,                           inline: true  },
+                        { name: '❌ Failed',       value: `\`${failed}\``,                         inline: true  },
+                        { name: 'Left',           value: `\`${remaining}\``,                      inline: true  },
+                        { name: 'Batch',          value: `\`${batchNum}/${totalBatches}\``,       inline: true  },
+                        { name: 'Elapsed',        value: `\`${fmtTime(elapsedMs)}\``,             inline: true  },
+                        { name: 'Speed',          value: `\`${fmtSpeed(processed, elapsedMs)}\``, inline: true  },
+                        { name: 'ETA',            value: `\`${fmtTime(etaMs)}\``,                 inline: true  },
+                    )
+                    .setColor(getEmbedColor(client));
             };
 
-            await runLimited(botsArray, RESTART_CONCURRENCY, async (bot) => {
-                try {
-                    await applyProfileToToken(bot.token, { profile, assets, leaveGuilds: true });
-                    done++;
-                } catch (err) {
-                    failed++;
-                    console.error(`[musicrestart] token error: ${err.message}`);
-                }
+            // ── main loop — true batches with inter-batch delay ──────────────
+            for (let b = 0; b < totalBatches; b++) {
+                const batchNum = b + 1;
+                const slice    = botsArray.slice(b * RESTART_BATCH_SIZE, batchNum * RESTART_BATCH_SIZE);
 
+                await Promise.allSettled(slice.map(async (bot) => {
+                    try {
+                        await applyProfileToToken(bot.token, { profile, assets, leaveGuilds: true });
+                        done++;
+                    } catch (err) {
+                        failed++;
+                        console.error(`[musicrestart] batch ${batchNum} error: ${err.message}`);
+                    }
+                }));
+
+                // Progress edit (rate-limited to once per RESTART_EDIT_DELAY)
                 const now = Date.now();
-                if (now - lastEdit >= 2000) {
+                if (b < totalBatches - 1 && now - lastEdit >= RESTART_EDIT_DELAY) {
                     lastEdit = now;
                     await progressMsg.edit({
-                        embeds: [new EmbedBuilder()
-                            .setTitle('Restart Stock Bots — In Progress')
-                            .addFields(
-                                { name: 'Progress', value: buildBar(done + failed, total), inline: false },
-                                { name: '✅ Done', value: `\`${done}\``, inline: true },
-                                { name: '❌ Failed', value: `\`${failed}\``, inline: true },
-                                { name: 'Left', value: `\`${total - done - failed}\``, inline: true },
-                            )
-                            .setColor(getEmbedColor(client))],
+                        embeds: [buildProgressEmbed('Restart Stock Bots — In Progress', batchNum)],
                     }).catch(() => {});
                 }
-            });
 
+                // Inter-batch delay (avoids API flood; skip after last batch)
+                if (b < totalBatches - 1) await sleep(RESTART_BATCH_DELAY);
+            }
+
+            // ── final summary ────────────────────────────────────────────────
+            const totalMs = Date.now() - startMs;
             await progressMsg.edit({
                 embeds: [new EmbedBuilder()
                     .setTitle('✅ Restart Stock Bots — Complete')
                     .addFields(
-                        { name: 'Total', value: `\`${total}\``, inline: true },
-                        { name: '✅ Success', value: `\`${done}\``, inline: true },
-                        { name: '❌ Failed', value: `\`${failed}\``, inline: true },
-                        { name: 'Skipped Active', value: `\`${skipped}\``, inline: true },
+                        { name: 'Progress',      value: buildBar(total, total),          inline: false },
+                        { name: '✅ Success',     value: `\`${done}\``,                   inline: true  },
+                        { name: '❌ Failed',      value: `\`${failed}\``,                 inline: true  },
+                        { name: 'Total',         value: `\`${total}\``,                  inline: true  },
+                        { name: 'Batches',       value: `\`${totalBatches}\``,           inline: true  },
+                        { name: 'Skipped Active',value: `\`${skipped}\``,                inline: true  },
+                        { name: 'Elapsed',       value: `\`${fmtTime(totalMs)}\``,       inline: true  },
+                        { name: 'Avg Speed',     value: `\`${fmtSpeed(done, totalMs)}\``,inline: true  },
                     )
                     .setColor(getEmbedColor(client))],
             }).catch(() => {});
@@ -127,7 +159,7 @@ module.exports = {
                     .setTitle('Restart Failed')
                     .setDescription('حدث خطأ أثناء معالجة الأمر.')
                     .setColor(getEmbedColor(client))],
-            });
+            }).catch(() => {});
         }
     },
 };
