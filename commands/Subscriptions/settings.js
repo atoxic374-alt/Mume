@@ -1000,6 +1000,28 @@ module.exports = {
                             };
                         }
 
+                                function detectNumberOffset(prefix, code) {
+                                    const allTokens = getSelectedTokens({ code: code || selectedCode, includeWaiting: true });
+                                    let max = 0;
+                                    for (const t of allTokens) {
+                                        const bot = runningBots.get(t.token);
+                                        if (!bot?.user) continue;
+                                        const name = (bot.user.username || '').trim();
+                                        let num = 0;
+                                        if (prefix) {
+                                            if (!name.startsWith(prefix)) continue;
+                                            const rest = name.slice(prefix.length);
+                                            num = parseInt(rest, 10);
+                                            if (String(num) !== rest.trim()) continue;
+                                        } else {
+                                            num = parseInt(name, 10);
+                                            if (String(num) !== name) continue;
+                                        }
+                                        if (Number.isFinite(num) && num > max) max = num;
+                                    }
+                                    return max;
+                                }
+
                                 async function executeSmartDistribution(interaction, state) {
                                     const code = state.code || selectedCode;
 
@@ -1062,10 +1084,13 @@ module.exports = {
                                     let plannedUnusedBots = 0;
                                     let plannedUnusedRooms = 0;
 
+                                    const _numStart = (state.numberOffset || 0) + 1;
                                     const modeLabel = state.mode === 'names'
                                         ? (state.namesWithNumbers ? 'أسماء الرومات + أرقام' : 'أسماء الرومات')
                                         : state.mode === 'numbers'
-                                            ? (state.namePrefix ? `${state.namePrefix}1, ${state.namePrefix}2...` : '1, 2, 3...')
+                                            ? (state.namePrefix
+                                                ? `${state.namePrefix}${_numStart}, ${state.namePrefix}${_numStart + 1}...`
+                                                : `${_numStart}, ${_numStart + 1}, ${_numStart + 2}...`)
                                             : 'بدون تغيير أسماء';
 
                                     // ── helper: compute target name for an assignment ────
@@ -1076,9 +1101,10 @@ module.exports = {
                                                 : chan.name.trim().slice(0, 32);
                                         }
                                         if (state.mode === 'numbers') {
+                                            const num = idx + 1 + (state.numberOffset || 0);
                                             return state.namePrefix
-                                                ? `${state.namePrefix}${idx + 1}`.slice(0, 32)
-                                                : String(idx + 1);
+                                                ? `${state.namePrefix}${num}`.slice(0, 32)
+                                                : String(num);
                                         }
                                         return null;
                                     }
@@ -1396,6 +1422,7 @@ module.exports = {
                         mode: null,
                         namePrefix: null,
                         namesWithNumbers: null,
+                        numberOffset: 0,
                     };
                     activeDistributionState = state;
 
@@ -1565,15 +1592,26 @@ module.exports = {
                                 const modal = new ModalBuilder()
                                     .setCustomId(createSettingsModalId('dist_prefix', { code: state.code }))
                                     .setTitle('Numbered Names — Bot Names');
-                        modal.addComponents(new ActionRowBuilder().addComponents(
-                            new TextInputBuilder()
-                                .setCustomId('prefix')
-                                .setLabel('Shared Name (or 0 for numbers only)')
-                                .setPlaceholder('Ahmed → Ahmed1, Ahmed2 ... or 0 for numbers only (1, 2, 3)')
-                                .setRequired(true)
-                                .setStyle(TextInputStyle.Short)
-                                .setMaxLength(28)
-                        ));
+                        modal.addComponents(
+                            new ActionRowBuilder().addComponents(
+                                new TextInputBuilder()
+                                    .setCustomId('prefix')
+                                    .setLabel('Shared Name (or 0 for numbers only)')
+                                    .setPlaceholder('Ahmed → Ahmed1, Ahmed2 ... or 0 for numbers only (1, 2, 3)')
+                                    .setRequired(true)
+                                    .setStyle(TextInputStyle.Short)
+                                    .setMaxLength(28)
+                            ),
+                            new ActionRowBuilder().addComponents(
+                                new TextInputBuilder()
+                                    .setCustomId('start_from')
+                                    .setLabel('Start from (auto = detect, blank = 1)')
+                                    .setPlaceholder('auto → يكمل من آخر رقم | 6 → يبدأ من 6 | فاضي → يبدأ من 1')
+                                    .setRequired(false)
+                                    .setStyle(TextInputStyle.Short)
+                                    .setMaxLength(10)
+                            )
+                        );
                         return i.showModal(modal);
                     };
 
@@ -2566,6 +2604,21 @@ module.exports = {
                                 }
                                 const input = interaction.fields.getTextInputValue('prefix').trim();
                                 activeDistributionState.namePrefix = input === '0' ? '' : input;
+
+                                const startFromRaw = (interaction.fields.getTextInputValue('start_from').trim() || '').toLowerCase();
+                                if (startFromRaw === 'auto' || startFromRaw === 'أوتو') {
+                                    const detectedMax = detectNumberOffset(
+                                        activeDistributionState.namePrefix,
+                                        activeDistributionState.code
+                                    );
+                                    activeDistributionState.numberOffset = detectedMax;
+                                } else if (startFromRaw !== '') {
+                                    const parsed = parseInt(startFromRaw, 10);
+                                    activeDistributionState.numberOffset = (Number.isFinite(parsed) && parsed >= 1) ? parsed - 1 : 0;
+                                } else {
+                                    activeDistributionState.numberOffset = 0;
+                                }
+
                         if (activeDistributionCollector) activeDistributionCollector.stop('execute');
                         return executeSmartDistribution(interaction, activeDistributionState);
                     }
