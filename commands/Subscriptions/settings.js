@@ -914,35 +914,44 @@ module.exports = {
                             return targetChannel;
                         }
 
-                        async function setBotNameAndVerify(bot, targetName, maxRetries = 3) {
+                        async function setBotNameAndVerify(bot, targetName, maxRetries = 4) {
                             if (!targetName) return { required: false, ok: true, actual: bot.user?.username || 'Unknown' };
-                            const safeName = String(targetName).slice(0, 32);
-                            if (bot.user?.username === safeName) {
+                            if (!bot?.user) return { required: true, ok: false, actual: '—', error: 'bot.user unavailable' };
+
+                            const safeName = String(targetName).trim().slice(0, 32);
+                            if (!safeName) return { required: false, ok: true, actual: bot.user.username || 'Unknown' };
+                            if (bot.user.username === safeName) {
                                 return { required: true, ok: true, actual: bot.user.username, expected: safeName };
                             }
 
                             let lastError = null;
                             for (let attempt = 1; attempt <= maxRetries; attempt++) {
-                                const result = await bot.user.setUsername(safeName).catch(err => ({ _rateErr: err }));
-                                if (!result?._rateErr) {
-                                    const actual = result?.username || bot.user?.username || 'Unknown';
+                                const result = await bot.user.setUsername(safeName).catch(err => ({ _err: err }));
+                                if (!result?._err) {
+                                    const actual = result?.username || bot.user?.username || safeName;
                                     return { required: true, ok: true, actual, expected: safeName };
                                 }
-                                lastError = result._rateErr;
+                                lastError = result._err;
 
                                 const rawRetryAfter =
                                     lastError?.rawError?.retry_after ??
-                                    String(lastError?.message || '').match(/(\d+(\.\d+)?)\s*second/i)?.[1];
-                                const retryAfterMs = rawRetryAfter
+                                    lastError?.retryAfter ??
+                                    (String(lastError?.message || '').match(/(\d+(\.\d+)?)\s*second/i)?.[1]);
+
+                                const retryAfterMs = rawRetryAfter != null
                                     ? Math.ceil(parseFloat(rawRetryAfter) * 1000) + 1500
                                     : null;
+
                                 const isRateLimit =
                                     lastError?.status === 429 ||
                                     lastError?.httpStatus === 429 ||
                                     retryAfterMs != null;
 
-                                if (isRateLimit && attempt < maxRetries) {
-                                    await new Promise(r => setTimeout(r, Math.min(retryAfterMs ?? 65000, 90000)));
+                                if (attempt < maxRetries) {
+                                    const waitMs = isRateLimit
+                                        ? Math.min(retryAfterMs ?? 65_000, 90_000)
+                                        : Math.min(2_000 * attempt, 10_000);
+                                    await new Promise(r => setTimeout(r, waitMs));
                                     continue;
                                 }
                                 break;
@@ -958,277 +967,378 @@ module.exports = {
 
                                 async function executeSmartDistribution(interaction, state) {
                                     const code = state.code || selectedCode;
+
+                                    // ── validation ──────────────────────────────────────
+                                    if (!state.scope) {
+                                        const payload = { content: '', embeds: [buildDistributionEmbed('Smart Distribution', '❌ لم يتم تحديد نطاق التوزيع (scope). افتح التوزيع مرة أخرى.')], components: [] };
+                                        if (!interaction.replied && !interaction.deferred) return interaction.update(payload);
+                                        return mainMsg.edit(payload);
+                                    }
+                                    if (!state.firstChannelId || !state.lastChannelId) {
+                                        const payload = { content: '', embeds: [buildDistributionEmbed('Smart Distribution', '❌ لم يتم تحديد الرومات. افتح التوزيع مرة أخرى.')], components: [] };
+                                        if (!interaction.replied && !interaction.deferred) return interaction.update(payload);
+                                        return mainMsg.edit(payload);
+                                    }
+                                    if (!state.mode) {
+                                        const payload = { content: '', embeds: [buildDistributionEmbed('Smart Distribution', '❌ لم يتم تحديد وضع التسمية. افتح التوزيع مرة أخرى.')], components: [] };
+                                        if (!interaction.replied && !interaction.deferred) return interaction.update(payload);
+                                        return mainMsg.edit(payload);
+                                    }
+
                                     const targets = distributionTargets(state.scope, code);
                                     if (targets.length === 0) {
-                                        return interaction.update({
+                                        const payload = {
                                             content: '',
-                                    embeds: [buildDistributionEmbed('Smart Distribution', 'لا توجد بوتات مناسبة لهذا الخيار حالياً.')],
-                                    components: [new ActionRowBuilder().addComponents(
-                                        new ButtonBuilder().setCustomId(`stg_dist_${mid}_back_rooms`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
-                                    )],
-                                });
-                            }
+                                            embeds: [buildDistributionEmbed('Smart Distribution', 'لا توجد بوتات مناسبة لهذا الخيار حالياً.')],
+                                            components: [new ActionRowBuilder().addComponents(
+                                                new ButtonBuilder().setCustomId(`stg_dist_${mid}_back_rooms`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
+                                            )],
+                                        };
+                                        if (!interaction.replied && !interaction.deferred) return interaction.update(payload);
+                                        return mainMsg.edit(payload);
+                                    }
 
                                     const lockKey = `smart:${code}`;
                                     const processKey = `process:${code}`;
-                            if (activeSmartDistributions.has(lockKey) || activeSettingsProcesses.has(processKey)) {
-                                const payload = {
-                                    content: '',
-                                    embeds: [buildDistributionEmbed('Smart Distribution', 'يوجد توزيع ذكي يعمل حالياً لهذا الاشتراك. انتظر حتى ينتهي ثم حاول مرة أخرى.')],
-                                    components: [],
-                                };
-                                if (!interaction.replied && !interaction.deferred) return interaction.update(payload);
-                                return mainMsg.edit(payload);
-                            }
-                            activeSmartDistributions.add(lockKey);
+                                    if (activeSmartDistributions.has(lockKey) || activeSettingsProcesses.has(processKey)) {
+                                        const payload = {
+                                            content: '',
+                                            embeds: [buildDistributionEmbed('Smart Distribution', 'يوجد توزيع ذكي يعمل حالياً لهذا الاشتراك. انتظر حتى ينتهي ثم حاول مرة أخرى.')],
+                                            components: [],
+                                        };
+                                        if (!interaction.replied && !interaction.deferred) return interaction.update(payload);
+                                        return mainMsg.edit(payload);
+                                    }
+                                    activeSmartDistributions.add(lockKey);
 
-                            const editDistributionMessage = async (payload) => {
-                                if (!interaction.replied && !interaction.deferred) {
-                                    return interaction.update(payload);
-                                }
-                                return mainMsg.edit(payload);
-                            };
+                                    const editMsg = async (payload) => {
+                                        if (!interaction.replied && !interaction.deferred) {
+                                            return interaction.update(payload).catch(() => mainMsg.edit(payload).catch(() => {}));
+                                        }
+                                        return mainMsg.edit(payload).catch(() => {});
+                                    };
 
-                            const scopeLabels = { idle: 'الخاملين', grouped: 'المتجمعين', all: 'الكل' };
-                            const distributionStartedAt = Date.now();
-                            let plannedTotal = targets.length;
-                            let plannedRooms = 0;
-                            let plannedAssignments = 0;
-                            let plannedUnusedBots = 0;
-                            let plannedUnusedRooms = 0;
+                                    const scopeLabels = { idle: 'الخاملين', grouped: 'المتجمعين', all: 'الكل' };
+                                    const needsRename = state.mode === 'names' || state.mode === 'numbers';
+                                    const distributionStartedAt = Date.now();
+                                    let plannedTotal = targets.length;
+                                    let plannedRooms = 0;
+                                    let plannedAssignments = 0;
+                                    let plannedUnusedBots = 0;
+                                    let plannedUnusedRooms = 0;
 
-                            function buildProgressEmbed(done, total, okCount, failCount, liveLog) {
-                                const stats = progressStats(done, total, distributionStartedAt);
-                                const modeLabel = state.mode === 'names'
-                                    ? (state.namesWithNumbers ? 'أسماء الرومات + أرقام' : 'أسماء الرومات')
-                                    : state.mode === 'numbers'
-                                        ? (state.namePrefix ? `${state.namePrefix}1, ${state.namePrefix}2...` : '1, 2, 3...')
-                                        : 'بدون تغيير أسماء';
-                                return buildDistributionEmbed(
-                                    `Smart Distribution — ${stats.percent}%`,
-                                    [
-                                        `**Status :** *${done >= total ? 'Completed' : 'Running'}*`,
-                                        '',
-                                        `**Owner :** *<@${interaction.user.id}>*`,
-                                        '',
-                                        `**Mode :** *${modeLabel}*`,
-                                        '',
-                                        `**Scope :** *${scopeLabels[state.scope] || state.scope}*`,
-                                        '',
-                                        `**Rooms :** *<#${state.firstChannelId}> إلى <#${state.lastChannelId}>*`,
-                                        '',
-                                        `**Plan :** *\`${plannedAssignments}\` توزيع فعلي من \`${plannedTotal}\` بوت و \`${plannedRooms}\` روم*`,
-                                    ].join('\n'),
-                                    [
-                                        {
-                                            name: 'Progress',
-                                            value: [
-                                                buildSimpleProgressBar(done, total),
-                                                '',
-                                                `**1. Total :** *\`${total}\`*`,
-                                                `**2. Done :** *\`${done}\`*`,
-                                                `**3. Success :** *\`${okCount}\`*`,
-                                                `**4. Failed :** *\`${failCount}\`*`,
-                                                `**5. Left :** *\`${stats.left}\`*`,
-                                            ].join('\n'),
-                                            inline: true,
-                                        },
-                                        {
-                                            name: 'Timing',
-                                            value: [
-                                                `**1. Speed :** *\`${stats.speed}\`*`,
-                                                `**2. Elapsed :** *\`${stats.elapsed}\`*`,
-                                                `**3. ETA :** *\`${stats.eta}\`*`,
-                                                `**4. Batch :** *\`${SETTINGS_DISTRIBUTION_BATCH_SIZE}\`*`,
-                                            ].join('\n'),
-                                            inline: true,
-                                        },
-                                        {
-                                            name: 'Plan Safety',
-                                            value: [
-                                                `**1. Unused Bots :** *\`${plannedUnusedBots}\`*`,
-                                                `**2. Unused Rooms :** *\`${plannedUnusedRooms}\`*`,
-                                                '**3. Rule :** *بوت واحد لكل روم*',
-                                            ].join('\n'),
-                                            inline: true,
-                                        },
-                                        ...(liveLog.length > 0
-                                            ? [{ name: 'Live Log', value: liveLog.slice(-8).join('\n').slice(0, 1024), inline: false }]
-                                            : []),
-                                    ],
-                                );
-                            }
+                                    const modeLabel = state.mode === 'names'
+                                        ? (state.namesWithNumbers ? 'أسماء الرومات + أرقام' : 'أسماء الرومات')
+                                        : state.mode === 'numbers'
+                                            ? (state.namePrefix ? `${state.namePrefix}1, ${state.namePrefix}2...` : '1, 2, 3...')
+                                            : 'بدون تغيير أسماء';
 
-                            let done = 0;
-                            let success = 0;
-                            let failed = 0;
-                            let nameSuccess = 0;
-                            let nameRequired = 0;
-                            const details = [];
-                            const liveLog = [];
-                            let detailCount = 0;
-                            let lastDistributionEditAt = 0;
-
-                            const rememberDistributionLine = (line) => {
-                                detailCount++;
-                                details.push(line);
-                                if (details.length > SETTINGS_MAX_PROGRESS_LINES) {
-                                    details.splice(0, details.length - SETTINGS_MAX_PROGRESS_LINES);
-                                }
-                                liveLog.push(line);
-                                if (liveLog.length > 12) {
-                                    liveLog.splice(0, liveLog.length - 12);
-                                }
-                            };
-
-                            try {
-                                        const targetChannels = await getDistributionChannels(state.firstChannelId, state.lastChannelId);
-                                const plan = buildDistributionPlan(targets, targetChannels);
-                                plannedTotal = plan.bots.length;
-                                plannedRooms = plan.rooms.length;
-                                plannedAssignments = plan.assignments.length;
-                                plannedUnusedBots = plan.unusedBots.length;
-                                plannedUnusedRooms = plan.unusedRooms.length;
-
-                                if (plan.assignments.length === 0) {
-                                    await editDistributionMessage({
-                                        content: '',
-                                        embeds: [buildDistributionEmbed(
-                                            'Smart Distribution',
-                                            [
-                                                'لا توجد خطة توزيع قابلة للتنفيذ.',
-                                                '',
-                                                `**Bots :** *\`${plan.bots.length}\`*`,
-                                                `**Rooms :** *\`${plan.rooms.length}\`*`,
-                                            ].join('\n'),
-                                        )],
-                                        components: [],
-                                    });
-                                    return;
-                                }
-
-                                await editDistributionMessage({
-                                    content: '',
-                                    embeds: [buildProgressEmbed(0, plan.assignments.length, 0, 0, [])],
-                                    components: [],
-                                });
-
-                                const BATCH_SIZE = SETTINGS_DISTRIBUTION_BATCH_SIZE;
-                                for (let batchStart = 0; batchStart < plan.assignments.length; batchStart += BATCH_SIZE) {
-                                    const batch = plan.assignments.slice(batchStart, batchStart + BATCH_SIZE);
-                                    const batchResults = await Promise.allSettled(batch.map(async (assignment) => {
-                                        const idx = assignment.index;
-                                        const t = assignment.token;
-                                        const chan = assignment.channel;
-                                        const bot = runningBots.get(t.token);
-                                        if (!bot?.poru) throw new Error('bot offline');
-
-                                        let targetName = null;
+                                    // ── helper: compute target name for an assignment ────
+                                    function computeTargetName(idx, chan) {
                                         if (state.mode === 'names') {
-                                            targetName = state.namesWithNumbers
-                                                ? `${chan.name} ${idx + 1}`.slice(0, 32)
-                                                : chan.name.slice(0, 32);
-                                        } else if (state.mode === 'numbers') {
-                                            targetName = state.namePrefix
+                                            return state.namesWithNumbers
+                                                ? `${chan.name} ${idx + 1}`.trim().slice(0, 32)
+                                                : chan.name.trim().slice(0, 32);
+                                        }
+                                        if (state.mode === 'numbers') {
+                                            return state.namePrefix
                                                 ? `${state.namePrefix}${idx + 1}`.slice(0, 32)
                                                 : String(idx + 1);
                                         }
+                                        return null;
+                                    }
 
-                                        const nameResult = await setBotNameAndVerify(bot, targetName);
-                                        const targetChannel = await moveTokenToVoice(t, chan.id);
-                                        return { idx, bot, targetChannel, nameResult };
-                                    }));
+                                    // ── helpers: progress tracking ──────────────────────
+                                    let lastEditAt = 0;
+                                    const details = [];
+                                    const liveLog = [];
+                                    let detailCount = 0;
 
-                                    // ── accumulate results ──────────────────────────
-                                    for (const res of batchResults) {
-                                        done++;
-                                        if (res.status === 'fulfilled') {
-                                            const { idx, bot, targetChannel, nameResult } = res.value;
-                                            success++;
-                                            if (nameResult.required) {
-                                                nameRequired++;
-                                                if (nameResult.ok) nameSuccess++;
-                                            }
-                                            const nameStr = nameResult.required
-                                                ? (nameResult.ok ? ` • 📝 \`${nameResult.actual}\`` : ` • 📝 ❌`)
-                                                : '';
-                                            const line = `✅ **${idx + 1}.** <@${bot.user.id}> → <#${targetChannel.id}>${nameStr}`;
-                                            rememberDistributionLine(line);
-                                        } else {
-                                            failed++;
-                                            const errLine = `❌ **${done}.** ${res.reason?.message || 'unknown error'}`;
-                                            rememberDistributionLine(errLine);
+                                    const addLine = (line) => {
+                                        detailCount++;
+                                        details.push(line);
+                                        if (details.length > SETTINGS_MAX_PROGRESS_LINES) details.splice(0, details.length - SETTINGS_MAX_PROGRESS_LINES);
+                                        liveLog.push(line);
+                                        if (liveLog.length > 10) liveLog.splice(0, liveLog.length - 10);
+                                    };
+
+                                    const throttleEdit = async (payload, force = false) => {
+                                        const now = Date.now();
+                                        if (!force && now - lastEditAt < SETTINGS_PROGRESS_INTERVAL_MS) return;
+                                        lastEditAt = now;
+                                        await mainMsg.edit(payload).catch(() => {});
+                                    };
+
+                                    // ── phase progress embed ────────────────────────────
+                                    function buildPhaseEmbed(phase, phaseDone, phaseTotal, moveDone, moveTotal, nameOk, nameFail, movOk, movFail) {
+                                        const stats = progressStats(phaseDone, phaseTotal, distributionStartedAt);
+                                        const overallDone = (needsRename ? nameOk + nameFail : 0) + movOk + movFail;
+                                        const overallTotal = (needsRename ? plannedAssignments : 0) + plannedAssignments;
+                                        return buildDistributionEmbed(
+                                            `Smart Distribution — ${phase} — ${stats.percent}%`,
+                                            [
+                                                `**Owner :** *<@${interaction.user.id}>*`,
+                                                `**Mode :** *${modeLabel}*`,
+                                                `**Scope :** *${scopeLabels[state.scope] || state.scope}*`,
+                                                `**Rooms :** *<#${state.firstChannelId}> → <#${state.lastChannelId}>*`,
+                                                `**Plan :** *\`${plannedAssignments}\` بوت × \`${plannedRooms}\` روم*`,
+                                            ].join('\n'),
+                                            [
+                                                {
+                                                    name: needsRename ? '📝 Phase 1 — Rename' : '📝 Rename',
+                                                    value: needsRename
+                                                        ? [
+                                                            buildSimpleProgressBar(nameOk + nameFail, plannedAssignments),
+                                                            `**Done :** *\`${nameOk + nameFail}/${plannedAssignments}\`*  **✅** \`${nameOk}\`  **❌** \`${nameFail}\``,
+                                                        ].join('\n')
+                                                        : '`—` بدون تغيير أسماء',
+                                                    inline: false,
+                                                },
+                                                {
+                                                    name: '🔊 Phase 2 — Move to Voice',
+                                                    value: [
+                                                        buildSimpleProgressBar(movOk + movFail, plannedAssignments),
+                                                        `**Done :** *\`${movOk + movFail}/${plannedAssignments}\`*  **✅** \`${movOk}\`  **❌** \`${movFail}\``,
+                                                    ].join('\n'),
+                                                    inline: false,
+                                                },
+                                                {
+                                                    name: 'Timing',
+                                                    value: [
+                                                        `**Speed :** *\`${stats.speed}\`*`,
+                                                        `**Elapsed :** *\`${stats.elapsed}\`*`,
+                                                        `**ETA :** *\`${stats.eta}\`*`,
+                                                        `**Batch :** *\`${SETTINGS_DISTRIBUTION_BATCH_SIZE}\`*`,
+                                                    ].join('\n'),
+                                                    inline: true,
+                                                },
+                                                {
+                                                    name: 'Plan Safety',
+                                                    value: [
+                                                        `**Extra Bots :** *\`${plannedUnusedBots}\`*`,
+                                                        `**Extra Rooms :** *\`${plannedUnusedRooms}\`*`,
+                                                        '**Rule :** *1 bot / room*',
+                                                    ].join('\n'),
+                                                    inline: true,
+                                                },
+                                                ...(liveLog.length > 0
+                                                    ? [{ name: 'Live Log', value: liveLog.slice(-8).join('\n').slice(0, 1024), inline: false }]
+                                                    : []),
+                                            ],
+                                        );
+                                    }
+
+                                    try {
+                                        // ── build plan ──────────────────────────────────
+                                        const targetChannels = await getDistributionChannels(state.firstChannelId, state.lastChannelId);
+                                        if (!targetChannels.length) throw new Error('لا توجد رومات في النطاق المحدد');
+
+                                        const plan = buildDistributionPlan(targets, targetChannels);
+                                        plannedTotal = plan.bots.length;
+                                        plannedRooms = plan.rooms.length;
+                                        plannedAssignments = plan.assignments.length;
+                                        plannedUnusedBots = plan.unusedBots.length;
+                                        plannedUnusedRooms = plan.unusedRooms.length;
+
+                                        if (plan.assignments.length === 0) {
+                                            await editMsg({
+                                                content: '',
+                                                embeds: [buildDistributionEmbed(
+                                                    'Smart Distribution',
+                                                    [
+                                                        'لا توجد خطة توزيع قابلة للتنفيذ.',
+                                                        '',
+                                                        `**Bots :** *\`${plan.bots.length}\`*`,
+                                                        `**Rooms :** *\`${plan.rooms.length}\`*`,
+                                                    ].join('\n'),
+                                                )],
+                                                components: [],
+                                            });
+                                            return;
                                         }
-                                    }
 
-                                    // ── live update after each batch ────────────────
-                                    if (Date.now() - lastDistributionEditAt >= SETTINGS_PROGRESS_INTERVAL_MS || done >= plan.assignments.length) {
-                                        lastDistributionEditAt = Date.now();
-                                        await mainMsg.edit({
+                                        // initial loading embed
+                                        await editMsg({
                                             content: '',
-                                            embeds: [buildProgressEmbed(done, plan.assignments.length, success, failed, liveLog)],
+                                            embeds: [buildPhaseEmbed('Starting', 0, plannedAssignments, 0, plannedAssignments, 0, 0, 0, 0)],
                                             components: [],
+                                        });
+
+                                        // ── PHASE 1: RENAME (sequential, rate-limit safe) ─
+                                        let nameOk = 0;
+                                        let nameFail = 0;
+                                        const nameResultMap = new Map(); // token → nameResult
+
+                                        if (needsRename) {
+                                            for (let i = 0; i < plan.assignments.length; i++) {
+                                                const { index: idx, token: t, channel: chan } = plan.assignments[i];
+                                                const targetName = computeTargetName(idx, chan);
+                                                const bot = runningBots.get(t.token);
+
+                                                if (!bot?.user) {
+                                                    const r = { required: true, ok: false, actual: '—', error: 'bot not ready' };
+                                                    nameResultMap.set(t.token, r);
+                                                    nameFail++;
+                                                    addLine(`📝 **${idx + 1}.** ❌ \`bot not ready\``);
+                                                } else {
+                                                    const r = await setBotNameAndVerify(bot, targetName);
+                                                    nameResultMap.set(t.token, r);
+                                                    if (r.ok) {
+                                                        nameOk++;
+                                                        addLine(`📝 **${idx + 1}.** ✅ \`${r.actual}\``);
+                                                    } else {
+                                                        nameFail++;
+                                                        addLine(`📝 **${idx + 1}.** ❌ \`${r.error || 'failed'}\``);
+                                                    }
+                                                }
+
+                                                await throttleEdit({
+                                                    content: '',
+                                                    embeds: [buildPhaseEmbed('Phase 1 — Renaming', i + 1, plannedAssignments, 0, plannedAssignments, nameOk, nameFail, 0, 0)],
+                                                    components: [],
+                                                });
+
+                                                // small delay between renames to avoid Discord global rate-limits
+                                                if (i < plan.assignments.length - 1) {
+                                                    await new Promise(r => setTimeout(r, 600));
+                                                }
+                                            }
+
+                                            // force update after rename phase
+                                            await mainMsg.edit({
+                                                content: '',
+                                                embeds: [buildPhaseEmbed('Phase 1 — Done | Phase 2 — Starting', plannedAssignments, plannedAssignments, 0, plannedAssignments, nameOk, nameFail, 0, 0)],
+                                                components: [],
+                                            }).catch(() => {});
+                                            lastEditAt = Date.now();
+
+                                            await new Promise(r => setTimeout(r, 800));
+                                        }
+
+                                        // ── PHASE 2: MOVE TO VOICE (parallel batches) ────
+                                        let movOk = 0;
+                                        let movFail = 0;
+                                        const BATCH_SIZE = SETTINGS_DISTRIBUTION_BATCH_SIZE;
+                                        lastEditAt = 0;
+
+                                        for (let batchStart = 0; batchStart < plan.assignments.length; batchStart += BATCH_SIZE) {
+                                            const batch = plan.assignments.slice(batchStart, batchStart + BATCH_SIZE);
+
+                                            const batchResults = await Promise.allSettled(batch.map(async (assignment) => {
+                                                const { index: idx, token: t, channel: chan } = assignment;
+                                                const bot = runningBots.get(t.token);
+                                                if (!bot?.poru) throw new Error('bot offline (no Lavalink)');
+
+                                                const targetChannel = await moveTokenToVoice(t, chan.id);
+                                                const nameResult = nameResultMap.get(t.token) || { required: false, ok: true, actual: bot.user?.username || '—' };
+                                                return { idx, bot, targetChannel, nameResult };
+                                            }));
+
+                                            for (const res of batchResults) {
+                                                if (res.status === 'fulfilled') {
+                                                    const { idx, bot, targetChannel, nameResult } = res.value;
+                                                    movOk++;
+                                                    const nameStr = nameResult.required
+                                                        ? (nameResult.ok ? ` 📝 \`${nameResult.actual}\`` : ` 📝 ❌`)
+                                                        : '';
+                                                    addLine(`✅ **${idx + 1}.** <@${bot.user.id}> → <#${targetChannel.id}>${nameStr}`);
+                                                } else {
+                                                    movFail++;
+                                                    addLine(`❌ **${batchStart + movOk + movFail}.** ${res.reason?.message || 'unknown error'}`);
+                                                }
+                                            }
+
+                                            await throttleEdit({
+                                                content: '',
+                                                embeds: [buildPhaseEmbed(
+                                                    'Phase 2 — Moving',
+                                                    movOk + movFail,
+                                                    plannedAssignments,
+                                                    movOk + movFail,
+                                                    plannedAssignments,
+                                                    nameOk, nameFail, movOk, movFail,
+                                                )],
+                                                components: [],
+                                            }, movOk + movFail >= plannedAssignments);
+                                        }
+
+                                        store.set('tokens', tokens);
+
+                                        // ── final result embed ──────────────────────────
+                                        const nameField = needsRename
+                                            ? `✅ **تم:** \`${nameOk}\`\n❌ **فشل:** \`${nameFail}\``
+                                            : '`—` بدون تغيير أسماء';
+
+                                        const allSuccess = movFail === 0 && nameFail === 0 && plannedUnusedBots === 0 && plannedUnusedRooms === 0;
+                                        const allFailed = movOk === 0 && nameOk === 0;
+                                        const resultTitle = allSuccess
+                                            ? '✅ Distribution Complete'
+                                            : allFailed
+                                                ? '❌ Distribution Failed'
+                                                : '⚠️ Distribution Done';
+
+                                        const resultEmbed = buildDistributionEmbed(
+                                            resultTitle,
+                                            [
+                                                `**Owner :** *<@${interaction.user.id}>*`,
+                                                `**Scope :** *${scopeLabels[state.scope] || state.scope}*`,
+                                                `**Mode :** *${modeLabel}*`,
+                                                `**Rooms :** *<#${state.firstChannelId}> → <#${state.lastChannelId}>*`,
+                                                '**Rule :** *بوت واحد لكل روم بدون تكديس.*',
+                                                '',
+                                                buildSimpleProgressBar(plan.assignments.length, plan.assignments.length),
+                                            ].join('\n'),
+                                            [
+                                                {
+                                                    name: '🔊 Voice Move',
+                                                    value: `**1. Success :** *\`${movOk}\`*\n**2. Failed :** *\`${movFail}\`*\n**3. Total :** *\`${plannedAssignments}\`*`,
+                                                    inline: true,
+                                                },
+                                                {
+                                                    name: '📝 Names',
+                                                    value: nameField,
+                                                    inline: true,
+                                                },
+                                                {
+                                                    name: '📊 Rooms',
+                                                    value: `**1. Selected :** *\`${plan.rooms.length}\`*\n**2. Used :** *\`${plan.assignments.length}\`*\n**3. Unused :** *\`${plan.unusedRooms.length}\`*`,
+                                                    inline: true,
+                                                },
+                                                {
+                                                    name: '⏱️ Timing',
+                                                    value: `**Elapsed :** *\`${formatShortDuration(Date.now() - distributionStartedAt)}\`*\n**Batch :** *\`${SETTINGS_DISTRIBUTION_BATCH_SIZE}\`*`,
+                                                    inline: true,
+                                                },
+                                                {
+                                                    name: '⚖️ Skipped',
+                                                    value: `**Extra Bots :** *\`${plan.unusedBots.length}\`*\n**Extra Rooms :** *\`${plan.unusedRooms.length}\`*`,
+                                                    inline: true,
+                                                },
+                                                {
+                                                    name: '📋 Details',
+                                                    value: details.slice(0, 10).join('\n').slice(0, 1024) || '—',
+                                                    inline: false,
+                                                },
+                                            ],
+                                        );
+                                        if (detailCount > 10) {
+                                            resultEmbed.addFields({ name: 'More', value: `**Extra :** *\`${detailCount - 10}\` سجل إضافي لم يُعرض.*`, inline: false });
+                                        }
+
+                                        await mainMsg.edit({
+                                            content: `<@${interaction.user.id}>`,
+                                            embeds: [resultEmbed],
+                                            components: [],
+                                            allowedMentions: { users: [interaction.user.id] },
                                         }).catch(() => {});
-                                    }
-                                }
 
-                                store.set('tokens', tokens);
-
-                                // ── final result embed ──────────────────────────────
-                                const nameField = nameRequired
-                                    ? `✅ **تم:** \`${nameSuccess}\`\n❌ **فشل:** \`${nameRequired - nameSuccess}\``
-                                    : '`—` بدون تغيير أسماء';
-                                const modeLabel = state.mode === 'names'
-                                    ? (state.namesWithNumbers ? 'أسماء الرومات + أرقام' : 'أسماء الرومات')
-                                    : state.mode === 'numbers'
-                                        ? (state.namePrefix ? `${state.namePrefix}1, ${state.namePrefix}2...` : '1, 2, 3...')
-                                        : 'بدون تغيير أسماء';
-
-                                const resultEmbed = buildDistributionEmbed(
-                                    failed === 0 && plannedUnusedBots === 0 && plannedUnusedRooms === 0
-                                        ? '✅ Distribution Complete'
-                                        : success === 0
-                                            ? '❌ Distribution Failed'
-                                            : '⚠️ Distribution Done',
-                                    [
-                                        `**Owner :** *<@${interaction.user.id}>*`,
-                                        '',
-                                        `**Scope :** *${scopeLabels[state.scope] || state.scope}*`,
-                                        '',
-                                        `**Mode :** *${modeLabel}*`,
-                                        '',
-                                        `**Rooms :** *<#${state.firstChannelId}> إلى <#${state.lastChannelId}>*`,
-                                        '',
-                                        '**Rule :** *بوت واحد لكل روم بدون تكديس.*',
-                                        '',
-                                        buildSimpleProgressBar(plan.assignments.length, plan.assignments.length),
-                                    ].join('\n'),
-                                    [
-                                        { name: 'Bots', value: `**1. Success :** *\`${success}\`*\n**2. Failed :** *\`${failed}\`*\n**3. Executed :** *\`${plan.assignments.length}\`*\n**4. Available :** *\`${plan.bots.length}\`*`, inline: true },
-                                        { name: 'Rooms', value: `**1. Selected :** *\`${plan.rooms.length}\`*\n**2. Used :** *\`${plan.assignments.length}\`*\n**3. Unused :** *\`${plan.unusedRooms.length}\`*`, inline: true },
-                                        { name: 'Names', value: nameField, inline: true },
-                                        { name: 'Timing', value: `**1. Elapsed :** *\`${formatShortDuration(Date.now() - distributionStartedAt)}\`*\n**2. Batch :** *\`${SETTINGS_DISTRIBUTION_BATCH_SIZE}\`*`, inline: true },
-                                        { name: 'Skipped', value: `**1. Extra Bots :** *\`${plan.unusedBots.length}\`*\n**2. Extra Rooms :** *\`${plan.unusedRooms.length}\`*`, inline: true },
-                                        { name: 'Details', value: details.slice(0, 8).join('\n') || '—', inline: false },
-                                    ],
-                                );
-                                if (detailCount > 8) {
-                                    resultEmbed.addFields({ name: 'More', value: `**Extra :** *\`${detailCount - 8}\` بوت إضافي لم يتم عرضه داخل الإيمبد.*`, inline: false });
-                                }
-
-                                await mainMsg.edit({
-                                    content: `<@${interaction.user.id}>`,
-                                    embeds: [resultEmbed],
-                                    components: [],
-                                    allowedMentions: { users: [interaction.user.id] },
-                                });
-                            } catch (e) {
-                                await mainMsg.edit({
-                                    content: `<@${interaction.user.id}>`,
-                                    embeds: [buildDistributionEmbed('❌ Distribution Failed', `**المنظم:** <@${interaction.user.id}>\n**الخطأ:** ${e.message}`)],
-                                    components: [],
-                                    allowedMentions: { users: [interaction.user.id] },
-                                });
+                                    } catch (e) {
+                                        await mainMsg.edit({
+                                            content: `<@${interaction.user.id}>`,
+                                            embeds: [buildDistributionEmbed('❌ Distribution Failed', `**المنظم:** <@${interaction.user.id}>\n**الخطأ:** ${e.message}`)],
+                                            components: [],
+                                            allowedMentions: { users: [interaction.user.id] },
+                                        }).catch(() => {});
                                     } finally {
                                         activeSmartDistributions.delete(lockKey);
                                         if (activeDistributionState === state) activeDistributionState = null;
