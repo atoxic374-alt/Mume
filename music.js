@@ -4078,7 +4078,24 @@ module.exports = {
             _limitGuardCooldown.set(ck, now);
 
             // إرسال فوري — fire and forget بدون await
-            newState.member.send('⚠️ يرجى الخروج من الروم وعدم تجاوز لمت الروم.').catch(() => {});
+            const _guild = newState.guild;
+            const _iconURL = _guild.iconURL({ dynamic: true, size: 128 }) ?? undefined;
+            const { EmbedBuilder } = require('discord.js');
+            const _limitEmbed = new EmbedBuilder()
+                .setColor(0xE74C3C)
+                .setThumbnail(_iconURL ?? null)
+                .setDescription(
+                    `⚠️ **تجاوز الحد المسموح**\n\n` +
+                    `**الروم :** <#${newState.channelId}>\n` +
+                    `**الحد الأقصى :** ${channel.userLimit} مستخدم\n` +
+                    `**العدد الحالي :** ${humanCount} مستخدم\n\n` +
+                    `يرجى مغادرة الروم حتى لا يتجاوز العدد الحد المحدد.`
+                )
+                .setFooter({
+                    text: _guild.name,
+                    iconURL: _iconURL,
+                });
+            newState.member.send({ embeds: [_limitEmbed] }).catch(() => {});
         });
 
         // ── Fix: Re-init Lavalink after Discord WebSocket shard resumes ──────────
