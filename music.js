@@ -4066,8 +4066,8 @@ module.exports = {
             const channel = newState.guild?.channels.cache.get(newState.channelId) ?? newState.channel;
             if (!channel?.userLimit) return; // 0 أو غير محدد = لا يوجد لمت
 
-            // عدّ البشر فقط (بدون بوتات) من الكاش — بدون API call
-            const humanCount = channel.members.filter(m => !m.user.bot).size;
+            // عدّ كل الأعضاء (بوتات + بشر) — نفس طريقة حساب ديسكورد
+            const humanCount = channel.members.size;
             // humanCount > userLimit (تجاوز فعلي، مو مساواة)
             if (humanCount <= channel.userLimit) return;
 
