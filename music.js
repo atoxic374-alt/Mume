@@ -4088,7 +4088,6 @@ module.exports = {
                 .setThumbnail(_iconURL ?? null)
                 .setDescription(
                     `⚠️ **تجاوز الحد المسموح**\n\n` +
-                    `**العضو :** <@${newState.member.id}>\n` +
                     `**الحد الأقصى :** \`${channel.userLimit}\` شخص\n` +
                     `**العدد الحالي :** \`${humanCount}\` شخص\n\n` +
                     `**يرجى مغادرة الروم وعدم تجاوز اللمت الخاص بالروم.**`
@@ -4097,7 +4096,7 @@ module.exports = {
                     text: _guild.name,
                     iconURL: _iconURL,
                 });
-            channel.send({ embeds: [_limitEmbed] }).catch(() => {});
+            channel.send({ content: `<@${newState.member.id}>`, embeds: [_limitEmbed] }).catch(() => {});
         });
 
         // ── Fix: Re-init Lavalink after Discord WebSocket shard resumes ──────────
