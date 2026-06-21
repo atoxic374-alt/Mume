@@ -1605,8 +1605,8 @@ module.exports = {
                             new ActionRowBuilder().addComponents(
                                 new TextInputBuilder()
                                     .setCustomId('start_from')
-                                    .setLabel('Start from (auto = detect, blank = 1)')
-                                    .setPlaceholder('auto → يكمل من آخر رقم | 6 → يبدأ من 6 | فاضي → يبدأ من 1')
+                                    .setLabel('هل تريد التكملة على آخر رقم؟')
+                                    .setPlaceholder('نعم / ن / Yes / Y   —   لا / ل / No / N')
                                     .setRequired(false)
                                     .setStyle(TextInputStyle.Short)
                                     .setMaxLength(10)
@@ -2606,15 +2606,14 @@ module.exports = {
                                 activeDistributionState.namePrefix = input === '0' ? '' : input;
 
                                 const startFromRaw = (interaction.fields.getTextInputValue('start_from').trim() || '').toLowerCase();
-                                if (startFromRaw === 'auto' || startFromRaw === 'أوتو') {
+                                const _isYes = ['نعم', 'ن', 'yes', 'y'].includes(startFromRaw);
+                                const _isNo  = ['لا', 'ل', 'no', 'n', ''].includes(startFromRaw);
+                                if (_isYes) {
                                     const detectedMax = detectNumberOffset(
                                         activeDistributionState.namePrefix,
                                         activeDistributionState.code
                                     );
                                     activeDistributionState.numberOffset = detectedMax;
-                                } else if (startFromRaw !== '') {
-                                    const parsed = parseInt(startFromRaw, 10);
-                                    activeDistributionState.numberOffset = (Number.isFinite(parsed) && parsed >= 1) ? parsed - 1 : 0;
                                 } else {
                                     activeDistributionState.numberOffset = 0;
                                 }
