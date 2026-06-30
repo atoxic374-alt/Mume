@@ -332,6 +332,20 @@ function onNodeDisconnect(node) {
     stopWsPing(node);
 }
 
+function isShardReady(client, guildId) {
+    try {
+        const shards = client?.ws?.shards;
+        if (!shards?.size) return true; // no sharding info available — assume ready
+        const shardId = guildId
+            ? Number((BigInt(guildId) >> 22n) % BigInt(shards.size))
+            : 0;
+        const shard = shards.get(shardId);
+        return !!(shard && shard.status === 0); // 0 = WebSocketShardStatus.Ready
+    } catch {
+        return false;
+    }
+}
+
 function onShardReconnect(client, poru, delayMs = 5000) {
     if (!poru?.players?.size) return;
 
@@ -339,8 +353,16 @@ function onShardReconnect(client, poru, delayMs = 5000) {
         if (!poru.players?.size) return;
 
         let refreshed = 0;
+        let skipped = 0;
         poru.players.forEach(player => {
             if (!player?.voiceChannel) return;
+            // Guard: only send voice-state update when the Discord shard is READY.
+            // Calling player.connect() while the shard is reconnecting throws
+            // "RangeError: Shard N not found" and leaves the player stuck.
+            if (!isShardReady(client, player.guildId)) {
+                skipped++;
+                return;
+            }
             try {
                 if (typeof player.connect === 'function') {
                     player.connect({
@@ -355,11 +377,11 @@ function onShardReconnect(client, poru, delayMs = 5000) {
             } catch {}
         });
 
-        if (refreshed > 0) {
+        if (refreshed > 0 || skipped > 0) {
             lavalinkConsole.updateBot(client, {
                 state: 'voice_refresh',
                 event: 'shard_reconnect_refresh',
-                note: `Refreshed voice state for ${refreshed} player(s)`,
+                note: `Refreshed ${refreshed} player(s)${skipped ? `, skipped ${skipped} (shard not ready)` : ''}`,
                 players: poru.players?.size || 0,
             });
         }
