@@ -40,7 +40,7 @@ const { syncMusicEmojis } = require('./utils/syncEmojis');
 const { getEmbedColor, refreshEmbedColor } = require('./utils/embedColor');
 const statusStore = require('./statusStore');
 const { tintAttachmentPayload, warmTintCache } = require('./utils/tintedThumbnail');
-const { buildProgressBarAttachment, normalizeColorNumber } = require('./utils/progressBar');
+const { buildProgressBarAttachment, normalizeColorNumber, prewarmProgressBarCache } = require('./utils/progressBar');
 const { liftDiscordClientLimits } = require('./utils/discordClientTuning');
 
 const runningBots = new Collection();
@@ -5065,6 +5065,11 @@ module.exports = {
           clearTimeout(player.data._prefetchTimer);
           player.data._prefetchTimer = null;
       }
+      // ── Cancel any in-progress progress bar pre-warm ──────────────────────────
+      if (typeof player.data._cancelProgressPrewarm === 'function') {
+          player.data._cancelProgressPrewarm();
+          player.data._cancelProgressPrewarm = null;
+      }
       // ─────────────────────────────────────────────────────────────────────────
       const reason = data?.reason || 'unknown';
       const naturalEnd = isNaturalTrackEnd(reason);
@@ -5287,6 +5292,27 @@ module.exports = {
         player.data.lastProgressAt = Date.now();
         player.data.lastPosition = 0;
         player.data.recoveryAttempts = 0;
+
+        // ── Pre-warm progress bar cache for all positions ─────────────────────
+        // Cancel any previous pre-warm (track changed before it finished)
+        if (typeof player.data._cancelProgressPrewarm === 'function') {
+            player.data._cancelProgressPrewarm();
+        }
+        const trackDuration = Number(track.info?.length || 0);
+        if (trackDuration > 0) {
+            const prewarmColor = normalizeColorNumber('#9d9ad1');
+            player.data._cancelProgressPrewarm = prewarmProgressBarCache({
+                color:         prewarmColor,
+                duration:      trackDuration,
+                width:         PLAY_PROGRESS_WIDTH,
+                height:        52,
+                variant:       'discordCompact',
+                durationLabel: shortDuration(trackDuration),
+            });
+        } else {
+            player.data._cancelProgressPrewarm = null;
+        }
+        // ─────────────────────────────────────────────────────────────────────
                 if (shouldResumeStuckTrack) {
                     applyStuckRecoveryResume();
                 }

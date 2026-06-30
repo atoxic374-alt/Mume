@@ -83,15 +83,24 @@ class Store {
     // Prevent two concurrent writes to the same file
     if (this._flushing.has(key)) return;
     this._flushing.add(key);
+    // Mark as in-progress BEFORE writing so any set() that arrives during
+    // the async write adds key back to _dirty, letting us detect it in finally.
+    this._dirty.delete(key);
     const tmp = file + '.tmp';
     try {
       await fs.promises.writeFile(tmp, JSON.stringify(this._mem[key], null, 2));
       await fs.promises.rename(tmp, file);
-      this._dirty.delete(key);
     } catch (e) {
+      this._dirty.add(key); // restore so next flush retries
       console.error('[Store] flush error:', key, e.message);
     } finally {
       this._flushing.delete(key);
+      // A set() arrived while we were writing — flush the newer value now
+      if (this._dirty.has(key)) {
+        this._flushAsync(key).catch(e =>
+          console.error('[Store] re-flush error:', key, e.message)
+        );
+      }
     }
   }
 

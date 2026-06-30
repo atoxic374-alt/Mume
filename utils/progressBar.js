@@ -61,11 +61,22 @@ function pickWorkingFont(ctx, sample, size = 19, bold = true) {
     return `${weight}${size}px sans-serif`;
 }
 
-const PROGRESS_CACHE_MAX_ENTRIES = 768;
-const PROGRESS_CACHE_MAX_BYTES = 12 * 1024 * 1024;
-const PROGRESS_CACHE_TTL_MS = 10 * 60 * 1000;
+const PROGRESS_CACHE_MAX_ENTRIES = 2048;
+const PROGRESS_CACHE_MAX_BYTES = 24 * 1024 * 1024;
+const PROGRESS_CACHE_TTL_MS = 4 * 60 * 60 * 1000; // 4h — covers pre-warmed entries for long tracks
 const progressCache = new Map();
 let progressCacheBytes = 0;
+
+// ── مطابق لـ shortDuration في music.js لتجنب الاعتماد المتقاطع ──────────────
+function _shortDuration(ms) {
+    const value = Number(ms);
+    if (!Number.isFinite(value) || value < 0) return 'Live';
+    const total = Math.floor(value / 1000);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = String(total % 60).padStart(2, '0');
+    return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+}
 
 function normalizeColorNumber(input) {
     if (typeof input === 'number' && Number.isFinite(input)) {
@@ -365,7 +376,56 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
     });
 }
 
+/**
+ * Pre-warms the progress bar cache for all 1001 bucket positions of a track.
+ * Renders in small batches via setImmediate so the event loop stays free.
+ * Returns a cancel function — call it if the track changes before warming finishes.
+ *
+ * @param {{ color, duration, width?, height?, variant?, durationLabel? }} opts
+ * @returns {() => void} cancel
+ */
+function prewarmProgressBarCache({ color, duration, width = 800, height = 52, variant = 'discordCompact', durationLabel } = {}) {
+    if (!duration || duration <= 0) return () => {};
+
+    const dl = durationLabel ?? _shortDuration(duration);
+    const BATCH_SIZE = 5; // tiny batches — each canvas render ~1-3ms
+    let bucket = 0;
+    let cancelled = false;
+    let timer = null;
+
+    function renderBatch() {
+        if (cancelled) return;
+        const end = Math.min(bucket + BATCH_SIZE, 1001);
+        for (; bucket < end; bucket++) {
+            const position = Math.round((bucket / 1000) * duration);
+            buildProgressBarAttachment({
+                position,
+                duration,
+                color,
+                currentLabel: _shortDuration(position),
+                durationLabel: dl,
+                width,
+                height,
+                variant,
+            });
+        }
+        if (bucket <= 1000 && !cancelled) {
+            timer = setImmediate(renderBatch);
+            timer?.unref?.();
+        }
+    }
+
+    timer = setImmediate(renderBatch);
+    timer?.unref?.();
+
+    return function cancel() {
+        cancelled = true;
+        if (timer) { clearImmediate(timer); timer = null; }
+    };
+}
+
 module.exports = {
     buildProgressBarAttachment,
     normalizeColorNumber,
+    prewarmProgressBarCache,
 };
