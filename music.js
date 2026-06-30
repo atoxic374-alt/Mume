@@ -1500,7 +1500,7 @@ async function requestPlayerVoiceStateRefresh(player, reason = 'voice_refresh', 
     try {
         if (forceToggle) {
             player.connect(payload(!(player.deaf ?? true)));
-            await wait(350);
+            await wait(80);
         }
         player.connect(payload(player.deaf ?? true));
         ensurePlayerData(player).lastVoiceStateRefreshRequest = { reason, at: Date.now(), forceToggle };
@@ -1526,10 +1526,7 @@ async function refreshPlayerVoiceSession(player, reason = 'play') {
 
     if (!hasPlayerVoiceSession(player)) {
         await requestPlayerVoiceStateRefresh(player, `${reason}:missing_voice`, false);
-        const deadline = Date.now() + 2500;
-        while (!hasPlayerVoiceSession(player) && Date.now() < deadline) {
-            await wait(250);
-        }
+        await waitUntil(() => hasPlayerVoiceSession(player), 800, 25);
     }
 
     if (!hasPlayerVoiceSession(player)) {
@@ -1552,7 +1549,7 @@ async function refreshPlayerVoiceSession(player, reason = 'play') {
         await applyVoice();
     } catch (err) {
         await requestPlayerVoiceStateRefresh(player, `${reason}:retry`, true);
-        await wait(750);
+        await waitUntil(() => hasPlayerVoiceSession(player), 400, 25);
         await applyVoice();
     }
 
