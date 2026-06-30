@@ -7,11 +7,12 @@ let starting = 0;
 const MAX_CONCURRENT = 5;
 const startQueue = [];
 
-async function tryStart(botData, _attempt = 0) {
+// startQueue holds { botData, attempt } to preserve retry state across concurrency waits
+async function tryStart(botData, attempt = 0) {
   if (botData?.paused) return;
   if (runningBots.has(botData.token)) return; // already running
   if (starting >= MAX_CONCURRENT) {
-    startQueue.push(botData); // queue for later
+    startQueue.push({ botData, attempt }); // preserve attempt count
     return;
   }
   starting++;
@@ -20,19 +21,20 @@ async function tryStart(botData, _attempt = 0) {
   } catch (err) {
     const msg = err?.message || String(err);
     console.error('[Manager] runsys failed for bot:', msg);
-    // Retry with exponential backoff on rate-limit or transient errors (max 3 attempts)
+    // Retry with exponential backoff on rate-limit or transient errors
+    // attempt 0 = first call; retries: 1, 2 → max 3 total calls
     const isRetryable = /rate.?limit|429|ECONNRESET|ETIMEDOUT|socket hang up/i.test(msg);
-    if (isRetryable && _attempt < 3) {
-      const delay = (2 ** _attempt) * 5000; // 5s, 10s, 20s
-      console.log(`[Manager] retrying bot in ${delay}ms (attempt ${_attempt + 1}/3)`);
-      setTimeout(() => tryStart(botData, _attempt + 1), delay).unref?.();
+    if (isRetryable && attempt < 2) {
+      const delay = (2 ** attempt) * 5000; // 5s, 10s
+      console.log(`[Manager] retrying bot in ${delay}ms (attempt ${attempt + 2}/3)`);
+      setTimeout(() => tryStart(botData, attempt + 1), delay).unref?.();
     }
   }
   starting--;
   // drain queue
   if (startQueue.length > 0) {
-    const next = startQueue.shift();
-    setImmediate(() => tryStart(next));
+    const { botData: next, attempt: nextAttempt } = startQueue.shift();
+    setImmediate(() => tryStart(next, nextAttempt));
   }
 }
 

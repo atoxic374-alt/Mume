@@ -241,7 +241,10 @@ async function checkMovedByBot(guild) {
 // ── B: resolveTrack cache (1-hour TTL, max 500 entries) ──────────────────────
 const _resolveTrackCache = new Map();
 const RESOLVE_TRACK_TTL = 60 * 60 * 1000;
-const RESOLVE_TRACK_MAX = Math.max(100, Number(process.env.RESOLVE_TRACK_MAX || 2000));
+const _resolveTrackMaxRaw = Number(process.env.RESOLVE_TRACK_MAX);
+const RESOLVE_TRACK_MAX = Number.isFinite(_resolveTrackMaxRaw) && _resolveTrackMaxRaw >= 100
+    ? _resolveTrackMaxRaw
+    : 2000;
 async function resolveTrackCached(player, track) {
     const key = track?.info?.uri || track?.info?.identifier || track?.track;
     if (!key) return player.resolveTrack(track);
