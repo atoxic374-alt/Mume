@@ -1344,6 +1344,32 @@ function markPlayerNeedsVoiceRefresh(player, reason = 'idle') {
 async function requestPlayerVoiceStateRefresh(player, reason = 'voice_refresh', forceToggle = false) {
     if (!player?.voiceChannel || typeof player.connect !== 'function') return false;
 
+    // Guard: make sure the Discord WS shard is READY before sending voice state.
+    // When Lavalink exhausts resources it can stall the Node.js event loop long
+    // enough for Discord to close the gateway.  The shard reconnects shortly
+    // after, but poru's recovery loop may fire before it is ready, producing
+    // "RangeError: Shard 0 not found" and leaving the player stuck forever.
+    const discordClient = player.poru?.client;
+    if (discordClient?.ws?.shards?.size > 0) {
+        try {
+            const guildId = player.guildId;
+            const shardCount = discordClient.ws.shards.size;
+            const shardId = guildId
+                ? Number((BigInt(guildId) >> 22n) % BigInt(shardCount))
+                : 0;
+            const shard = discordClient.ws.shards.get(shardId);
+            // WebSocketShardStatus.Ready === 0 in discord.js v14
+            if (!shard || shard.status !== 0) {
+                markPlayerNeedsVoiceRefresh(player, `${reason}:shard_not_ready`);
+                return false;
+            }
+        } catch {
+            // If the shard check itself throws, bail out safely
+            markPlayerNeedsVoiceRefresh(player, `${reason}:shard_check_error`);
+            return false;
+        }
+    }
+
     const payload = (deaf = player.deaf ?? true) => ({
         guildId: player.guildId,
         voiceChannel: player.voiceChannel,
@@ -1361,6 +1387,11 @@ async function requestPlayerVoiceStateRefresh(player, reason = 'voice_refresh', 
         ensurePlayerData(player).lastVoiceStateRefreshRequest = { reason, at: Date.now(), forceToggle };
         return true;
     } catch (err) {
+        // Shard disappeared between the check and the send — mark for retry
+        if (err instanceof RangeError && String(err.message).includes('Shard')) {
+            markPlayerNeedsVoiceRefresh(player, `${reason}:shard_gone`);
+            return false;
+        }
         warnPlayerOnce(player, 'voice-state-refresh-failed', `[VoiceRefresh] gateway refresh failed for ${player.guildId}: ${err?.message || err}`);
         return false;
     }
