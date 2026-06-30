@@ -1,6 +1,3 @@
-require('events').EventEmitter.defaultMaxListeners = 0;
-
-
 const {
     Client,
     EmbedBuilder,
@@ -25,6 +22,7 @@ const {
     SeparatorSpacingSize,
     MessageFlags,
     PermissionFlagsBits,
+    AuditLogEvent,
 } = require('discord.js');
 
 const fs = require('fs');
@@ -33,7 +31,7 @@ const { Agent: UndiciAgent, request: undiciRequest } = require('undici');
 const lavalinkKeepAlive = require('./utils/lavalinkKeepAlive');
 const lavalinkConsole = require('./utils/lavalinkConsole');
 
-const { owners, TwitchUrl, statuses } = require(`${process.cwd()}/config`);
+const { owners, TwitchUrl, statuses, logChannelId: _configLogChannelId } = require(`${process.cwd()}/config`);
 const store = require('./utils/store');
 const likes = require('./utils/likes');
 const { getDisplay } = require('./utils/display');
@@ -65,8 +63,7 @@ const HIGH_LOAD_THRESHOLD    = Number(process.env.LAVALINK_HIGH_LOAD_THRESHOLD |
 const HIGH_LOAD_CHECK_MS     = Number(process.env.LAVALINK_LOAD_CHECK_MS || 60_000);
 
 async function sendLavalinkAlert(client, type, node, extraInfo = '') {
-    const { logChannelId } = require(`${process.cwd()}/config`);
-    const channelId = process.env.LAVALINK_ALERT_CHANNEL || logChannelId;
+    const channelId = process.env.LAVALINK_ALERT_CHANNEL || _configLogChannelId;
     if (!channelId) return;
 
     const stateMap = type === 'disconnect' ? _lavalinkAlertState.disconnectSentAt
@@ -226,7 +223,6 @@ async function checkMovedByBot(guild) {
 
     const pending = (async () => {
         try {
-            const { AuditLogEvent } = require('discord.js');
             const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberMove, limit: 1 });
             const entry = logs.entries.first();
             const result = !!(entry && Date.now() - entry.createdTimestamp < 3000 && entry.executor?.bot === true);
@@ -245,7 +241,7 @@ async function checkMovedByBot(guild) {
 // ── B: resolveTrack cache (1-hour TTL, max 500 entries) ──────────────────────
 const _resolveTrackCache = new Map();
 const RESOLVE_TRACK_TTL = 60 * 60 * 1000;
-const RESOLVE_TRACK_MAX = 500;
+const RESOLVE_TRACK_MAX = Math.max(100, Number(process.env.RESOLVE_TRACK_MAX || 2000));
 async function resolveTrackCached(player, track) {
     const key = track?.info?.uri || track?.info?.identifier || track?.track;
     if (!key) return player.resolveTrack(track);
@@ -4238,7 +4234,6 @@ module.exports = {
             _limitGuardCooldown.set(ck, now);
 
             // إرسال فوري — fire and forget بدون await
-            const { EmbedBuilder } = require('discord.js');
             const _limitEmbed = new EmbedBuilder()
                 .setDescription(`**يرجى مغادرة الروم وعدم تجاوز اللمت الخاص بالروم.**`);
             channel.send({ content: `<@${newState.member.id}>`, embeds: [_limitEmbed] }).catch(() => {});
@@ -4967,6 +4962,10 @@ module.exports = {
         });
 
 
+
+    TrueMusic.poru.on('playerDestroy', (player) => {
+        clearProgressInterval(player, 'player_destroyed');
+    });
 
     TrueMusic.poru.on('playerUpdate', (player) => {
         ensurePlayerData(player);

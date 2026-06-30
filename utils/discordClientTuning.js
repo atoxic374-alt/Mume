@@ -17,11 +17,6 @@ try {
   }
 } catch {}
 
-// Also ensure Node's built-in EventEmitter global is unlimited
-try {
-  require('events').EventEmitter.defaultMaxListeners = 0;
-} catch {}
-
 // ─────────────────────────────────────────────────────────────────────────────
 
 function liftEmitterLimit(emitter) {

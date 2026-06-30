@@ -4,8 +4,6 @@ require('./bootMigration');
 
 // Import necessary modules
 
-// const { EventEmitter } = require('events');
-// EventEmitter.defaultMaxListeners = 999999999999999;
 require('events').defaultMaxListeners = 0;
 
 const {
@@ -142,10 +140,6 @@ client.on('raw', () => {
     lastGatewayEventAt = Date.now();
 });
 
-// Also update on high-level events as a secondary signal
-client.on('messageCreate', () => { lastGatewayEventAt = Date.now(); });
-client.on('interactionCreate', () => { lastGatewayEventAt = Date.now(); });
-client.on('voiceStateUpdate', () => { lastGatewayEventAt = Date.now(); });
 
 let isReconnecting = false;
 
