@@ -53,6 +53,114 @@ const tempData = new Collection();
 tempData.set("bots", []);
 const collection = new Collection();
 
+// ── Lavalink Alert System ─────────────────────────────────────────────────────
+// Shared state across all bot instances in this process
+const _lavalinkAlertState = {
+    disconnectSentAt: new Map(),   // nodeName → timestamp
+    highLoadSentAt:   new Map(),   // nodeName → timestamp
+    recoveredSentAt:  new Map(),   // nodeName → timestamp
+};
+const ALERT_COOLDOWN_MS      = 5 * 60_000;  // don't repeat same alert for 5 min
+const HIGH_LOAD_THRESHOLD    = Number(process.env.LAVALINK_HIGH_LOAD_THRESHOLD || 0.80);
+const HIGH_LOAD_CHECK_MS     = Number(process.env.LAVALINK_LOAD_CHECK_MS || 60_000);
+
+async function sendLavalinkAlert(client, type, node, extraInfo = '') {
+    const { logChannelId } = require(`${process.cwd()}/config`);
+    const channelId = process.env.LAVALINK_ALERT_CHANNEL || logChannelId;
+    if (!channelId) return;
+
+    const stateMap = type === 'disconnect' ? _lavalinkAlertState.disconnectSentAt
+                   : type === 'highload'   ? _lavalinkAlertState.highLoadSentAt
+                   :                         _lavalinkAlertState.recoveredSentAt;
+
+    const nodeName = node?.options?.name || node?.options?.host || 'Unknown';
+    const lastSent = stateMap.get(nodeName) || 0;
+    if (Date.now() - lastSent < ALERT_COOLDOWN_MS) return;
+    stateMap.set(nodeName, Date.now());
+
+    try {
+        const channel = await client.channels.fetch(channelId).catch(() => null);
+        if (!channel?.isTextBased?.()) return;
+
+        const colors = { disconnect: 0xED4245, highload: 0xFEE75C, recovered: 0x57F287 };
+        const titles = {
+            disconnect: '🔴 Lavalink انقطع',
+            highload:   '⚠️ Lavalink تحت ضغط عالي',
+            recovered:  '🟢 Lavalink رجع ورسور',
+        };
+
+        const embed = new EmbedBuilder()
+            .setColor(colors[type] || 0x5865F2)
+            .setTitle(titles[type] || 'Lavalink Alert')
+            .addFields({ name: 'Node', value: `\`${nodeName}\``, inline: true })
+            .setTimestamp();
+
+        if (extraInfo) embed.setDescription(extraInfo);
+
+        if (type === 'disconnect') {
+            embed.setDescription([
+                extraInfo,
+                '',
+                '**البوتات ستعود تلقائياً عند رجوع الاتصال.**',
+                'إذا استمر الانقطاع، يرجى إعادة تشغيل Lavalink يدوياً.',
+            ].filter(Boolean).join('\n'));
+        }
+
+        if (type === 'highload') {
+            embed.setDescription([
+                extraInfo,
+                '',
+                '**الضغط العالي قد يسبب تأخير أو انقطاع الصوت.**',
+                'يُنصح بإعادة تشغيل Lavalink أو تقليل عدد البوتات.',
+            ].filter(Boolean).join('\n'));
+        }
+
+        await channel.send({ embeds: [embed] });
+    } catch {}
+}
+
+// ── Per-node high-load monitor (started once per node on connect) ─────────────
+const _nodeLoadMonitors = new Map(); // nodeName → intervalId
+
+function startNodeLoadMonitor(node, client) {
+    const nodeName = node?.options?.name || node?.options?.host || 'Unknown';
+    if (_nodeLoadMonitors.has(nodeName)) return;
+
+    const interval = setInterval(() => {
+        if (!node.isConnected) {
+            clearInterval(interval);
+            _nodeLoadMonitors.delete(nodeName);
+            return;
+        }
+        const cpu       = Number(node.stats?.cpu?.systemLoad   || 0);
+        const lavalink  = Number(node.stats?.cpu?.lavalinkLoad || 0);
+        const memUsed   = Number(node.stats?.memory?.used      || 0);
+        const memMax    = Number(node.stats?.memory?.reservable|| node.stats?.memory?.allocated || 1);
+        const memRatio  = memMax > 0 ? memUsed / memMax : 0;
+
+        const overloaded = cpu >= HIGH_LOAD_THRESHOLD || lavalink >= HIGH_LOAD_THRESHOLD || memRatio >= 0.90;
+        if (overloaded) {
+            const detail = [
+                cpu       >= HIGH_LOAD_THRESHOLD ? `CPU: ${(cpu * 100).toFixed(0)}%`      : null,
+                lavalink  >= HIGH_LOAD_THRESHOLD ? `Lavalink CPU: ${(lavalink * 100).toFixed(0)}%` : null,
+                memRatio  >= 0.90               ? `RAM: ${(memRatio * 100).toFixed(0)}%`  : null,
+            ].filter(Boolean).join(' | ');
+            sendLavalinkAlert(client, 'highload', node, detail).catch(() => {});
+        }
+    }, HIGH_LOAD_CHECK_MS);
+    interval.unref?.();
+    _nodeLoadMonitors.set(nodeName, interval);
+}
+
+function stopNodeLoadMonitor(nodeName) {
+    const interval = _nodeLoadMonitors.get(nodeName);
+    if (interval) {
+        clearInterval(interval);
+        _nodeLoadMonitors.delete(nodeName);
+    }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 function stableHash(value) {
     const text = String(value || '');
     let hash = 2166136261;
@@ -3888,6 +3996,7 @@ module.exports = {
 
             const name = node.options.name || node.options.host;
             const prev = statusStore.getNodes().get(name) || {};
+            const wasOffline = prev.status === 'offline';
             const data = {
                 status: 'online',
                 connectedAt: Date.now(),
@@ -3899,6 +4008,13 @@ module.exports = {
                 reconnects: data.reconnects,
                 note: 'Connected to Lavalink',
             });
+
+            // Send "recovered" alert if it was previously offline
+            if (wasOffline) {
+                sendLavalinkAlert(TrueMusic, 'recovered', node).catch(() => {});
+            }
+            // Start CPU/RAM load monitor for this node
+            startNodeLoadMonitor(node, TrueMusic);
 
             let newData = tempData.get("bots");
             if (!newData.includes(TrueMusic)) newData.push(TrueMusic);
@@ -3928,6 +4044,8 @@ module.exports = {
         TrueMusic.poru.on('nodeDisconnect', (node) => {
             // أوقف WS ping — سيُستأنف عند nodeConnect/nodeReconnect
             lavalinkKeepAlive.onNodeDisconnect(node);
+            // Stop load monitor — node is gone
+            stopNodeLoadMonitor(node?.options?.name || node?.options?.host);
             const name = node.options.name || node.options.host;
             const prev = statusStore.getNodes().get(name) || {};
             const data = { status: 'offline', reconnects: prev.reconnects ?? 0 };
@@ -3937,6 +4055,12 @@ module.exports = {
                 reconnects: data.reconnects,
                 note: 'Waiting for reconnect',
             });
+
+            // Send disconnect alert to log channel
+            const affectedPlayers = [...TrueMusic.poru.players.values()].filter(p => p.node === node).length;
+            sendLavalinkAlert(TrueMusic, 'disconnect', node,
+                affectedPlayers > 0 ? `البوتات المتأثرة: **${affectedPlayers}**` : ''
+            ).catch(() => {});
 
             // ── Ghost-player prevention ───────────────────────────────────────────
             // When a node goes offline, Poru players on it keep isPlaying=true
