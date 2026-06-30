@@ -938,7 +938,14 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     }
 
     if (compactPlayLayout) {
-        const progress = buildProgressBarAttachment({
+        // ── Button-press fast path: reuse the last rendered progress bar ──────────
+        // Canvas image generation is synchronous and CPU-heavy; running it on every
+        // button click blocks the Node.js event loop for ALL bots in the process.
+        // When reuseProgressBar=true (button presses), we reuse the last stored
+        // image — the periodic progress-update timer still regenerates it every few
+        // seconds, so it stays visually accurate without blocking on every click.
+        const cachedBar = options.reuseProgressBar ? player?.data?._lastProgressBarCache : null;
+        const progress = cachedBar || buildProgressBarAttachment({
             position: currentTime,
             duration: totalTime,
             color: progressColor,
@@ -948,6 +955,10 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
             height: 52,
             variant: 'discordCompact',
         });
+        // Store for reuse by subsequent button presses
+        if (player?.data && progress?.attachment) {
+            player.data._lastProgressBarCache = progress;
+        }
 
         const container = new ContainerBuilder()
             .addSectionComponents(section)
@@ -5235,6 +5246,8 @@ module.exports = {
         player.data._recovering = false;
         player.data._recoveryTrackId = null;
         player.data._recoveryAt = null;
+        // Clear cached progress bar so new track gets a fresh Canvas render
+        player.data._lastProgressBarCache = null;
                 // ─────────────────────────────────────────────────────────────────────
 
                 const stuckRecoveryIdentity = player.data.stuckRecoveryIdentity;
@@ -6669,6 +6682,9 @@ module.exports = {
                                     showInfoRow: false,
                                     useEmbedAccent: false,
                                     progressWidth: PLAY_PROGRESS_WIDTH,
+                                    // Reuse the last rendered Canvas image so button presses
+                                    // don't block the event loop regenerating it each click.
+                                    reuseProgressBar: true,
                                 });
                         if (targetInteraction && !targetInteraction.deferred && !targetInteraction.replied) {
                             await targetInteraction.deferUpdate().catch(() => {});
