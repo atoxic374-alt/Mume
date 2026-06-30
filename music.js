@@ -1820,9 +1820,12 @@ function waitForPlaybackTransition(poru, player, previousTrack, timeoutMs = MUSI
 async function skipPlayerSynced(poru, player, currentTrack) {
     // Reset pause state before skipping so the next queued track starts playing
     player.isPaused = false;
-    await updateLavalinkPlayer(player, { track: { encoded: null } }, 'skip update');
     player.position = 0;
     player.isPlaying = false;
+    // Fire skip to Lavalink without awaiting — local state is already updated so
+    // the bot feels instant. Lavalink will emit trackEnd which triggers the next
+    // track regardless of how long the network roundtrip takes.
+    updateLavalinkPlayer(player, { track: { encoded: null } }, 'skip update').catch(() => {});
     return true;
 }
 
