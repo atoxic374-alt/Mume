@@ -1536,13 +1536,10 @@ async function refreshPlayerVoiceSession(player, reason = 'play') {
     }
 
     const applyVoice = async () => {
-        await player.node.rest.updatePlayer({
-            guildId: player.guildId,
-            data: {
-                voice: player.connection.voice,
-                paused: false,
-            },
-        });
+        await updateLavalinkPlayer(player, {
+            voice: player.connection.voice,
+            paused: false,
+        }, 'voice session refresh');
     };
 
     try {
@@ -3873,14 +3870,11 @@ module.exports = {
             player.data._recovering = true;
             player.data._recoveryTrackId = trackIdentity(player.currentTrack);
             player.data._recoveryAt = Date.now();
-            await player.node.rest.updatePlayer({
-                guildId: player.guildId,
-                data: {
-                    track: { encoded: player.currentTrack.track },
-                    position: Math.max(0, Number(player.position || 0)),
-                    paused: false,
-                },
-            });
+            await updateLavalinkPlayer(player, {
+                track: { encoded: player.currentTrack.track },
+                position: Math.max(0, Number(player.position || 0)),
+                paused: false,
+            }, 'recovery restart');
             player.isPlaying = true;
             player.isPaused = false;
             player.data.lastProgressAt = Date.now();
@@ -5189,13 +5183,6 @@ module.exports = {
         };
     }
 
-    function assertLavalinkFilterResponse(response) {
-        if (!response) throw new Error('Lavalink did not return a player response');
-        if (response.error || Number(response.status) >= 400) {
-            throw new Error(response.message || response.error || `Lavalink filter error ${response.status}`);
-        }
-    }
-
     function syncPlayerFilters(player, filters) {
         if (!player?.filters) return;
         player.filters.volume = filters.volume;
@@ -5214,11 +5201,7 @@ module.exports = {
         if (!player?.node?.rest) throw new Error('player is not connected');
         const { selected, filters } = filterPayloadFor(name);
 
-        const response = await player.node.rest.updatePlayer({
-            guildId: player.guildId,
-            data: { filters },
-        });
-        assertLavalinkFilterResponse(response);
+        await updateLavalinkPlayer(player, { filters }, `filter:${name}`);
 
         syncPlayerFilters(player, filters);
 
