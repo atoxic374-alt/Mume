@@ -1280,19 +1280,57 @@ function ensureTrackRequester(track, player, fallbackUser) {
 }
 
 function recoverableTrackErrorMessage(data) {
-    return String(
-        data?.reason
-        || data?.exception?.message
-        || data?.exception?.cause
-        || data?.message
-        || data?.type
-        || ''
-    );
+    return [...new Set([
+        data?.reason,
+        data?.exception?.message,
+        data?.exception?.cause,
+        data?.message,
+        data?.type,
+    ].map(value => String(value || '').trim()).filter(Boolean))].join(' | ');
 }
 
 function isRecoverableTrackError(data) {
     const message = recoverableTrackErrorMessage(data);
     return /voice|session|connection|websocket|socket|timeout|timed out|closed|reset|aborted|no such player|not connected|server update|endpoint/i.test(message);
+}
+
+// YouTube/Lavalink can reject a video permanently when every client requires
+// login or no audio format is available. These errors must advance to the next
+// queued track, not enter the voice-recovery loop and replay the same item.
+function isPermanentTrackError(data) {
+    const message = recoverableTrackErrorMessage(data).toLowerCase();
+    return /no supported audio streams|available types|requires? login|sign in to confirm|not a bot|invalid status code for player api|player api response: 400|video requires login|page needs to be reloaded/.test(message);
+}
+
+async function resolvePermanentTrackFallback(poru, failedTrack, player) {
+    const sourceName = String(failedTrack?.info?.sourceName || '').toLowerCase();
+    if (!sourceName.includes('youtube')) return null;
+    const title = String(failedTrack?.info?.title || '').trim();
+    const author = String(failedTrack?.info?.author || '').trim();
+    const query = [author, title].filter(Boolean).join(' - ');
+    if (!query) return null;
+
+    const data = ensurePlayerData(player);
+    const fallbackKey = `${sourceName}:${normalizeSearchText(query)}`;
+    if (!data.permanentFallbackAttempts) data.permanentFallbackAttempts = new Set();
+    if (data.permanentFallbackAttempts.has(fallbackKey)) return null;
+    data.permanentFallbackAttempts.add(fallbackKey);
+
+    const tracks = await withTimeout(
+        resolveSmartTracks(poru, query, 'scsearch', 8, {
+            variants: [query],
+            resolveConcurrency: 2,
+            prefetchMultiplier: 1,
+            perResolveLimit: 8,
+        }).catch(() => []),
+        5000,
+        [],
+    );
+    const failedIdentity = trackIdentity(failedTrack);
+    return (tracks || []).find(candidate => {
+        const candidateSource = String(candidate?.info?.sourceName || '').toLowerCase();
+        return candidate?.track && !candidateSource.includes('youtube') && trackIdentity(candidate) !== failedIdentity;
+    }) || null;
 }
 
 function registerQueuePanel(player, message, version) {
@@ -1602,14 +1640,33 @@ async function safePlay(player) {
         try {
             await player.play();
         } catch (err) {
-            if (player.currentTrack && player.currentTrack === queuedTrack && typeof player.queue?.unshift === 'function') {
-                player.queue.unshift(player.currentTrack);
+            const playError = { reason: err?.message || 'unknown', exception: { message: err?.message || '' } };
+            const retryable = isRecoverableTrackError(playError) && !isPermanentTrackError(playError);
+            const failedTrack = player.currentTrack || queuedTrack;
+
+            // Requeue only transport/session failures. Requeueing a YouTube
+            // track rejected for login/no-streams causes an endless replay loop.
+            if (retryable && failedTrack && typeof player.queue?.unshift === 'function') {
+                player.queue.unshift(failedTrack);
+            } else if (!retryable && player.queue?.[0] === failedTrack) {
+                player.queue.shift();
             }
             player.currentTrack = null;
             player.isPlaying = false;
             player.isPaused = false;
-            markPlayerNeedsVoiceRefresh(player, `play_error:${err?.message || 'unknown'}`);
-            if (scheduleSafePlayRetry(player, 'play_error')) return false;
+
+            if (retryable) {
+                markPlayerNeedsVoiceRefresh(player, `play_error:${err?.message || 'unknown'}`);
+                if (scheduleSafePlayRetry(player, 'play_error')) return false;
+            } else {
+                ensurePlayerData(player).lastPermanentTrackError = String(err?.message || 'unknown').slice(0, 240);
+                if (player.queue?.length) {
+                    player.data.advanceAfterTrackError = true;
+                    setImmediate(() => safePlay(player).catch(() => {}));
+                    return false;
+                }
+                setAutoPlayState(player, false);
+            }
             throw err;
         }
         if (player.isPlaying) {
@@ -5138,6 +5195,77 @@ module.exports = {
         }
         const erroredTrack = track || player.currentTrack || player.data.lastTrack;
         const errorIdentity = trackIdentity(erroredTrack);
+
+        // A source extraction/authentication failure is permanent for this
+        // track. Do not call recoverPlayerPlayback, which would restart the
+        // same encoded YouTube item repeatedly.
+        if (isPermanentTrackError(data)) {
+            const permanentErrorState = ensurePlayerData(player);
+            const permanentErrorAt = Number(permanentErrorState.permanentTrackErrorAt || 0);
+            if (permanentErrorState.permanentTrackErrorInFlight) return;
+            if (permanentErrorState.permanentTrackErrorIdentity === errorIdentity
+                && Date.now() - permanentErrorAt < 30_000) return;
+            permanentErrorState.permanentTrackErrorInFlight = true;
+            permanentErrorState.permanentTrackErrorIdentity = errorIdentity;
+            permanentErrorState.permanentTrackErrorAt = Date.now();
+            const keepAutoPlay = permanentErrorState.autoPlay === true;
+            try {
+            permanentErrorState.lastPermanentTrackError = recoverableTrackErrorMessage(data).slice(0, 240);
+            if (player.queue?.[0] && trackIdentity(player.queue[0]) === errorIdentity) player.queue.shift();
+            player.currentTrack = null;
+            player.isPlaying = false;
+            player.isPaused = false;
+            setAutoPlayState(player, false);
+            if (typeof player.skip === 'function') await player.skip().catch(() => {});
+            await finalizePlayerUi(player, { complete: false, track: erroredTrack });
+            await bumpQueueVersion(player, 'permanent_track_error');
+
+            const fallbackTrack = await resolvePermanentTrackFallback(player.poru, erroredTrack, player).catch(() => null);
+            if (fallbackTrack) {
+                setAutoPlayState(player, keepAutoPlay);
+                fallbackTrack.info = {
+                    ...(fallbackTrack.info || {}),
+                    requester: erroredTrack?.info?.requester || player.data.lastRequester || null,
+                    fallbackFrom: errorIdentity || null,
+                };
+                player.queue.unshift(fallbackTrack);
+                setImmediate(() => safePlay(player).catch(() => {}));
+                warnPlayerOnce(
+                    player,
+                    `permanent-track-fallback:${errorIdentity || 'unknown'}`,
+                    `[TrackError] YouTube failed; using SoundCloud fallback for ${errorIdentity || 'unknown'}`,
+                    60_000,
+                );
+            } else if (player.queue?.length) {
+                setAutoPlayState(player, keepAutoPlay);
+                setImmediate(() => safePlay(player).catch(() => {}));
+            } else {
+                clearStoppedPlaybackCaches(player);
+                markStopped();
+            }
+            warnPlayerOnce(
+                player,
+                `permanent-track-error:${errorIdentity || 'unknown'}`,
+                `[TrackError] skipped permanently unavailable track ${errorIdentity || 'unknown'}: ${recoverableTrackErrorMessage(data).slice(0, 160)}`,
+                60_000,
+            );
+            return;
+            } finally {
+                permanentErrorState.permanentTrackErrorInFlight = false;
+            }
+        }
+
+        const liveTrackIdentity = trackIdentity(player.currentTrack);
+        if (liveTrackIdentity && errorIdentity && liveTrackIdentity !== errorIdentity) {
+            warnPlayerOnce(
+                player,
+                `stale-track-error:${errorIdentity}`,
+                `[TrackError] ignored stale error for ${errorIdentity}; current=${liveTrackIdentity}`,
+                60_000,
+            );
+            return;
+        }
+
         const lastRetryAt = Number(player.data.trackErrorRetryAt || 0);
         const sameRecentRetry = player.data.trackErrorRetryIdentity === errorIdentity
             && Date.now() - lastRetryAt < 45_000;
@@ -5626,6 +5754,10 @@ module.exports = {
                     const artistTracks = await resolveArtistTracks(TrueMusic.poru, artistQuery, source || 'auto', track, 6, {
                         historySet: autoPlayHistorySet(player),
                     });
+            // The track may have ended while the artist search was in flight;
+            // cleanup can set ui to null. Recreate it only for a still-live player.
+            if (!player.currentTrack || trackIdentity(player.currentTrack) !== trackIdentity(track)) return;
+            if (!player.data.ui) player.data.ui = {};
             player.data.ui.artistTracks = artistTracks;
             if (player.data.nowPlayingMessage?.id === msg.id && player.currentTrack === track) {
                 const payload = buildNowPlayingV2Payload(TrueMusic, tokenObj2, player, { author: requester }, {
