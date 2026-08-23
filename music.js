@@ -1583,35 +1583,48 @@ async function safePlay(player) {
     if (!player?.queue?.length) return false;
     if (player.isPlaying || player.isPaused) return false;
     const data = ensurePlayerData(player);
-    const idleTooLong = !player.currentTrack
-        && !player.isPlaying
-        && data.lastIdleAt
-        && Date.now() - data.lastIdleAt >= IDLE_PLAYER_REFRESH_MS;
-    const isFreshConnection = data.createdAt && Date.now() - data.createdAt < 5000;
-    const missingEstablishedVoice = !hasPlayerVoiceSession(player) && !isFreshConnection;
-    if (data.needsVoiceRefresh || idleTooLong || missingEstablishedVoice) {
-        const refreshed = await refreshPlayerVoiceSession(player, 'safe_play');
-        if (!refreshed) return scheduleSafePlayRetry(player, 'voice_not_ready');
-    }
-    const queuedTrack = player.queue[0] || null;
-    try {
-        await player.play();
-    } catch (err) {
-        if (player.currentTrack && player.currentTrack === queuedTrack && typeof player.queue?.unshift === 'function') {
-            player.queue.unshift(player.currentTrack);
+    if (data.safePlayInFlight) return data.safePlayInFlight;
+
+    const task = (async () => {
+        // Re-check after an earlier caller may have yielded to voice refresh.
+        if (!player?.queue?.length || player.isPlaying || player.isPaused) return false;
+        const idleTooLong = !player.currentTrack
+            && !player.isPlaying
+            && data.lastIdleAt
+            && Date.now() - data.lastIdleAt >= IDLE_PLAYER_REFRESH_MS;
+        const isFreshConnection = data.createdAt && Date.now() - data.createdAt < 5000;
+        const missingEstablishedVoice = !hasPlayerVoiceSession(player) && !isFreshConnection;
+        if (data.needsVoiceRefresh || idleTooLong || missingEstablishedVoice) {
+            const refreshed = await refreshPlayerVoiceSession(player, 'safe_play');
+            if (!refreshed) return scheduleSafePlayRetry(player, 'voice_not_ready');
         }
-        player.currentTrack = null;
-        player.isPlaying = false;
-        player.isPaused = false;
-        markPlayerNeedsVoiceRefresh(player, `play_error:${err?.message || 'unknown'}`);
-        if (scheduleSafePlayRetry(player, 'play_error')) return false;
-        throw err;
+        const queuedTrack = player.queue[0] || null;
+        try {
+            await player.play();
+        } catch (err) {
+            if (player.currentTrack && player.currentTrack === queuedTrack && typeof player.queue?.unshift === 'function') {
+                player.queue.unshift(player.currentTrack);
+            }
+            player.currentTrack = null;
+            player.isPlaying = false;
+            player.isPaused = false;
+            markPlayerNeedsVoiceRefresh(player, `play_error:${err?.message || 'unknown'}`);
+            if (scheduleSafePlayRetry(player, 'play_error')) return false;
+            throw err;
+        }
+        if (player.isPlaying) {
+            data.voicePlayRetryAttempts = 0;
+            data.pendingVoicePlayRetry = false;
+        }
+        return true;
+    })();
+
+    data.safePlayInFlight = task;
+    try {
+        return await task;
+    } finally {
+        if (data.safePlayInFlight === task) data.safePlayInFlight = null;
     }
-    if (player.isPlaying) {
-        data.voicePlayRetryAttempts = 0;
-        data.pendingVoicePlayRetry = false;
-    }
-    return true;
 }
 
 const MUSIC_CONTROL_DEDUP_MS = Math.max(250, Number(process.env.MUSIC_CONTROL_DEDUP_MS || 750));
@@ -1968,10 +1981,6 @@ function restorePoruNodes(poru, client, reason = 'restore') {
     return true;
 }
 
-function wait(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 async function promiseWithTimeout(promise, ms, label = 'operation timed out') {
     let timer;
     try {
@@ -2189,18 +2198,32 @@ async function resolveSmartTracks(poru, query, source, limit = 20, options = {})
     const tracks = [];
     const prefetchLimit = Math.max(limit, limit * Math.max(1, Number(options.prefetchMultiplier || 2)));
     const perResolveLimit = Math.max(1, Math.min(8, Number(options.perResolveLimit || 8)));
+    const resolveJobs = sources.flatMap(searchSource => variants.map(variant => ({ searchSource, variant })));
+    const rawConcurrency = Number(options.resolveConcurrency ?? process.env.MUSIC_RESOLVE_CONCURRENCY ?? 4);
+    const concurrency = Number.isFinite(rawConcurrency)
+        ? Math.max(1, Math.min(6, Math.floor(rawConcurrency)))
+        : 4;
+    let nextJob = 0;
 
-    for (const searchSource of sources) {
-        for (const variant of variants) {
-            if (tracks.length >= prefetchLimit) break;
+    // Search providers in parallel with a small cap. The previous nested
+    // awaits made four variants on one source take up to 4x the timeout.
+    const worker = async () => {
+        while (nextJob < resolveJobs.length) {
+            const job = resolveJobs[nextJob++];
             const result = await withTimeout(
-                poru.resolve({ query: variant, source: searchSource }).catch(() => null),
+                poru.resolve({ query: job.variant, source: job.searchSource }).catch(() => null),
                 timeoutMs,
                 null,
             );
             if (result?.tracks?.length) tracks.push(...result.tracks.slice(0, perResolveLimit));
+            if (tracks.length >= prefetchLimit) return;
         }
-    }
+    };
+
+    await Promise.all(Array.from(
+        { length: Math.min(concurrency, resolveJobs.length) },
+        () => worker(),
+    ));
 
     return rankTracksForQuery(tracks, query, { strict: options.strict }).slice(0, limit);
 }
@@ -5529,6 +5552,8 @@ module.exports = {
                 clearProgressInterval(player, 'message changed or missing');
                 return;
             }
+            if (player.data.progressUpdateInFlight) return;
+            player.data.progressUpdateInFlight = true;
             try {
                 const currentIdentity = trackIdentity(player.currentTrack);
                 if (!player.currentTrack || (identity && currentIdentity !== identity)) {
@@ -5588,6 +5613,8 @@ module.exports = {
                 });
             } catch (err) {
                 console.error('[ProgressUpdate] failed:', err?.message || err);
+            } finally {
+                player.data.progressUpdateInFlight = false;
             }
         }, 15000);
 
@@ -5738,7 +5765,7 @@ module.exports = {
                 volume: [`volume`, `vol`, `صوت`, `v`, `ص`, `V`, `Vol`, `Volume`],
                 nowplaying: [`nowplaying`, `np`, `Np`, `Nowplaying`, `الشغال`, `الان`],
                 loop: [`loop`, `تكرار`, `l`, `L`, `Loop`],
-                pause: [`pause`, `توقيف`, `كمل`, `pa`, `Pa`, `Pause`, `resume`],
+                pause: [`pause`, `كمل`, `pa`, `Pa`, `Pause`, `resume`],
                 seek: [`seek`, `Seek`, `قدم`, `se`, `Se`],
                 forward: [`forward`, `Forward`, `fwd`, `fw`, `تقديم`],
                 remove: [`remove`, `Remove`, `rm`, `حذف`],
@@ -5831,20 +5858,20 @@ module.exports = {
                                 player.queue.add(track);
 
                                 if (player.isPlaying) {
-                                    // bump queue + Discord reply start at the same instant
-                                    await Promise.all([
-                                        bumpQueueVersion(player, 'track_add'),
-                                        message.reply(musicPayload(tokenObj, {
-                                            title: 'Add Song',
-                                            description: `**[${track.info.title}](${track.info.uri})**`,
-                                            fields: [{ name: 'Song Duration', value: `**${shortDuration(track.info.length)}**`, inline: true }],
-                                            thumbnail: 'attachment://AddSong.png',
-                                            files: ['./assets/image/icons/AddSong.png'],
-                                        })),
-                                    ]);
+                                    // Queue mutation is local and audio is already
+                                    // playing; do not block the confirmation on
+                                    // editing stale queue panels.
+                                    runBackground('track_add queue bump', () => bumpQueueVersion(player, 'track_add'));
+                                    await message.reply(musicPayload(tokenObj, {
+                                        title: 'Add Song',
+                                        description: `**[${track.info.title}](${track.info.uri})**`,
+                                        fields: [{ name: 'Song Duration', value: `**${shortDuration(track.info.length)}**`, inline: true }],
+                                        thumbnail: 'attachment://AddSong.png',
+                                        files: ['./assets/image/icons/AddSong.png'],
+                                    }));
                                     return;
                                 }
-                                await bumpQueueVersion(player, 'track_add');
+                                runBackground('track_add queue bump', () => bumpQueueVersion(player, 'track_add'));
                             }
 
                                     await safePlay(player);
@@ -5962,17 +5989,15 @@ module.exports = {
 
                 if (!memberVoice || !clientVoice || memberVoice.id !== clientVoice.id) return;
 
-                if (player.isPaused) {
-                    await Promise.all([
-                        pausePlayerSynced(player, false).catch(err => console.warn('[message resume]', err?.message || err)),
-                        reactCustom(message, MUSIC_EMOJIS.skip, '▶️'),
-                    ]);
-                } else {
-                    await Promise.all([
-                        pausePlayerSynced(player, true).catch(err => console.warn('[message pause]', err?.message || err)),
-                        reactCustom(message, MUSIC_EMOJIS.pause, '⏸️'),
-                    ]);
-                }
+                const shouldPause = !player.isPaused;
+                pausePlayerSynced(player, shouldPause).catch(err => {
+                    console.warn(`[message ${shouldPause ? 'pause' : 'resume'}]`, err?.message || err);
+                });
+                reactCustom(
+                    message,
+                    shouldPause ? MUSIC_EMOJIS.pause : MUSIC_EMOJIS.skip,
+                    shouldPause ? '⏸️' : '▶️',
+                );
             }
 
 
@@ -6256,7 +6281,7 @@ module.exports = {
                     seconds = parseInt(timeArg);
                 }
 
-                if (isNaN(seconds)) {
+                if (!Number.isFinite(seconds) || seconds < 0) {
                     return message.reply(musicPayload(tokenObj, {
                         title: 'Seek',
                         description: '*Invalid time format. Use something like 1:30 or 90s*.',
@@ -6265,11 +6290,9 @@ module.exports = {
                     }));
                 }
 
-                const seekTime = Math.min(seconds * 1000, player.currentTrack.info.length);
-                await Promise.all([
-                    player.seekTo(seekTime).catch(err => console.warn('[message seek]', err?.message || err)),
-                    reactCustom(message, MUSIC_EMOJIS.skip, '✅'),
-                ]);
+                const seekTime = Math.max(0, Math.min(seconds * 1000, Number(player.currentTrack.info.length || 0)));
+                player.seekTo(seekTime).catch(err => console.warn('[message seek]', err?.message || err));
+                reactCustom(message, MUSIC_EMOJIS.skip, '✅');
             }
 
             else if (cmdsArray.forward.includes(command)) {
@@ -6317,12 +6340,11 @@ module.exports = {
                     }));
                 }
 
-                const currentPosition = Number(player.position || 0);
-                const newPosition = Math.min(currentPosition + seconds * 1000, player.currentTrack.info.length - 1000);
-                await Promise.all([
-                    player.seekTo(newPosition).catch(err => console.warn('[message forward]', err?.message || err)),
-                    reactCustom(message, MUSIC_EMOJIS.skip, '⏩'),
-                ]);
+                const currentPosition = Math.max(0, Number(player.position || 0));
+                const duration = Math.max(0, Number(player.currentTrack.info.length || 0));
+                const newPosition = Math.max(0, Math.min(currentPosition + seconds * 1000, Math.max(0, duration - 1000)));
+                player.seekTo(newPosition).catch(err => console.warn('[message forward]', err?.message || err));
+                reactCustom(message, MUSIC_EMOJIS.skip, '⏩');
             }
 
             else if (cmdsArray.remove.includes(command)) {
