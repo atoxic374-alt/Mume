@@ -1,6 +1,6 @@
 // messageCreate.js
 const client = require('../index');
-const { prefix } = require('../settings/config');
+const { prefix } = require('../config');
 const { check } = require('../utils/rateLimit');
 
 
@@ -34,6 +34,10 @@ client.on("messageCreate", async (message) => {
     try {
         await command.execute(client, message, args);
     } catch (e) {
-        console.error(`[cmd:${cmd}]`, e.message);
+        console.error(`[cmd:${cmd}]`, e?.stack || e);
+        await message.reply({
+            content: '❌ حدث خطأ أثناء تنفيذ الأمر. حاول مرة أخرى، وإذا تكرر الخطأ تواصل مع الإدارة.',
+            allowedMentions: { repliedUser: false },
+        }).catch(() => {});
     }
 });

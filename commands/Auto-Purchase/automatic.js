@@ -39,6 +39,7 @@ const REQUESTS_FILE = path.join(process.cwd(), 'settings', 'invoices.tmp.json');
 const AUTO_IMAGE_PATH = path.join(process.cwd(), 'assets', 'image', 'Auto.png');
 const AUTO_PROFILE_ASSET_DIR = path.join(process.cwd(), 'assets', 'automatic');
 const RENEWAL_TTL_MS = 12 * 60 * 60 * 1000;
+const MAX_REQUEST_BOTS = Math.max(1, Math.min(1000, Number(process.env.AUTO_MAX_REQUEST_BOTS || 100)));
 
 const MONTH_PRESETS = [
   { months: 1, ms: 30 * 24 * 60 * 60 * 1000, labelAr: 'شهر واحد',    labelEn: '1 Month',  days: 30,
@@ -91,6 +92,43 @@ function durationRenewRows(code, iid) {
   ];
 }
 const installedClients = new WeakSet();
+const activeSubscriptionOperations = new Set();
+const activeRequestOperations = new Set();
+
+async function withInteractionOperationLock(interaction, key, work) {
+  const lockKey = String(key || `${interaction?.user?.id || 'unknown'}:unknown`);
+  if (activeSubscriptionOperations.has(lockKey) || activeRequestOperations.has(lockKey)) {
+    if (interaction?.replied || interaction?.deferred) {
+      return interaction.followUp({ content: '**Operation in progress | توجد عملية قيد التنفيذ.**', flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
+    return interaction.reply({ content: '**Operation in progress | توجد عملية قيد التنفيذ.**', flags: MessageFlags.Ephemeral }).catch(() => {});
+  }
+  activeSubscriptionOperations.add(lockKey);
+  try {
+    return await work();
+  } finally {
+    activeSubscriptionOperations.delete(lockKey);
+    activeRequestOperations.delete(lockKey);
+  }
+}
+
+async function withRequestOperationLock(interaction, reqId, work) {
+  const lockKey = `request:${String(reqId || '')}`;
+  if (activeRequestOperations.has(lockKey)) {
+    if (!interaction) return null;
+    if (interaction?.replied || interaction?.deferred) {
+      return interaction.followUp({ content: '**Request already processing | الطلب قيد المعالجة.**', flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
+    return interaction.reply({ content: '**Request already processing | الطلب قيد المعالجة.**', flags: MessageFlags.Ephemeral }).catch(() => {});
+  }
+  activeRequestOperations.add(lockKey);
+  try {
+    return await work();
+  } finally {
+    activeRequestOperations.delete(lockKey);
+  }
+}
+
 const PROFILE_IMAGE_TIMEOUT_MS = Math.max(3000, Number(process.env.PROFILE_IMAGE_TIMEOUT_MS || 10000));
 const PROFILE_IMAGE_MAX_BYTES = Math.max(256 * 1024, Number(process.env.PROFILE_IMAGE_MAX_BYTES || 8 * 1024 * 1024));
 const PROFILE_IMAGE_EXT_BY_MIME = {
@@ -222,8 +260,12 @@ function saveRequests(requests) {
 function cleanupRequests() {
   const now = Date.now();
   const requests = readRequests().filter(req => {
-    if (req.status === 'awaiting_invoice' && Number(req.expiresAt || 0) <= now) return false;
-    if (['approved', 'rejected', 'expired'].includes(req.status) && now - Number(req.updatedAt || req.createdAt || 0) > 24 * 60 * 60 * 1000) return false;
+    // Pending requests must not block a customer forever after their TTL.
+    if (['awaiting_invoice', 'pending_owner', 'pending'].includes(req.status)
+      && Number(req.expiresAt || 0) > 0
+      && Number(req.expiresAt) <= now) return false;
+    if (['approved', 'rejected', 'expired'].includes(req.status)
+      && now - Number(req.updatedAt || req.createdAt || 0) > 24 * 60 * 60 * 1000) return false;
     return true;
   });
   saveRequests(requests);
@@ -542,7 +584,11 @@ async function sendToRequestTarget(client, payload) {
   const settings = automaticSettings();
   if (settings.requestMode === 'channel' && settings.requestChannelId) {
     const channel = await client.channels.fetch(settings.requestChannelId).catch(() => null);
-    if (channel?.send) return channel.send(payload).catch(() => null);
+    if (channel?.send) {
+      const channelMessage = await channel.send(payload).catch(() => null);
+      if (channelMessage) return channelMessage;
+      // Continue to owner DMs if the configured channel is unavailable.
+    }
   }
 
   const sent = [];
@@ -678,7 +724,13 @@ function renewRequestRows(reqId, disabled = false) {
   ];
 }
 
-async function startPurchase(interaction, count, serverId, durationMs, durationLabel, durationDays) {
+async function startPurchaseUnlocked(interaction, count, serverId, durationMs, durationLabel, durationDays) {
+  if (!Number.isInteger(count) || count <= 0 || count > MAX_REQUEST_BOTS) {
+    return interaction.reply({
+      content: `**Bot Count :** *اكتب عدداً بين 1 و${MAX_REQUEST_BOTS} بوت.*`,
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => {});
+  }
   const stock = (store.get('bots') || []).length;
   if (stock < count) {
     return interaction.reply({
@@ -804,7 +856,13 @@ async function showSubscriptionPicker(interaction, action) {
   }).catch(() => {});
 }
 
-async function requestAddBots(interaction, code, count) {
+async function requestAddBotsUnlocked(interaction, code, count) {
+  if (!Number.isInteger(count) || count <= 0 || count > MAX_REQUEST_BOTS) {
+    return interaction.reply({
+      content: `**Bot Count :** *اكتب عدداً بين 1 و${MAX_REQUEST_BOTS} بوت.*`,
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => {});
+  }
   const entry = findSubscription(code, interaction.user.id);
   if (!entry) return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', flags: MessageFlags.Ephemeral }).catch(() => {});
 
@@ -839,6 +897,7 @@ async function requestAddBots(interaction, code, count) {
     totalPrice,
     currency,
     createdAt: Date.now(),
+    expiresAt: Date.now() + RENEWAL_TTL_MS,
   };
   const requests = readRequests();
   requests.push(req);
@@ -923,7 +982,7 @@ async function addTokensToStock(raw, onProgress = null) {
   return { added, invalid, duplicate };
 }
 
-async function approveAddBots(interaction, reqId) {
+async function approveAddBotsUnlocked(interaction, reqId) {
   if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
   const req = readRequests().find(item => item.id === reqId);
   if (!req || req.status !== 'pending') return interaction.reply({ content: '**Request :** *الطلب غير موجود أو تم التعامل معه.*', flags: MessageFlags.Ephemeral });
@@ -988,7 +1047,7 @@ async function approveAddBots(interaction, reqId) {
   }
 }
 
-async function rejectRequest(client, reqMessage, reqId, type = 'add', reason = '') {
+async function rejectRequestUnlocked(client, reqMessage, reqId, type = 'add', reason = '') {
   const req = updateRequest(reqId, { status: 'rejected', rejectionReason: reason || null });
   if (!req) return;
   const embed = type === 'renew'
@@ -1058,7 +1117,7 @@ async function startRenewal(interaction, code) {
   return interaction.reply(payload).catch(() => {});
 }
 
-async function doStartRenewal(interaction, code, durationMs, durationLabel, durationDays) {
+async function doStartRenewalUnlocked(interaction, code, durationMs, durationLabel, durationDays) {
   const req = {
     id: randomId(10),
     type: 'renewal',
@@ -1110,7 +1169,7 @@ async function doStartRenewal(interaction, code, durationMs, durationLabel, dura
   return interaction.update(confirmPayload).catch(() => {});
 }
 
-async function handleInvoiceDm(client, message) {
+async function handleInvoiceDmUnlocked(client, message) {
   if (message.author.bot || message.guild) return;
   if (!message.attachments?.size) return;
   cleanupRequests();
@@ -1155,7 +1214,12 @@ async function handleInvoiceDm(client, message) {
   }).catch(() => {});
 }
 
-async function acceptPurchase(interaction, reqId) {
+const handleInvoiceDm = (client, message) =>
+  withRequestOperationLock({ user: message?.author }, `invoice:${message?.author?.id || 'unknown'}`, () => handleInvoiceDmUnlocked(client, message));
+const rejectRequest = (client, reqMessage, reqId, type = 'add', reason = '') =>
+  withRequestOperationLock(null, reqId, () => rejectRequestUnlocked(client, reqMessage, reqId, type, reason));
+
+async function acceptPurchaseUnlocked(interaction, reqId) {
   if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
   const req = readRequests().find(item => item.id === reqId);
   if (!req || req.status !== 'pending_owner' || req.type !== 'purchase') {
@@ -1240,7 +1304,7 @@ async function acceptPurchase(interaction, reqId) {
   }
 }
 
-async function acceptRenewal(interaction, reqId) {
+async function acceptRenewalUnlocked(interaction, reqId) {
   if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '**Permission :** *هذا الزر للأونرات فقط.*', flags: MessageFlags.Ephemeral });
   const req = readRequests().find(item => item.id === reqId);
   if (!req || req.status !== 'pending_owner') return interaction.reply({ content: '**Request :** *الطلب غير موجود أو غير جاهز.*', flags: MessageFlags.Ephemeral });
@@ -1283,7 +1347,7 @@ async function acceptRenewal(interaction, reqId) {
   }
 }
 
-async function togglePause(interaction, code) {
+async function togglePauseUnlocked(interaction, code) {
   const timeArray = store.get('time') || [];
   const entry = timeArray.find(item => item.code === code && item.user === interaction.user.id);
   if (!entry) return interaction.reply({ content: '**Subscription :** *لم أجد هذا الاشتراك.*', flags: MessageFlags.Ephemeral }).catch(() => {});
@@ -1298,6 +1362,16 @@ async function togglePause(interaction, code) {
     subTokens.forEach(token => { delete token.paused; });
     store.set('time', timeArray);
     store.set('tokens', tokens);
+
+    // Resume is a state transition, not only a flag change: restart each bot
+    // that was destroyed when the subscription was paused.
+    try {
+      const { runsys } = require('../../music');
+      await Promise.allSettled(subTokens.map(token => runsys(token.token, token.Server)));
+    } catch (err) {
+      console.error('[togglePause] resume start failed:', err?.message || err);
+    }
+
     return interaction.reply({
       embeds: [quickEmbed(interaction.client, interaction.user, 'success', [
         `**تم استئناف الاشتراك \`${code}\`**`,
@@ -1336,6 +1410,25 @@ async function togglePause(interaction, code) {
   }).catch(() => {});
 }
 
+const approveAddBots = (interaction, reqId) =>
+  withRequestOperationLock(interaction, reqId, () => approveAddBotsUnlocked(interaction, reqId));
+const acceptPurchase = (interaction, reqId) =>
+  withRequestOperationLock(interaction, reqId, () => acceptPurchaseUnlocked(interaction, reqId));
+const acceptRenewal = (interaction, reqId) =>
+  withRequestOperationLock(interaction, reqId, () => acceptRenewalUnlocked(interaction, reqId));
+const togglePause = (interaction, code) =>
+  withInteractionOperationLock(interaction, `subscription:${interaction.user.id}:${code}:pause`, () => togglePauseUnlocked(interaction, code));
+const requestAddBots = (interaction, code, count) =>
+  withInteractionOperationLock(interaction, `subscription:${interaction.user.id}:${code}:add-bots`, () => requestAddBotsUnlocked(interaction, code, count));
+const startPurchase = (interaction, count, serverId, durationMs, durationLabel, durationDays) =>
+  withInteractionOperationLock(interaction, `purchase:${interaction.user.id}`, () => startPurchaseUnlocked(interaction, count, serverId, durationMs, durationLabel, durationDays));
+const doStartRenewal = (interaction, code, durationMs, durationLabel, durationDays) =>
+  withInteractionOperationLock(interaction, `renewal:${interaction.user.id}:${code}`, () => doStartRenewalUnlocked(interaction, code, durationMs, durationLabel, durationDays));
+const transferSubscriptionOwnership = (interaction, code, rawUser) =>
+  withInteractionOperationLock(interaction, `subscription:${code}:transfer`, () => transferSubscriptionOwnershipUnlocked(interaction, code, rawUser));
+const moveSubscriptionServer = (interaction, code, rawServerId) =>
+  withInteractionOperationLock(interaction, `subscription:${code}:move-server`, () => moveSubscriptionServerUnlocked(interaction, code, rawServerId));
+
 async function botInviteInfo(tokenData, mode) {
   let running = null;
   try { running = require('../../music').runningBots?.get(tokenData.token); } catch {}
@@ -1365,10 +1458,16 @@ async function botInviteInfo(tokenData, mode) {
 async function collectSubscriptionLinks(code, userId, mode = 'all') {
   const tokens = subscriptionTokens(code).filter(token => token.client === userId);
   const infos = [];
-  for (const token of tokens) {
-    const info = await botInviteInfo(token, mode);
-    if (info) infos.push(info);
-  }
+  let next = 0;
+  const worker = async () => {
+    while (next < tokens.length) {
+      const token = tokens[next++];
+      const info = await botInviteInfo(token, mode);
+      if (info) infos.push(info);
+    }
+  };
+  const concurrency = Math.min(4, Math.max(1, tokens.length));
+  await Promise.all(Array.from({ length: concurrency }, worker));
   return infos;
 }
 
@@ -1416,7 +1515,7 @@ async function disconnectSubscriptionBots(subTokens) {
   } catch {}
 }
 
-async function transferSubscriptionOwnership(interaction, code, rawUser) {
+async function transferSubscriptionOwnershipUnlocked(interaction, code, rawUser) {
   const newUserId = parseUserId(rawUser);
   if (!newUserId) {
     return interaction.reply({ content: '**Transfer Ownership :** *ارسل منشن أو ايدي مستخدم صحيح.*', flags: MessageFlags.Ephemeral }).catch(() => {});
@@ -1456,7 +1555,7 @@ async function transferSubscriptionOwnership(interaction, code, rawUser) {
   }).catch(() => {});
 }
 
-async function moveSubscriptionServer(interaction, code, rawServerId) {
+async function moveSubscriptionServerUnlocked(interaction, code, rawServerId) {
   const newServerId = String(rawServerId || '').trim();
   if (!/^\d{15,20}$/.test(newServerId)) {
     return interaction.reply({ content: '**Move Server :** *اكتب ايدي سيرفر صحيح.*', flags: MessageFlags.Ephemeral }).catch(() => {});
@@ -2442,6 +2541,15 @@ async function handleInteraction(interaction) {
 
   if (interaction.isChannelSelectMenu()) {
     if (id === 'auto_panel_channel_select') return handlePanelChannelSelect(interaction);
+  }
+
+  // A stale button can survive after a panel is refreshed. Always acknowledge
+  // it instead of leaving Discord to show "This interaction failed".
+  if (!interaction.replied && !interaction.deferred) {
+    return interaction.reply({
+      content: '**Panel expired | انتهت صلاحية هذه اللوحة.** افتح لوحة جديدة وحاول مرة أخرى.',
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => {});
   }
 }
 

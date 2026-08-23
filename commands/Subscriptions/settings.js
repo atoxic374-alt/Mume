@@ -777,7 +777,7 @@ module.exports = {
                                     let ok = 0;
                                     let failed = 0;
                             const lines = [];
-                            const concurrency = Math.max(1, Number(options.concurrency || SETTINGS_PROCESS_CONCURRENCY));
+                            const concurrency = Math.max(1, Math.min(32, Number(options.concurrency || SETTINGS_PROCESS_CONCURRENCY)));
                             const startedAt = Date.now();
                             let lastEditAt = 0;
                             let editing = false;
@@ -2879,6 +2879,9 @@ module.exports = {
                         collector.on('end', (_, reason) => {
                             stopChildCollector('main_end');
                             client.off('interactionCreate', modalHandler);
+                            pendingModalContexts.clear();
+                            activeDistributionCollector = null;
+                            activeDistributionState = null;
                             if (reason !== 'closed') {
                                 mainMsg.edit({ components: disableRows(mainMsg.components) }).catch(() => {});
                             }

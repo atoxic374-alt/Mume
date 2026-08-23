@@ -259,8 +259,11 @@ async function handleRemoveSub(interaction, client) {
   coll.on('collect', async i => {
     if (i.customId !== `sr_sel_${mid}`) return;
     const code = i.values[0];
-    const entry = timeData.find(e => e.code === code);
+    const entry = (store.get('time') || []).find(e => e.code === code);
     coll.stop();
+    if (!entry) {
+      return i.update({ content: statusText('Subscription was not found.', 'لم يتم العثور على الاشتراك.'), embeds: [], components: [] }).catch(() => {});
+    }
 
     const confirmEmbed = basePanelEmbed(client, 'Confirm Removal | تأكيد الحذف', 'Are you sure you want to remove this subscription?\nهل أنت متأكد من حذف هذا الاشتراك؟')
       .addFields(
@@ -303,6 +306,20 @@ async function executeRemoval(code, interaction, client) {
     store.set('bots', bots);
 
     await interaction.editReply({ content: `**Subscription Removed**\nتم حذف الاشتراك \`${code}\` بنجاح. سيتم تنظيف البوتات.`, embeds: [], components: [] });
+
+    // Stop active sub-bots before returning their tokens to stock.
+    try {
+      const { runningBots, botLastActivity } = require('../../music');
+      await Promise.allSettled(toRemove.map(async tokenData => {
+        const bot = runningBots?.get(tokenData.token);
+        if (!bot) return;
+        await bot.destroy().catch(() => {});
+        runningBots.delete(tokenData.token);
+        botLastActivity?.delete(tokenData.token);
+      }));
+    } catch (e) {
+      console.error('[Subs] active bot cleanup error:', e?.message || e);
+    }
 
     client.users.fetch(sub.user)
       .then(u => u.send({ embeds: [buildSubscriptionRemovedDm(client, {
@@ -347,6 +364,9 @@ async function handleAddTime(interaction, client) {
     const code = i.values[0];
     const entry = (store.get('time') || []).find(e => e.code === code);
     coll.stop();
+    if (!entry) {
+      return i.update({ content: statusText('Subscription was not found.', 'لم يتم العثور على الاشتراك.'), embeds: [], components: [] }).catch(() => {});
+    }
 
     const embed = basePanelEmbed(client, 'Add Subscription Time | إضافة وقت للاشتراك', `Choose the time to add to \`${code}\`.\nاختر الوقت المراد إضافته للاشتراك \`${code}\`.`)
       .addFields(
@@ -546,9 +566,17 @@ async function handleAllSubs(interaction, client) {
   const prompt = await interaction.fetchReply();
   const coll = prompt.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id, time: 60000 });
   coll.on('collect', async i => {
-    if (i.customId.startsWith('as_prev_')) page--;
-    else if (i.customId.startsWith('as_next_')) page++;
-    await i.update({ embeds: [buildEmbed()], components: buildNav() });
+    try {
+      if (i.customId.startsWith('as_prev_')) page = Math.max(0, page - 1);
+      else if (i.customId.startsWith('as_next_')) page = Math.min(pages.length - 1, page + 1);
+      else return;
+      await i.update({ embeds: [buildEmbed()], components: buildNav() });
+    } catch (err) {
+      console.warn('[Subs] list pagination error:', err?.message || err);
+    }
+  });
+  coll.on('end', () => {
+    prompt.edit({ components: [] }).catch(() => {});
   });
 }
 
@@ -566,13 +594,20 @@ async function handleStock(interaction, client) {
 }
 
 // ─── Register Global Interaction Handler ─────────────────────────────────────
+const activeSubsPanelFlows = new Set();
 function installSubsPanelHandler(client) {
   client.on('interactionCreate', async interaction => {
     if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
     if (!Object.values(BTN).includes(interaction.customId)) return;
     if (!owners.includes(interaction.user.id)) {
-      return interaction.reply({ content: statusText('This button is for owners only.', 'هذا الزر للأونرات فقط.'), flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: statusText('This button is for owners only.', 'هذا الزر للأونرات فقط.'), flags: MessageFlags.Ephemeral }).catch(() => {});
     }
+
+    const flowKey = `${interaction.message?.id || 'panel'}:${interaction.user.id}:${interaction.customId}`;
+    if (activeSubsPanelFlows.has(flowKey)) {
+      return interaction.reply({ content: statusText('This operation is already open.', 'هذه العملية مفتوحة بالفعل، أكمل النافذة الحالية.'), flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
+    activeSubsPanelFlows.add(flowKey);
     try {
       switch (interaction.customId) {
         case BTN.ADD_SUB:     return await handleAddSub(interaction, client);
@@ -586,6 +621,8 @@ function installSubsPanelHandler(client) {
       console.error('[Subs Panel] interaction error:', e);
       const reply = { content: statusText('An error occurred. Try again.', 'حدث خطأ، حاول مرة أخرى.'), flags: MessageFlags.Ephemeral };
       interaction.replied || interaction.deferred ? interaction.followUp(reply).catch(() => {}) : interaction.reply(reply).catch(() => {});
+    } finally {
+      activeSubsPanelFlows.delete(flowKey);
     }
   });
 }

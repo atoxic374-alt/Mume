@@ -1,5 +1,5 @@
 const fs = require('fs');
-const { TwitchUrl, statuses } = require(`${process.cwd()}/settings/config`);
+const { TwitchUrl, statuses } = require(`${process.cwd()}/config`);
 const statusStore = require(`${process.cwd()}/statusStore`);
 const store = require('../utils/store');
 

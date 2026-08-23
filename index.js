@@ -210,7 +210,18 @@ client.once('clientReady', () => {
       } catch { return _cachedAutoSettings || {}; }
     }
 
+    let subscriptionsCheckInFlight = false;
     async function checkSubscriptions() {
+      if (subscriptionsCheckInFlight) return;
+      subscriptionsCheckInFlight = true;
+      try {
+        return await checkSubscriptionsUnlocked();
+      } finally {
+        subscriptionsCheckInFlight = false;
+      }
+    }
+
+    async function checkSubscriptionsUnlocked() {
       const logsArray = store.get('time') || [];
       const automaticSettings = readAutomaticSettings();
       const automaticLink = automaticSettings.panelUrl
@@ -296,21 +307,30 @@ client.once('clientReady', () => {
     
           logsArray.splice(index, 1);
           const tokensArray = store.get('tokens') || [];
-    
+
           const tokensToRemove = tokensArray.filter(tokenEntry => tokenEntry.code === log.code);
-    
+
           const botsArray = store.get('bots') || [];
-    
-          tokensToRemove.forEach(tokenEntry => {
-            botsArray.push({
-              token: tokenEntry.token,
-            });
-          });
-    
+          tokensToRemove.forEach(tokenEntry => botsArray.push({ token: tokenEntry.token }));
           store.set('bots', botsArray);
-    
+
           const updatedTokensArray = tokensArray.filter(tokenEntry => !tokensToRemove.includes(tokenEntry));
           store.set('tokens', updatedTokensArray);
+
+          // Disconnect expired sub-bots immediately; do not wait up to five
+          // minutes for the orphan sweeper to notice them.
+          try {
+            const { runningBots, botLastActivity } = require('./music');
+            await Promise.allSettled(tokensToRemove.map(async tokenEntry => {
+              const bot = runningBots?.get(tokenEntry.token);
+              if (!bot) return;
+              await bot.destroy().catch(() => {});
+              runningBots.delete(tokenEntry.token);
+              botLastActivity?.delete(tokenEntry.token);
+            }));
+          } catch (err) {
+            console.error('[subscriptions] expired bot cleanup:', err?.message || err);
+          }
         }
       }
       store.set('time', logsArray);

@@ -173,7 +173,7 @@ module.exports = {
 
         const msg = await message.reply({
             embeds: [embed],
-            components: totalPages > 1 || true ? [makeButtons(page, totalPages)] : [],
+            components: [makeButtons(page, totalPages)],
         });
 
         const collector = msg.createMessageComponentCollector({

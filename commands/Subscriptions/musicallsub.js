@@ -11,7 +11,7 @@ module.exports = {
     if (!check(message.author.id, 'musicallsub')) return;
 
     try {
-	      const logsArray = store.get('time') || [];
+	      const logsArray = [...(store.get('time') || [])];
 	
 	      if (logsArray.length === 0) {
 	        return message.reply({
@@ -68,12 +68,18 @@ module.exports = {
       const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === message.author.id, time: 120000 });
 
       collector.on('collect', async i => {
-        if (i.customId === 'del') {
-          await msg.delete().catch(() => {});
-          return collector.stop();
+        try {
+          if (i.customId === 'del') {
+            collector.stop('messageDelete');
+            await msg.delete().catch(() => {});
+            return;
+          }
+          if (!['next', 'prev'].includes(i.customId)) return;
+          currentPage = i.customId === 'next' ? Math.min(totalPages, currentPage + 1) : Math.max(1, currentPage - 1);
+          await i.update({ embeds: [generateEmbed(currentPage)], components: [generateButtons()] });
+        } catch (err) {
+          console.warn('[musicallsub] pagination error:', err?.message || err);
         }
-        currentPage = i.customId === 'next' ? Math.min(totalPages, currentPage + 1) : Math.max(1, currentPage - 1);
-        await i.update({ embeds: [generateEmbed(currentPage)], components: [generateButtons()] });
       });
 
       collector.on('end', (_, r) => { if (r !== 'messageDelete') msg.edit({ components: [] }).catch(() => {}); });

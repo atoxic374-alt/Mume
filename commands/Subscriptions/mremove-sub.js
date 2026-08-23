@@ -138,7 +138,21 @@ async function executeRemoval(code, message, client) {
       });
     }
 
-    // Clean bots
+    // Disconnect active bots before returning their tokens to stock.
+    try {
+      const { runningBots, botLastActivity } = require('../../music');
+      await Promise.allSettled(tokensToRemove.map(async tokenData => {
+        const bot = runningBots?.get(tokenData.token);
+        if (!bot) return;
+        await bot.destroy().catch(() => {});
+        runningBots.delete(tokenData.token);
+        botLastActivity?.delete(tokenData.token);
+      }));
+    } catch (e) {
+      console.error('[mremove-sub] active bot cleanup error:', e?.message || e);
+    }
+
+    // Reset profile for the next stock owner.
     for (const t of tokensToRemove) {
       try {
         const profile = getSubBotProfile();

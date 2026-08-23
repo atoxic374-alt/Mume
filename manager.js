@@ -2,39 +2,52 @@
 const { runsys, runningBots, botLastActivity } = require('./music');
 const store = require('./utils/store');
 
-// Semaphore: max 5 bots starting simultaneously
+// Semaphore: max 5 bots starting simultaneously.
 let starting = 0;
 const MAX_CONCURRENT = 5;
 const startQueue = [];
+const pendingStarts = new Set();
 
-// startQueue holds { botData, attempt } to preserve retry state across concurrency waits
-async function tryStart(botData, attempt = 0) {
-  if (botData?.paused) return;
-  if (runningBots.has(botData.token)) return; // already running
-  if (starting >= MAX_CONCURRENT) {
-    startQueue.push({ botData, attempt }); // preserve attempt count
-    return;
+function drainStartQueue() {
+  while (starting < MAX_CONCURRENT && startQueue.length) {
+    const job = startQueue.shift();
+    starting++;
+    runStartJob(job).catch(err => console.error('[Manager] start job error:', err?.message || err));
   }
-  starting++;
+}
+
+function enqueueStart(botData, attempt = 0) {
+  const token = botData?.token;
+  if (!token || botData.paused || runningBots.has(token) || pendingStarts.has(token)) return;
+  pendingStarts.add(token);
+  startQueue.push({ botData, attempt });
+  drainStartQueue();
+}
+
+async function runStartJob({ botData, attempt = 0 }) {
+  const token = botData?.token;
+  let retryScheduled = false;
   try {
-    await runsys(botData.token, botData.Server);
+    if (botData?.paused || runningBots.has(token)) return;
+    await runsys(token, botData.Server);
   } catch (err) {
     const msg = err?.message || String(err);
     console.error('[Manager] runsys failed for bot:', msg);
-    // Retry with exponential backoff on rate-limit or transient errors
-    // attempt 0 = first call; retries: 1, 2 → max 3 total calls
     const isRetryable = /rate.?limit|429|ECONNRESET|ETIMEDOUT|socket hang up/i.test(msg);
-    if (isRetryable && attempt < 2) {
-      const delay = (2 ** attempt) * 5000; // 5s, 10s
+    if (isRetryable && attempt < 2 && !botData?.paused) {
+      const delay = (2 ** attempt) * 5000;
+      retryScheduled = true;
       console.log(`[Manager] retrying bot in ${delay}ms (attempt ${attempt + 2}/3)`);
-      setTimeout(() => tryStart(botData, attempt + 1), delay).unref?.();
+      setTimeout(() => {
+        pendingStarts.delete(token);
+        const current = (store.get('tokens') || []).find(item => item.token === token);
+        if (current && !current.paused) enqueueStart(current, attempt + 1);
+      }, delay).unref?.();
     }
-  }
-  starting--;
-  // drain queue
-  if (startQueue.length > 0) {
-    const { botData: next, attempt: nextAttempt } = startQueue.shift();
-    setImmediate(() => tryStart(next, nextAttempt));
+  } finally {
+    starting--;
+    if (!retryScheduled) pendingStarts.delete(token);
+    drainStartQueue();
   }
 }
 
@@ -44,7 +57,7 @@ async function checkForNewBots() {
     if (botData?.paused) continue;
     const inst = runningBots.get(botData.token);
     if (!inst || !inst.isReady()) {
-      tryStart(botData); // non-blocking
+      enqueueStart(botData); // non-blocking and de-duplicated
     }
   }
 }
