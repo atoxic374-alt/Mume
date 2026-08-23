@@ -377,9 +377,11 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
 }
 
 /**
- * Pre-warms the progress bar cache for all 1001 bucket positions of a track.
- * Renders in small batches via setImmediate so the event loop stays free.
- * Returns a cancel function — call it if the track changes before warming finishes.
+ * Optionally pre-warms a limited number of progress-bar buckets.
+ * Full-track prewarming is intentionally disabled by default because it creates
+ * 1001 synchronous PNG encodes per track and can delay music controls when many
+ * bots start tracks at once. Set PROGRESS_PREWARM_BUCKETS to a small value when
+ * prewarming is preferred over on-demand rendering.
  *
  * @param {{ color, duration, width?, height?, variant?, durationLabel? }} opts
  * @returns {() => void} cancel
@@ -387,17 +389,24 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
 function prewarmProgressBarCache({ color, duration, width = 800, height = 52, variant = 'discordCompact', durationLabel } = {}) {
     if (!duration || duration <= 0) return () => {};
 
+    const rawBucketCount = Number(process.env.PROGRESS_PREWARM_BUCKETS || 0);
+    const bucketCount = Number.isFinite(rawBucketCount)
+        ? Math.max(0, Math.min(256, Math.floor(rawBucketCount)))
+        : 0;
+    if (bucketCount < 2) return () => {};
+
     const dl = durationLabel ?? _shortDuration(duration);
-    const BATCH_SIZE = 5; // tiny batches — each canvas render ~1-3ms
+    const BATCH_SIZE = 3;
+    const lastBucket = bucketCount - 1;
     let bucket = 0;
     let cancelled = false;
     let timer = null;
 
     function renderBatch() {
         if (cancelled) return;
-        const end = Math.min(bucket + BATCH_SIZE, 1001);
+        const end = Math.min(bucket + BATCH_SIZE, bucketCount);
         for (; bucket < end; bucket++) {
-            const position = Math.round((bucket / 1000) * duration);
+            const position = Math.round((bucket / lastBucket) * duration);
             buildProgressBarAttachment({
                 position,
                 duration,
@@ -409,7 +418,7 @@ function prewarmProgressBarCache({ color, duration, width = 800, height = 52, va
                 variant,
             });
         }
-        if (bucket <= 1000 && !cancelled) {
+        if (bucket < bucketCount && !cancelled) {
             timer = setImmediate(renderBatch);
             timer?.unref?.();
         }

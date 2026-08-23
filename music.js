@@ -1614,6 +1614,24 @@ async function safePlay(player) {
     return true;
 }
 
+const MUSIC_CONTROL_DEDUP_MS = Math.max(250, Number(process.env.MUSIC_CONTROL_DEDUP_MS || 750));
+
+function claimMusicControl(player, action) {
+    if (!player) return true;
+    const data = ensurePlayerData(player);
+    const identity = trackIdentity(player.currentTrack);
+    const now = Date.now();
+    const previous = data.lastMusicControl;
+    if (action === 'skip'
+        && previous?.action === action
+        && previous.identity === identity
+        && now - Number(previous.at || 0) < MUSIC_CONTROL_DEDUP_MS) {
+        return false;
+    }
+    data.lastMusicControl = { action, identity, at: now };
+    return true;
+}
+
 function runBackground(label, task) {
     setImmediate(() => {
         Promise.resolve()
@@ -1739,11 +1757,24 @@ async function fastUpdateLavalinkPlayer(player, data, label = 'Lavalink update')
     return { status: response.statusCode, ok: true };
 }
 
-async function updateLavalinkPlayer(player, data, label = 'Lavalink update') {
+function isFastRestTransportFailure(err) {
+    const code = String(err?.code || '').toUpperCase();
+    return code.includes('TIMEOUT')
+        || code.includes('SOCKET')
+        || ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE'].includes(code);
+}
+
+async function updateLavalinkPlayer(player, data, label = 'Lavalink update', options = {}) {
     if (!player?.node?.rest) throw new Error('player is not connected');
     try {
         return await fastUpdateLavalinkPlayer(player, data, label);
     } catch (err) {
+        // For latency-sensitive controls, do not send a second PATCH after a
+        // transport timeout: the first request may already have reached
+        // Lavalink, and the fallback only adds another round-trip.
+        if (options.noTransportFallback && isFastRestTransportFailure(err)) {
+            throw err;
+        }
         if (process.env.DEBUG_FAST_REST) {
             console.warn(`[FastRest] fallback for ${label}: ${err?.message || err}`);
         }
@@ -1818,7 +1849,12 @@ async function skipPlayerSynced(poru, player, currentTrack) {
     // Fire skip to Lavalink without awaiting — local state is already updated so
     // the bot feels instant. Lavalink will emit trackEnd which triggers the next
     // track regardless of how long the network roundtrip takes.
-    updateLavalinkPlayer(player, { track: { encoded: null } }, 'skip update').catch(() => {});
+    updateLavalinkPlayer(
+        player,
+        { track: { encoded: null } },
+        'skip update',
+        { noTransportFallback: true },
+    ).catch(() => {});
     return true;
 }
 
@@ -1862,7 +1898,8 @@ async function stopPlayerAudio(player, options = {}) {
         stopRequest = updateLavalinkPlayer(
             player,
             { paused: true, track: { encoded: null } },
-            'stop update'
+            'stop update',
+            { noTransportFallback: true },
         );
         if (options.wait === false) stopRequest = stopRequest.catch(() => {});
     }
@@ -2543,6 +2580,12 @@ function autoPlayHistorySet(player) {
 
 function clearAutoPlaySessionData(player) {
     if (!player?.data) return;
+    if (player.data.autoPlayPrefetchTimer) {
+        clearTimeout(player.data.autoPlayPrefetchTimer);
+        player.data.autoPlayPrefetchTimer = null;
+    }
+    player.data.autoPlayPrefetchGeneration = Number(player.data.autoPlayPrefetchGeneration || 0) + 1;
+    delete player.data.autoPlayPrefetched;
     delete player.data.autoPlayHistory;
     delete player.data.autoPlaySeedArtist;
 }
@@ -2714,6 +2757,48 @@ async function resolveQuickAutoPlayTrack(poru, artistQuery, source, currentTrack
     }
 
     return null;
+}
+
+function autoPlayQueryForPlayer(player, track) {
+    const data = ensurePlayerData(player);
+    if (data.autoPlaySeedArtist?.primary) return data.autoPlaySeedArtist;
+    const query = artistQueryForTrack(track);
+    if (query?.primary) data.autoPlaySeedArtist = query;
+    return query;
+}
+
+function scheduleAutoPlayPrefetch(poru, player, track, source) {
+    if (!player || !track || !player.data?.autoPlay || player.queue.length > 0) return;
+    const duration = Number(track.info?.length || 0);
+    if (duration <= 8_000) return;
+
+    const data = ensurePlayerData(player);
+    if (data.autoPlayPrefetchTimer) clearTimeout(data.autoPlayPrefetchTimer);
+    data.autoPlayPrefetched = null;
+    const generation = Number(data.autoPlayPrefetchGeneration || 0) + 1;
+    data.autoPlayPrefetchGeneration = generation;
+    const identity = trackIdentity(track);
+    const delay = Math.max(1_000, duration - 5_000);
+
+    const timer = setTimeout(() => {
+        data.autoPlayPrefetchTimer = null;
+        runBackground('autoplay-prefetch', async () => {
+            if (!data.autoPlay || data.autoPlayPrefetchGeneration !== generation) return;
+            if (!player.currentTrack || trackIdentity(player.currentTrack) !== identity || player.queue.length > 0) return;
+            const artistQuery = autoPlayQueryForPlayer(player, track);
+            if (!artistQuery?.primary) return;
+            const nextTrack = await resolveQuickAutoPlayTrack(poru, artistQuery, source, track, player);
+            if (!nextTrack) return;
+            if (!data.autoPlay || data.autoPlayPrefetchGeneration !== generation) return;
+            if (!player.currentTrack || trackIdentity(player.currentTrack) !== identity || player.queue.length > 0) return;
+            data.autoPlayPrefetched = { identity, track: nextTrack, at: Date.now() };
+            if (process.env.DEBUG_PREFETCH) {
+                console.log(`[AutoPlayPrefetch] ready: ${nextTrack.info?.title || 'unknown'}`);
+            }
+        });
+    }, delay);
+    timer.unref?.();
+    data.autoPlayPrefetchTimer = timer;
 }
 
 async function resolveCachedArtistQuery(poru, query, source, limit) {
@@ -4591,7 +4676,7 @@ module.exports = {
                 const wdNodesOnline = [...(TrueMusic.poru?.nodes?.values() || [])].some(n => n.isConnected);
                 if (wdNodesOnline) {
                     TrueMusic.poru.players.forEach(player => {
-                        if (!player.currentTrack || player.isPaused) return;
+                        if (!player.currentTrack || !player.isPlaying || player.isPaused) return;
                         ensurePlayerData(player);
                         const lastProgress = player.data.lastProgressAt || player.data.trackStartedAt || wdNow;
                         const length = Number(player.currentTrack.info?.length || 0);
@@ -5116,68 +5201,76 @@ module.exports = {
             });
 
                     TrueMusic.poru.on("queueEnd", async (player) => {
+                      ensurePlayerData(player);
                       disableIdlePlaybackModesIfAlone(TrueMusic, player, 'queue_end_alone');
-                      await finalizePlayerUi(player, { complete: player?.data?.lastTrackEndNatural === true });
-              await bumpQueueVersion(player, 'queue_end');
-              const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
-              await updatePlaybackVoiceStatus(TrueMusic, tokenObj2, player, null);
-              if (!player?.data?.autoPlay || player.data.autoPlay === false) {
-                player.queue.clear();
-                setAutoPlayState(player, false);
-                clearStoppedPlaybackCaches(player);
-                markStopped();
-        return;
-      }
-      const currentTrack = player.previousTrack || player.currentTrack || player.data?.lastTrack;
-      if (!currentTrack) {
-        await finalizePlayerUi(player);
-        player.queue.clear();
-        setAutoPlayState(player, false);
-        clearStoppedPlaybackCaches(player);
-        markStopped();
-        return;
-      }
+                      const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
+                      const autoplayEnabled = player?.data?.autoPlay === true;
 
-      // Use the seed artist saved when autoplay first started to prevent artist drift
-      let artistQuery;
-      if (player.data.autoPlaySeedArtist) {
-          artistQuery = player.data.autoPlaySeedArtist;
-      } else {
-          artistQuery = artistQueryForTrack(currentTrack);
-          if (artistQuery?.primary) {
-              player.data.autoPlaySeedArtist = artistQuery;
-          }
-      }
-      const artistName = artistQuery?.primary;
-      if (!artistName) {
-        await finalizePlayerUi(player);
-        player.queue.clear();
-        setAutoPlayState(player, false);
-        clearStoppedPlaybackCaches(player);
-        markStopped();
-        return;
-      }
+                      if (!autoplayEnabled) {
+                        await finalizePlayerUi(player, { complete: player?.data?.lastTrackEndNatural === true });
+                        await bumpQueueVersion(player, 'queue_end');
+                        await updatePlaybackVoiceStatus(TrueMusic, tokenObj2, player, null);
+                        player.queue.clear();
+                        setAutoPlayState(player, false);
+                        clearStoppedPlaybackCaches(player);
+                        markStopped();
+                        return;
+                      }
 
-      const source = displaySettings(tokenObj2).platform || 'auto';
-      const nextTrack = await resolveQuickAutoPlayTrack(TrueMusic.poru, artistQuery, source, currentTrack, player);
+                      const currentTrack = player.previousTrack || player.currentTrack || player.data?.lastTrack;
+                      if (!currentTrack) {
+                        await finalizePlayerUi(player);
+                        player.queue.clear();
+                        setAutoPlayState(player, false);
+                        clearStoppedPlaybackCaches(player);
+                        markStopped();
+                        return;
+                      }
 
-      if (!nextTrack) {
-        await finalizePlayerUi(player);
-        player.queue.clear();
-        setAutoPlayState(player, false);
-        clearStoppedPlaybackCaches(player);
-        markStopped();
-        return;
-      }
+                      const artistQuery = autoPlayQueryForPlayer(player, currentTrack);
+                      const artistName = artistQuery?.primary;
+                      if (!artistName) {
+                        await finalizePlayerUi(player);
+                        player.queue.clear();
+                        setAutoPlayState(player, false);
+                        clearStoppedPlaybackCaches(player);
+                        markStopped();
+                        return;
+                      }
 
-      nextTrack.info.requester = currentTrack.info.requester;
-      nextTrack.info.autoPlay = true;
-      nextTrack.info.autoPlayArtist = artistName;
-      player.queue.add(nextTrack);
+                      const source = displaySettings(tokenObj2).platform || 'auto';
+                      const prefetched = player.data.autoPlayPrefetched;
+                      player.data.autoPlayPrefetched = null;
+                      const prefetchedTrack = prefetched?.identity === trackIdentity(currentTrack)
+                        ? prefetched.track
+                        : null;
+                      const nextTrack = prefetchedTrack
+                        || await resolveQuickAutoPlayTrack(TrueMusic.poru, artistQuery, source, currentTrack, player);
 
-      await bumpQueueVersion(player, 'autoplay_add');
-      await safePlay(player);
-    });
+                      if (!nextTrack) {
+                        await finalizePlayerUi(player);
+                        player.queue.clear();
+                        setAutoPlayState(player, false);
+                        clearStoppedPlaybackCaches(player);
+                        markStopped();
+                        return;
+                      }
+
+                      nextTrack.info.requester = currentTrack.info.requester;
+                      nextTrack.info.autoPlay = true;
+                      nextTrack.info.autoPlayArtist = artistName;
+                      player.queue.add(nextTrack);
+
+                      // Do not wait for Discord panel edits or queue-panel cleanup
+                      // before starting audio. The next track is already resolved.
+                      runBackground('autoplay transition ui', async () => {
+                        await Promise.allSettled([
+                          finalizePlayerUi(player, { complete: true, track: currentTrack }),
+                          bumpQueueVersion(player, 'autoplay_add'),
+                        ]);
+                      });
+                      await safePlay(player);
+                    });
 
 
 
@@ -5358,6 +5451,14 @@ module.exports = {
         // ─────────────────────────────────────────────────────────────────────────
 
                 const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
+                if (player.data.autoPlay === true && player.queue.length === 0) {
+                    scheduleAutoPlayPrefetch(
+                        TrueMusic.poru,
+                        player,
+                        track,
+                        displaySettings(tokenObj2).platform || 'auto',
+                    );
+                }
                 const requester = ensureTrackRequester(track, player, TrueMusic.user);
                 await updatePlaybackVoiceStatus(TrueMusic, tokenObj2, player, track);
                         if (!requester) {
@@ -6005,6 +6106,10 @@ module.exports = {
                 if (!memberVoice || !clientVoice || memberVoice.id !== clientVoice.id) return;
 
                 const currentTrack = player.currentTrack;
+                if (!currentTrack) {
+                    return message.reply({ content: '**لا يوجد مسار صوتي فعّال للتخطي الآن.**' }).catch(() => {});
+                }
+                if (!claimMusicControl(player, 'skip')) return;
 
                         if (player.queue.length === 0 && player.data?.autoPlay) {
                             const skippedTrack = currentTrack;
@@ -6621,10 +6726,15 @@ module.exports = {
 
 
 
-                setAutoPlayState(player, !player.data.autoPlay);
-
-
-
+                                setAutoPlayState(player, !player.data.autoPlay);
+                if (player.data.autoPlay && player.currentTrack && player.queue.length === 0) {
+                    scheduleAutoPlayPrefetch(
+                        TrueMusic.poru,
+                        player,
+                        player.currentTrack,
+                        displaySettings(tokenObj).platform || 'auto',
+                    );
+                }
 
                 const autoPlayImg = player.data.autoPlay ? 'AutoPlayON.png' : 'AutoPlayOFF.png';
                 return message.reply(musicPayload(tokenObj, {
@@ -6761,7 +6871,9 @@ module.exports = {
                         }
                     }
 
-                    await interaction.deferUpdate().catch(() => {});
+                    // Acknowledge Discord immediately, but do not block the
+                    // audio command on Discord's acknowledgement round-trip.
+                    const interactionAck = interaction.deferUpdate().catch(() => {});
                     let responseMessage = '';
 
                     if (interaction.customId === 'loop') {
@@ -6808,6 +6920,8 @@ module.exports = {
                                 const currentTrack = player.currentTrack;
                                 if (!currentTrack) {
                                     responseMessage = '*لا توجد أغنية للتخطي*.';
+                                } else if (!claimMusicControl(player, 'skip')) {
+                                    responseMessage = '**جارٍ تنفيذ التخطي السابق.**';
                                 } else if (player.queue.length === 0 && player.data?.autoPlay) {
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                     // Fire both in background — instant response
@@ -6974,6 +7088,7 @@ module.exports = {
                         }
                     }
 
+                    await interactionAck;
                     await replyEphemeral(responseMessage || '*Done*.');
                 });
 
