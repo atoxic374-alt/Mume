@@ -1,0 +1,115 @@
+server:
+  # Railway injects PORT and health checks the same port.
+  port: ${PORT:8080}
+  address: 0.0.0.0
+  http2:
+    enabled: false
+
+lavalink:
+  server:
+    # Set this in Railway Variables; never commit the real value.
+    password: ${LAVALINK_SERVER_PASSWORD}
+    sources:
+      # The built-in YouTube source is deprecated; youtube-plugin handles it.
+      youtube: false
+      soundcloud: true
+      # Keep only the sources needed by this bot.
+      bandcamp: false
+      twitch: false
+      vimeo: false
+      nico: false
+      # HTTP sources are unnecessary for YouTube/Spotify/SoundCloud and can
+      # expose the node to arbitrary URL fetches.
+      http: false
+      local: false
+    filters:
+      volume: true
+      equalizer: true
+      karaoke: true
+      timescale: true
+      tremolo: true
+      vibrato: true
+      distortion: true
+      rotation: true
+      channelMix: true
+      lowPass: true
+    # Balanced values for Railway: stable playback without excessive memory.
+    bufferDurationMs: 400
+    frameBufferDurationMs: 5000
+    opusEncodingQuality: 10
+    resamplingQuality: LOW
+    trackStuckThresholdMs: 10000
+    useSeekGhosting: true
+    youtubePlaylistLoadLimit: 6
+    playerUpdateInterval: 5
+    youtubeSearchEnabled: true
+    soundcloudSearchEnabled: true
+    gc-warnings: false
+
+# LavaSrc is installed in the Docker image. This block enables Spotify.
+# Spotify is metadata/mirror playback: tracks are resolved to YouTube audio.
+plugins:
+  youtube:
+    enabled: true
+    allowSearch: true
+    allowDirectVideoIds: true
+    allowDirectPlaylistIds: true
+    clients:
+      - MUSIC
+      - ANDROID_VR
+      - WEB
+      - WEBEMBEDDED
+  lavasrc:
+    providers:
+      - 'ytsearch:"%ISRC%"'
+      - 'ytsearch:%QUERY%'
+    sources:
+      spotify: true
+      applemusic: false
+      deezer: false
+      yandexmusic: false
+      flowerytts: false
+      youtube: false
+      vkmusic: false
+      tidal: false
+      qobuz: false
+      ytdlp: false
+      jiosaavn: false
+    lyrics-sources:
+      spotify: false
+      deezer: false
+      youtube: false
+      yandexmusic: false
+      vkmusic: false
+      lrcLib: false
+    spotify:
+      # These two variables are recommended for reliable `spsearch:` queries.
+      # Spotify URL resolution/playlists can use the mirror providers above.
+      clientId: ${SPOTIFY_CLIENT_ID:}
+      clientSecret: ${SPOTIFY_CLIENT_SECRET:}
+      countryCode: ${SPOTIFY_COUNTRY_CODE:US}
+      playlistLoadLimit: 6
+      albumLoadLimit: 6
+      resolveArtistsInSearch: false
+      localFiles: false
+      preferPartnerApi: false
+      preferV1SearchApi: false
+
+metrics:
+  prometheus:
+    # Retain a simple unauthenticated health endpoint for Railway checks.
+    enabled: true
+    endpoint: /metrics
+
+logging:
+  level:
+    root: INFO
+    lavalink: INFO
+  request:
+    # Request payload/query logging is expensive and can expose user URLs.
+    enabled: false
+    includeClientInfo: false
+    includeHeaders: false
+    includeQueryString: false
+    includePayload: false
+    maxPayloadLength: 0
