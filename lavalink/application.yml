@@ -109,6 +109,7 @@ logging:
   level:
     root: INFO
     lavalink: INFO
+    dev.lavalink.youtube.http.YoutubeOauth2Handler: INFO
   request:
     # Request payload/query logging is expensive and can expose user URLs.
     enabled: false
