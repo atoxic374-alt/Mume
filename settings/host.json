@@ -1,1 +1,9 @@
-[]
+[
+  {
+    "name": "railway-lavalink",
+    "host": "lavalink.railway.internal",
+    "port": 8080,
+    "secure": false,
+    "password": "Ahmed"
+  }
+]
