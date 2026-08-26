@@ -1147,7 +1147,13 @@ function ensurePlayerData(player) {
 
 function trackIdentity(track) {
     const info = track?.info || track || {};
-    return track?.track || info.uri || info.identifier || [info.sourceName, info.author, info.title, info.length].filter(Boolean).join(':');
+    // Use a stable source/identifier key instead of Lavalink's encoded track
+    // string, which can change when the same track is retried or re-resolved.
+    const source = String(info.sourceName || '').trim().toLowerCase();
+    const identifier = String(info.identifier || info.uri || '').trim();
+    if (source && identifier) return `${source}:${identifier}`;
+    if (identifier) return identifier;
+    return track?.track || [source, info.author, info.title, info.length].filter(Boolean).join(':');
 }
 
 function warnPlayerOnce(player, key, message, minDelay = 30_000) {
@@ -5055,7 +5061,22 @@ module.exports = {
         }
         await finalizePlayerUi(player);
         await bumpQueueVersion(player, 'track_error');
-        setTimeout(() => recoverPlayerPlayback(player, 'track_error').catch(() => {}), 2500).unref?.();
+        // A decode/source error is not a voice-session failure. Do not replay
+        // the same failed track automatically: that creates a second now-playing
+        // panel and can loop the same track forever. Move to the next queued item,
+        // or stop cleanly when there is no next item.
+        if (player.queue?.length) {
+            try { await player.skip(); } catch (err) {
+                warnPlayerOnce(player, 'track-error-skip-failed', `[TrackError] skip after failure failed: ${err?.message || err}`);
+            }
+        } else {
+            try { player.queue?.clear?.(); } catch {}
+            player.currentTrack = null;
+            player.isPlaying = false;
+            player.isPaused = false;
+            clearStoppedPlaybackCaches(player);
+            markStopped();
+        }
     });
 
     TrueMusic.poru.on('trackEnd', async (player, track, data) => {
