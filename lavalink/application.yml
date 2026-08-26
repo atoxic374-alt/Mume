@@ -59,6 +59,7 @@ plugins:
       - ANDROID_VR
       - ANDROID_MUSIC
       - WEBEMBEDDED
+      - TVHTML5_SIMPLY
       - TV
     oauth:
       enabled: true
