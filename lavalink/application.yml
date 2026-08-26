@@ -59,6 +59,8 @@ plugins:
       - ANDROID_VR
       - ANDROID_MUSIC
       - WEBEMBEDDED
+    oauth:
+      enabled: true
   lavasrc:
     providers:
       - 'ytsearch:"%ISRC%"'
