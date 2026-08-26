@@ -1,7 +1,10 @@
-const fs = require('fs');
-const path = require('path');
-const { owners, prefix, Colors, useEmbeds, logChannelId, Botsname } = require(`${process.cwd()}/settings/config`);
-const { EmbedBuilder, Client, GatewayIntentBits } = require('discord.js');
+const { owners, logChannelId } = require('../../config');
+const { applyProfileToToken, getSubBotProfile } = require('../../utils/subBotProfile');
+const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const store = require('../../utils/store');
+const { check } = require('../../utils/rateLimit');
+const { getEmbedColor } = require('../../utils/embedColor');
+const { buildSubscriptionRemovedDm } = require('../../utils/subscriptionDm');
 
 module.exports = {
   name: 'musicremovesub',
@@ -9,100 +12,141 @@ module.exports = {
   async execute(client, message, args) {
     if (!owners.includes(message.author.id)) return;
     if (message.author.bot) return;
+    if (!check(message.author.id, 'musicremovesub')) return;
 
-    const codeToRemove = args[0];
-    if (!codeToRemove) return message.reply("**الرجاء تحديد ايدي الاشتراك الذي تريد إزالته.**");
+    const mid = message.id;
+    let timeData = store.get('time') || [];
 
-    let removedTokens = [];
-    let tokensToRemove = [];
-    try {
-      const logs = fs.readFileSync('./settings/time.json', 'utf8');
-      const logsArray = JSON.parse(logs);
+    let selectedCode = args[0];
 
-      const matchingSubscriptions = logsArray.filter(entry => entry.code === codeToRemove);
+    const confirmRemoval = async (code, interaction = null) => {
+	      const entry = timeData.find(e => e.code === code);
+	      if (!entry) {
+	        const msg = "**Subscription Not Found**\nلا يوجد اشتراك مرتبط بهذا الايدي.";
+	        return interaction ? interaction.update({ content: msg, embeds: [], components: [] }) : message.reply(msg);
+	      }
+	
+	      const embed = new EmbedBuilder()
+	        .setTitle('Confirm Subscription Removal')
+	        .setDescription('راجع بيانات الاشتراك قبل تأكيد الحذف. عند التأكيد سيتم إرجاع البوتات للستوك وتنظيف إعداداتها.')
+	        .addFields(
+	          { name: 'Subscription ID', value: `\`${entry.code}\``, inline: true },
+	          { name: 'User', value: `<@${entry.user}>`, inline: true },
+	          { name: 'Bot Count', value: `\`${entry.botsCount}\``, inline: true },
+	          { name: 'Server', value: `\`${entry.server}\``, inline: true }
+	        )
+	        .setColor(getEmbedColor(client));
 
-      if (matchingSubscriptions.length === 0) {
-        return message.reply("**لا يوجد اشتراكات مرتبطة بهذا الايدي.**");
-      }
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`confirm_rem_${code}_${mid}`).setLabel('تأكيد الحذف').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(`cancel_rem_${mid}`).setLabel('إلغاء').setStyle(ButtonStyle.Secondary)
+      );
 
-      const userId = matchingSubscriptions[0].user;
+      const msgData = { embeds: [embed], components: [row], content: null };
+      const prompt = interaction ? await interaction.update(msgData) : await message.reply(msgData);
 
-      matchingSubscriptions.forEach(subscription => {
-        logsArray.splice(logsArray.indexOf(subscription), 1);
-      });
+      const collector = (interaction ? interaction.message : prompt).createMessageComponentCollector({ filter: i => i.user.id === message.author.id, time: 60000 });
 
-      fs.writeFileSync('./settings/time.json', JSON.stringify(logsArray, null, 2));
-      const tokens = fs.readFileSync('./settings/tokens.json', 'utf8');
-      let tokensArray = JSON.parse(tokens);
-      if (!Array.isArray(tokensArray)) {
-        tokensArray = [];
-      }
+	      collector.on('collect', async i => {
+	        if (i.customId === `cancel_rem_${mid}`) {
+	          await i.update({ content: '**Cancelled**\nتم إلغاء العملية.', embeds: [], components: [] });
+	          return collector.stop();
+	        }
 
-      tokensToRemove = tokensArray.filter(tokenEntry => matchingSubscriptions.some(subscription => tokenEntry.code === subscription.code));
-      tokensArray = tokensArray.filter(tokenEntry => !tokensToRemove.includes(tokenEntry));
-
-      const bots = fs.readFileSync('./settings/bots.json', 'utf8');
-      let botsArray = JSON.parse(bots);
-      if (!Array.isArray(botsArray)) {
-        botsArray = [];
-      }
-
-      tokensToRemove.forEach(tokenEntry => {
-        botsArray.push({
-          token: tokenEntry.token
-        });
-        removedTokens.push(tokenEntry);
-      });
-
-      fs.writeFileSync('./settings/bots.json', JSON.stringify(botsArray, null, 2));
-      fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokensArray, null, 2));
-
-      // نقدر نستخدم userId هنا في اللوق للمنشن
-      setTimeout(async () => {
-        removedTokens.forEach(async (token) => {
-          try {
-            const randomName = `${Botsname}-${Math.floor(Math.random() * (9999 - 1000 + 1)) + 1000}`;
-
-            const botClient = new Client({
-              intents: [
-                GatewayIntentBits.Guilds,
-                GatewayIntentBits.GuildMembers,
-                GatewayIntentBits.GuildMessages,
-              ],
-            });
-
-            await botClient.login(token.token);
-
-            botClient.guilds.cache.forEach(async (guild) => {
-              await guild.leave();
-            });
-
-            const musicAvatarPath = path.join(process.cwd(), 'settings', 'image', 'music.png');
-            await botClient.user.setAvatar(musicAvatarPath);
-            await botClient.user.setUsername(randomName);
-            await botClient.destroy();
-          } catch (error) {
-            console.error(`حدث خطأ أثناء تشغيل التوكن: ${error}`);
-          }
-        });
-
-        const logChannel = client.channels.cache.get(logChannelId);
-        if (logChannel) {
-          const embed = new EmbedBuilder()
-            .setThumbnail("https://cdn.discordapp.com/attachments/1091536665912299530/1316233635464220803/512-512-max.png?ex=675a4d99&is=6758fc19&hm=352d005827ec0252e09be31a939f3c2f1abb3c8a0d660f20012ac80a2bc62b12&")
-            .setDescription(`\`🟢\` **End Time**\n\n**By : <@${message.author.id}>**\n\`1\` : \`Music x${tokensToRemove.length} (SuID EndCode!)\` : <@${userId}>`)
-            .setFooter({ text: `${message.guild.name} | Timer`, iconURL: message.guild.iconURL({ dynamic: true }) })
-            .setColor(Colors);
-          logChannel.send({ embeds: [embed], content: "```العملية تمت بنجاح، سيتم إلغاء الاشتراك بعد مرور دقيقة.```" });
-        } else {
-          console.error(`لم يتم العثور على قناة اللوق بالايدي: ${logChannelId}`);
+        if (i.customId === `confirm_rem_${code}_${mid}`) {
+          await i.deferUpdate();
+          collector.stop();
+          await executeRemoval(code, message, client);
         }
+      });
+    };
 
-        message.react("👍");
-      }, 0);
-    } catch (error) {
-      console.error('❌>', error);
-      message.reply('**حدث خطأ أثناء محاولة إزالة الاشتراك.**');
+	    if (!selectedCode) {
+	      if (timeData.length === 0) return message.reply("**No Active Subscriptions**\nلا توجد اشتراكات نشطة حالياً.");
+
+      const select = new StringSelectMenuBuilder()
+        .setCustomId(`rem_select_${mid}`)
+	        .setPlaceholder('Select subscription to remove')
+        .addOptions(timeData.slice(0, 25).map(e => ({
+          label: `SuID: ${e.code}`,
+          description: `User: ${e.user} | Bots: ${e.botsCount}`,
+          value: e.code
+        })));
+
+      const row = new ActionRowBuilder().addComponents(select);
+	      const prompt = await message.reply({ content: '**Remove Subscription**\nاختر الاشتراك المراد حذفه:', components: [row] });
+
+      const collector = prompt.createMessageComponentCollector({ filter: i => i.user.id === message.author.id, time: 60000 });
+      collector.on('collect', async i => {
+        if (i.customId === `rem_select_${mid}`) {
+          selectedCode = i.values[0];
+          await confirmRemoval(selectedCode, i);
+          collector.stop();
+        }
+      });
+    } else {
+      await confirmRemoval(selectedCode);
     }
   }
 };
+
+async function executeRemoval(code, message, client) {
+  try {
+	    let timeArray = store.get('time') || [];
+	    const subIdx = timeArray.findIndex(e => e.code === code);
+	    if (subIdx === -1) return message.reply("**Subscription Not Found**\nلم يتم العثور على الاشتراك.");
+    const sub = timeArray[subIdx];
+    const userId = sub.user;
+    timeArray.splice(subIdx, 1);
+    store.set('time', timeArray);
+
+    let tokensArray = store.get('tokens') || [];
+    const tokensToRemove = tokensArray.filter(t => t.code === code);
+    tokensArray = tokensArray.filter(t => t.code !== code);
+    store.set('tokens', tokensArray);
+
+    let botsArray = store.get('bots') || [];
+    tokensToRemove.forEach(t => botsArray.push({ token: t.token }));
+    store.set('bots', botsArray);
+
+	    message.channel.send(`**Subscription Removed**\nتم حذف الاشتراك \`${code}\` بنجاح. سيتم تنظيف البوتات الآن.`);
+
+    // DM Owner
+    client.users.fetch(userId).then(u => {
+      u.send({ embeds: [buildSubscriptionRemovedDm(client, {
+        code,
+        botCount: sub.botsCount || tokensToRemove.length,
+        serverId: sub.server,
+      })] }).catch(() => {});
+    }).catch(() => {});
+
+    // Log
+    const logChannel = client.channels.cache.get(logChannelId);
+    if (logChannel) {
+	      logChannel.send({
+	        embeds: [new EmbedBuilder()
+	          .setTitle('Subscription Removed')
+	          .setDescription('تم حذف الاشتراك وإرجاع بوتاته إلى الستوك.')
+	          .addFields(
+	            { name: 'User', value: `<@${userId}>`, inline: true },
+	            { name: 'Subscription ID', value: `\`${code}\``, inline: true },
+	            { name: 'Bot Count', value: `\`${tokensToRemove.length}\``, inline: true },
+	            { name: 'Removed By', value: `<@${message.author.id}>`, inline: true }
+	          )
+	          .setColor(getEmbedColor(client))
+	          .setTimestamp()]
+      });
+    }
+
+    // Clean bots
+    for (const t of tokensToRemove) {
+      try {
+        const profile = getSubBotProfile();
+        await applyProfileToToken(t.token, { profile, leaveGuilds: true });
+      } catch (e) { console.error(`Error cleaning bot ${t.token.slice(0,10)}...:`, e); }
+    }
+	  } catch (e) {
+	    console.error(e);
+	    message.reply("**Removal Failed**\nحدث خطأ أثناء التنفيذ.");
+	  }
+	}

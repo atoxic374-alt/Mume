@@ -1,111 +1,94 @@
-const fs = require('fs');
-const { owners, Colors } = require(`${process.cwd()}/settings/config`);
-const { ActionRowBuilder, ButtonBuilder, EmbedBuilder } = require('discord.js');
+const { owners } = require('../../config');
+const { ActionRowBuilder, ButtonBuilder, EmbedBuilder, ButtonStyle } = require('discord.js');
+const store = require('../../utils/store');
+const { check } = require('../../utils/rateLimit');
+const { getEmbedColor } = require('../../utils/embedColor');
 
 module.exports = {
   name: 'musicallsub',
   async execute(client, message, args) {
     if (!owners.includes(message.author.id)) return;
+    if (!check(message.author.id, 'musicallsub')) return;
 
     try {
-      const logs = fs.readFileSync('./settings/time.json', 'utf8');
-      const logsArray = JSON.parse(logs);
+	      const logsArray = store.get('time') || [];
+	
+	      if (logsArray.length === 0) {
+	        return message.reply({
+	          embeds: [new EmbedBuilder()
+	            .setTitle('All Subscriptions')
+	            .setDescription('لا توجد اشتراكات مسجلة حالياً.')
+	            .setColor(getEmbedColor(client))]
+	        });
+	      }
 
-      if (logsArray.length === 0) {
-        return message.reply('**لا توجد اشتراكات مسجلة حاليًا.**');
-      }
+      logsArray.sort((a, b) => b.expirationTime - a.expirationTime);
 
-      logsArray.sort((a, b) => (b.expirationTime - Date.now()) - (a.expirationTime - Date.now()));
-
-      const subscriptionsPerPage = 15;
+      const subscriptionsPerPage = 10;
       const totalPages = Math.ceil(logsArray.length / subscriptionsPerPage);
       let currentPage = 1;
 
       const generateEmbed = (page) => {
-        const embed = new EmbedBuilder()
-          .setColor(Colors)
-          .setFooter({
-            text: `${message.client.user.username} | Timer`,
-            iconURL: `${message.client.user.displayAvatarURL({ dynamic: true })}`
-          });
-
         const start = (page - 1) * subscriptionsPerPage;
         const end = start + subscriptionsPerPage;
-        const subscriptionsToShow = logsArray.slice(start, end);
+        const subs = logsArray.slice(start, end);
 
-        let description = ''; 
+	        const embed = new EmbedBuilder()
+	          .setTitle('All Subscriptions')
+	          .setDescription('قائمة الاشتراكات الحالية مرتبة حسب تاريخ الانتهاء.')
+	          .setColor(getEmbedColor(client))
+	          .setFooter({ text: `Page ${page}/${totalPages} | Total: ${logsArray.length}`, iconURL: client.user.displayAvatarURL() });
+	
+	        let description = '';
+	        subs.forEach((sub, i) => {
+	          const remaining = sub.expirationTime - Date.now();
+	          let status = 'Active';
+	          if (remaining <= 0) status = 'Expired';
+	          else if (remaining < 86400000) status = 'Ending Soon';
+	          else if (remaining < 604800000) status = 'This Week';
+	
+	          const timeStr = formatDuration(remaining);
+	          description += `**${start + i + 1}.** \`SuID: ${sub.code}\` | ${status}\n`;
+	          description += `المستخدم: <@${sub.user}> | البوتات: \`${sub.botsCount}\` | المتبقي: \`${timeStr}\`\n\n`;
+	        });
+	
+	        embed.setDescription(description || 'لا يوجد');
+	        return embed;
+	      };
 
-        subscriptionsToShow.forEach((userSubscription, index) => {
-          const expirationTime = userSubscription.expirationTime;
-          const remainingTime = expirationTime - Date.now();
+	      const generateButtons = () => {
+	        return new ActionRowBuilder().addComponents(
+	          new ButtonBuilder().setCustomId('prev').setLabel('Previous').setStyle(ButtonStyle.Secondary).setDisabled(currentPage === 1),
+	          new ButtonBuilder().setCustomId('del').setLabel('Close').setStyle(ButtonStyle.Danger),
+	          new ButtonBuilder().setCustomId('next').setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(currentPage === totalPages)
+	        );
+	      };
 
-          const days = Math.floor(remainingTime / (1000 * 60 * 60 * 24));
-          const hours = Math.floor((remainingTime % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-          const minutes = Math.floor((remainingTime % (1000 * 60 * 60)) / (1000 * 60));
-          const seconds = Math.floor((remainingTime % (1000 * 60)) / 1000);
-
-          const formattedTime = `${days ? `${days}d ` : ''}${hours ? `${hours}h ` : ''}${minutes ? `${minutes}m ` : ''}${seconds ? `${seconds}s` : ''}`;
-
-         
-          description += `\`${start + index + 1}\` : \`Music x${userSubscription.botsCount} (SuID ${userSubscription.code})\` : \`${formattedTime}\` : <@${userSubscription.user}>\n`;
-
-        });
-
-        embed.setDescription(description);
-
-        return embed;
-      };
-
-      const generateButtons = () => {
-        const previousButton = new ButtonBuilder()
-          .setCustomId('previous')
-          .setEmoji("1251766205111468043")
-          .setStyle('Secondary')
-          .setDisabled(currentPage === 1);
-
-        const deleteButton = new ButtonBuilder()
-          .setCustomId('deleteButton')
-          .setEmoji("1240135421434925076")
-          .setStyle('Danger');
-
-        const nextButton = new ButtonBuilder()
-          .setCustomId('next')
-          .setEmoji("1251766110022537256")
-          .setStyle('Secondary')
-          .setDisabled(currentPage === totalPages);
-
-        return new ActionRowBuilder().addComponents(previousButton, deleteButton, nextButton);
-      };
-
-      const messageToSend = await message.reply({ embeds: [generateEmbed(currentPage)], components: [generateButtons()] });
-
-      const filter = i => i.user.id === message.author.id;
-      const collector = messageToSend.createMessageComponentCollector({ filter, time: 60000 });
+      const msg = await message.reply({ embeds: [generateEmbed(currentPage)], components: [generateButtons()] });
+      const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === message.author.id, time: 120000 });
 
       collector.on('collect', async i => {
-        if (i.customId === 'previous') {
-          currentPage = Math.max(1, currentPage - 1);
-        } else if (i.customId === 'next') {
-          currentPage = Math.min(totalPages, currentPage + 1);
-        } else if (i.customId === 'deleteButton') {
-          await messageToSend.delete().catch(err => console.error('Failed to delete message:', err));
-          message.react("✅");
-          collector.stop('deleted');
-          return;
+        if (i.customId === 'del') {
+          await msg.delete().catch(() => {});
+          return collector.stop();
         }
-
+        currentPage = i.customId === 'next' ? Math.min(totalPages, currentPage + 1) : Math.max(1, currentPage - 1);
         await i.update({ embeds: [generateEmbed(currentPage)], components: [generateButtons()] });
       });
 
-      collector.on('end', collected => {
-        if (collected.size === 0) {
-          messageToSend.edit({ embeds: [generateEmbed(currentPage)], components: [] });
-        }
-      });
+      collector.on('end', (_, r) => { if (r !== 'messageDelete') msg.edit({ components: [] }).catch(() => {}); });
 
-    } catch (error) {
-      console.error('❌>', error);
-      message.reply('\`\`\`.حدث خطأ، يرجى التواصل مع الدعم الفن\`\`\`');
-    }
+	    } catch (error) {
+	      console.error(error);
+	      message.reply('**All Subscriptions Failed**\nحدث خطأ أثناء جلب الاشتراكات.');
+	    }
   }
 };
+
+function formatDuration(msValue) {
+  if (msValue <= 0) return 'منتهي';
+  const d = Math.floor(msValue / 86400000);
+  const h = Math.floor((msValue % 86400000) / 3600000);
+  const m = Math.floor((msValue % 3600000) / 60000);
+  return `${d}d ${h}h ${m}m`;
+}

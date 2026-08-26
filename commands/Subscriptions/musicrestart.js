@@ -1,7 +1,8 @@
-const fs = require('fs');
-const { owners, emco, logChannelId, prefix, Services, price, Botsname } = require(`${process.cwd()}/settings/config`);
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js'); 
-const path = require('path');
+const store = require('../../utils/store');
+const { owners, emco, logChannelId, prefix, Services, price } = require('../../config');
+const { EmbedBuilder } = require('discord.js'); 
+const { applyProfileToToken, getSubBotProfile } = require('../../utils/subBotProfile');
+const { getEmbedColor } = require('../../utils/embedColor');
 
 module.exports = {
     name: 'musicrestart',
@@ -10,8 +11,19 @@ module.exports = {
         if (!owners.includes(message.author.id)) return;
 
         try {
-            const botsData = fs.readFileSync('./settings/bots.json', 'utf8');
-            const botsArray = JSON.parse(botsData);
+            const allBots = store.get('bots') || [];
+            const activeSubs = new Set((store.get('tokens') || []).map(t => t.token));
+            const botsArray = allBots.filter(b => !activeSubs.has(b.token));
+            const skipped = allBots.length - botsArray.length;
+	
+	            if (botsArray.length === 0) {
+	                return message.reply({
+	                    embeds: [new EmbedBuilder()
+	                        .setTitle('Restart Stock Bots')
+	                        .setDescription(`لا توجد بوتات حرة في الستوك حالياً.${skipped > 0 ? `\n\nتم تجاهل \`${skipped}\` بوت لأنها ضمن اشتراكات نشطة.` : ''}`)
+	                        .setColor(getEmbedColor(client))]
+	                });
+	            }
 
             let totalBots = botsArray.length;
             let timePerBot = 5000; 
@@ -19,54 +31,38 @@ module.exports = {
             let estimatedMinutes = Math.floor(estimatedTimeInSeconds / 60);
             let estimatedSeconds = Math.round(estimatedTimeInSeconds % 60);
 
-            message.reply(`سستم خروج **${totalBots}** بوت. سيتغرق حوالي (\`${estimatedMinutes}:${estimatedSeconds < 10 ? '0' : ''}${estimatedSeconds}\`) دقيقة تقريبًا`);
+	            message.reply({
+	                embeds: [new EmbedBuilder()
+	                    .setTitle('Restart Stock Bots')
+	                    .setDescription('جاري إعادة تهيئة البوتات الحرة في الستوك وتطبيق إعدادات الاسم والصورة والبنر.')
+	                    .addFields(
+	                        { name: 'Stock Bots', value: `\`${totalBots}\``, inline: true },
+	                        { name: 'Estimated Time', value: `\`${estimatedMinutes}:${estimatedSeconds < 10 ? '0' : ''}${estimatedSeconds}\` دقيقة`, inline: true },
+	                        { name: 'Skipped Active Bots', value: `\`${skipped}\``, inline: true }
+	                    )
+	                    .setColor(getEmbedColor(client))]
+	            });
 
+            const profile = getSubBotProfile();
             for (const bot of botsArray) {
                 const token = bot.token;
-                const botClient = new Client({ intents: [GatewayIntentBits.Guilds] });
 
                 try {
-                    await botClient.login(token);
-                    console.log(`Logged in as ${botClient.user.tag}`);
-
-                    const randomNumber = generateRandomNumber();
-                    await botClient.user.setUsername(`${Botsname}-${randomNumber}`);
-
-                    const musicAvatar = path.join(process.cwd(), 'settings', 'image', 'music.png');
-                    await botClient.user.setAvatar(musicAvatar);
-
-                    const bannerPath = path.join(process.cwd(), 'settings', 'image', 'banner.png');
-                    const bannerImage = fs.readFileSync(bannerPath);
-                    const base64BannerImage = bannerImage.toString('base64');
-                    const bannerUrl = `data:image/png;base64,${base64BannerImage}`;
-
-                    await botClient.user.setBanner(bannerUrl); 
+                    await applyProfileToToken(token, { profile, leaveGuilds: true });
 
                 } catch (error) {
                     console.error(`Error setting avatar or banner for bot with token ${token}:`, error);
                     continue;
                 }
-
-                botClient.once('ready', async () => {
-                    for (const guild of botClient.guilds.cache.values()) {
-                        try {
-                            await guild.leave();
-                            console.log(`Left guild: ${guild.name}`);
-                        } catch (error) {
-                            console.error(`Error leaving guild ${guild.name}:`, error);
-                        }
-                    }
-
-                    await botClient.destroy();
-                });
             }
-        } catch (error) {
-            console.error('Error reading bots data:', error);
-            message.reply('حدث خطأ أثناء معالجة الأمر.');
-        }
+	        } catch (error) {
+	            console.error('Error reading bots data:', error);
+	            message.reply({
+	                embeds: [new EmbedBuilder()
+	                    .setTitle('Restart Failed')
+	                    .setDescription('حدث خطأ أثناء معالجة الأمر.')
+	                    .setColor(getEmbedColor(client))]
+	            });
+	        }
     }
 };
-
-function generateRandomNumber() {
-    return Math.floor(1000 + Math.random() * 9000); 
-}

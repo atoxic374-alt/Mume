@@ -1,11 +1,13 @@
-const fs = require('fs');
-const path = require('path');
-const axios = require('axios');
+const store = require('../../utils/store');
 
-const SWAY_AVATAR_URL = 'https://j.top4top.io/p_3715crnb61.png';
-const SWAY_BANNER_URL = 'https://c.top4top.io/p_3715wqk8w2.png';
-const { Client, GatewayIntentBits } = require('discord.js');
-const { owners, prefix, Botsname } = require(`${process.cwd()}/settings/config`);
+const { owners } = require('../../config');
+const { EmbedBuilder } = require('discord.js');
+const {
+  applyProfileToToken,
+  getSubBotProfile,
+  resolveProfileAssets,
+} = require('../../utils/subBotProfile');
+const { getEmbedColor } = require('../../utils/embedColor');
 
 module.exports = {
   name: 'musicaddtokens',
@@ -13,110 +15,92 @@ module.exports = {
   async execute(client, message) {
     if (!owners.includes(message.author.id)) return;
 
-    const botIntents = [
-      GatewayIntentBits.Guilds,
-      GatewayIntentBits.GuildMessages,
-    ];
-
-    const clientCheck = new Client({ intents: botIntents });
-
-    if (message.author.bot) return;
-
-    const args = message.content.split(' ');
-    const command = args.shift().toLowerCase();
-    const tokenValues = args;
-
-    if (tokenValues.length === 0) return message.reply('**يرجى إرفاق التوكن بعد الامر.**');
-
-    const validTokens = [];
-
-    for (const tokenValue of tokenValues) {
-      try {
-        await clientCheck.login(tokenValue);
-        validTokens.push(tokenValue);
-      } catch (error) {
-        if (error.message === 'TOKEN_INVALID') {
-          console.error(`❌ Not work! > ${tokenValue}`);
-          message.reply(`\`❌ Not work! > ${tokenValue}\``);
-        } else {
-          console.error(`❌> ${tokenValue}`, error.message);
-          message.reply(`\`**❌ Not work!** ${tokenValue}\``);
-        }
-      }
+	    if (message.author.bot) return;
+	
+	    const args = message.content.split(' ');
+	    args.shift();
+	    const tokenValues = args;
+	
+	    if (tokenValues.length === 0) {
+	      return message.reply({
+	        embeds: [new EmbedBuilder()
+	          .setTitle('Add Bot Tokens')
+	          .setDescription('يرجى كتابة التوكنات بعد الأمر، ويمكن وضع أكثر من توكن مفصول بمسافة.')
+	          .setColor(getEmbedColor(client))]
+	      });
+	    }
+	
+	    const validTokens = [];
+	    const duplicateTokens = [];
+	    const invalidTokens = [];
+	    const known = new Set([
+      ...((store.get('bots') || []).map(b => b.token)),
+      ...((store.get('tokens') || []).map(t => t.token)),
+    ].filter(Boolean));
+    const profile = getSubBotProfile();
+    let assets = null;
+    try {
+      assets = await resolveProfileAssets(profile);
+    } catch {
+      assets = { avatarData: null, bannerData: null };
     }
 
+	    for (const tokenValue of tokenValues) {
+	      const maskedToken = `...${String(tokenValue).slice(-6)}`;
+	      if (known.has(tokenValue)) {
+	        duplicateTokens.push(maskedToken);
+	        continue;
+	      }
+	      try {
+	        await applyProfileToToken(tokenValue, { profile, assets, leaveGuilds: true });
+	        validTokens.push(tokenValue);
+	        known.add(tokenValue);
+	      } catch (error) {
+	        if (error.message === 'TOKEN_INVALID') {
+	          console.error(`Invalid token > ${maskedToken}`);
+	          invalidTokens.push(maskedToken);
+	        } else {
+	          console.error(`Token check failed > ${maskedToken}`, error.message);
+	          invalidTokens.push(maskedToken);
+	        }
+	      }
+	    }
+
     if (validTokens.length > 0) {
-      let bots = [];
-      try {
-        const data = fs.readFileSync('./settings/bots.json', 'utf8');
-        bots = JSON.parse(data);
-        if (!Array.isArray(bots)) {
-          bots = [];
-        }
-      } catch (error) {
-        console.error('❌>', error);
-      }
+      let bots = [...(store.get('bots') || [])];
 
       for (const tokenValue of validTokens) {
         const tokenExists = bots.some(bot => bot.token === tokenValue);
         if (!tokenExists) {
           bots.push({ token: tokenValue });
         }
-      }
-      fs.writeFileSync('./settings/bots.json', JSON.stringify(bots, null, 2));
+	      }
+	      store.set('bots', bots);
+	    }
 
-      function generateRandomNumber() {
-        return Math.floor(1000 + Math.random() * 9000); 
-      }
+	    const fields = [
+	      { name: 'Checked Tokens', value: `\`${tokenValues.length}\``, inline: true },
+	      { name: 'Added', value: `\`${validTokens.length}\``, inline: true },
+	      { name: 'Duplicates', value: `\`${duplicateTokens.length}\``, inline: true },
+	      { name: 'Failed', value: `\`${invalidTokens.length}\``, inline: true },
+	    ];
+	    if (duplicateTokens.length) {
+	      fields.push({ name: 'Duplicate Tokens', value: duplicateTokens.slice(0, 10).map(t => `\`${t}\``).join('\n'), inline: true });
+	    }
+	    if (invalidTokens.length) {
+	      fields.push({ name: 'Failed Tokens', value: invalidTokens.slice(0, 10).map(t => `\`${t}\``).join('\n'), inline: true });
+	    }
+	    if (duplicateTokens.length > 10 || invalidTokens.length > 10) {
+	      fields.push({ name: 'Hidden Results', value: `تم إخفاء النتائج الإضافية للحفاظ على ترتيب الرسالة.`, inline: false });
+	    }
 
-      const expectedTimeSeconds = validTokens.length * 5; 
-      const minutes = Math.floor(expectedTimeSeconds / 60);
-      const seconds = expectedTimeSeconds % 60;
-      const formattedTime = `(\`${minutes}:${seconds.toString().padStart(2, '0')}\`)`;
-
-      message.channel.send(`تم إضافة **${validTokens.length}** بوت. سيستغرق تغير الإسم والصورة ${formattedTime}  دقيقة تقريبًا`);
-      await message.delete();
-      
-      setTimeout(async () => {
-        for (const tokenValue of validTokens) {
-          try {
-            const botClient = new Client({ intents: botIntents });
-            await botClient.login(tokenValue);
-
-            if (botClient.guilds.cache.size > 0) {
-              botClient.guilds.cache.forEach(async guild => {
-                try {
-                  await guild.leave();
-                } catch (leaveError) {
-                  console.error(`❌ Error leaving guild ${guild.name}:`, leaveError.message);
-                }
-              });
-            }
-
-            const randomNumber = generateRandomNumber();
-            await botClient.user.setUsername(`${Botsname}-${randomNumber}`);
-            
-            // تغيير صورة البوت
-            await botClient.user.setAvatar(SWAY_AVATAR_URL);
-
-// تغيير بنر البوت
-            const bannerResp = await axios.get(SWAY_BANNER_URL, { responseType: 'arraybuffer' });
-            const base64_banner_image = Buffer.from(bannerResp.data).toString('base64');
-            
-await axios.patch(`https://discord.com/api/v9/users/@me`, {
-              banner: `data:image/png;base64,${base64_banner_image}`
-            }, {
-              headers: {
-                'Authorization': `Bot ${tokenValue}`
-              }
-            });
-
-            await botClient.destroy();
-          } catch (avatarError) {
-            console.error(`❌>`, avatarError.message);
-          }
-        }
-      }, 5000);
-    }
-  }
-};
+	    await message.channel.send({
+	      embeds: [new EmbedBuilder()
+	        .setTitle('Bot Tokens Processed')
+	        .setDescription('تم فحص التوكنات وإضافة الصالح منها للستوك، مع تطبيق الاسم والصورة والبنر على البوت والـ App.')
+	        .addFields(fields)
+	        .setColor(getEmbedColor(client))]
+	    });
+	    await message.delete().catch(() => {});
+	  }
+	};

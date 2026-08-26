@@ -1,4 +1,5 @@
 node_modules/
+.cache/
 npm-debug.log*
 settings/tokens.json
 settings/bots.json

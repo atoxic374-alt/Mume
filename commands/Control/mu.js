@@ -1,10 +1,38 @@
 const fs = require('fs');
-const { Client, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, EmbedBuilder, ComponentType } = require('discord.js');
-const { owners, prefix, Colors } = require(`${process.cwd()}/settings/config`);
+const store = require('../../utils/store');
+const { Client, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, ComponentType, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
+const { owners, prefix } = require('../../config');
+const { getEmbedColor } = require('../../utils/embedColor');
 const axios = require("axios");
-const db = require('pro.db');
+const db = require('../../utils/db');
 const Discord = require('discord.js');
 const path = require('path');
+const {
+    buildOwnershipTransferredDm,
+    buildServerUpdatedDm,
+} = require('../../utils/subscriptionDm');
+
+function formatDuration(msValue) {
+    const value = Math.max(0, Number(msValue || 0));
+    const d = Math.floor(value / 86400000);
+    const h = Math.floor((value % 86400000) / 3600000);
+    const m = Math.floor((value % 3600000) / 60000);
+    const s = Math.floor((value % 60000) / 1000);
+    return [d && `${d}d`, h && `${h}h`, m && `${m}m`, !d && !h && s && `${s}s`].filter(Boolean).join(' ') || '0m';
+}
+
+function parseUserId(raw) {
+    const value = String(raw || '').trim();
+    const mention = value.match(/^<@!?(\d{15,20})>$/);
+    if (mention) return mention[1];
+    return /^\d{15,20}$/.test(value) ? value : null;
+}
+
+function chunkArray(items, size) {
+    const chunks = [];
+    for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+    return chunks;
+}
 
 module.exports = {
     name: 'music',
@@ -22,13 +50,7 @@ module.exports = {
             targetUser = message.author;
         }
 
-        let subscriptions = [];
-        try {
-            const data = fs.readFileSync('./settings/time.json', 'utf8');
-            subscriptions = JSON.parse(data);
-        } catch (error) {
-            return;
-        }
+        const subscriptions = store.get('time') || [];
         const userId = targetUser.id;
         const userSubscriptions = subscriptions.filter(sub => sub.user === targetUser.id);
 
@@ -36,7 +58,7 @@ module.exports = {
             return;
         }
 
-        const emojiData = JSON.parse(fs.readFileSync('./settings/emojis.json', 'utf8'));
+        const emojiData = store.get('emojis') || { emojis: [] };
         const emojis = emojiData.emojis;
 
         const selectMenu = new Discord.StringSelectMenuBuilder()
@@ -92,18 +114,7 @@ module.exports = {
             const selectedSubscriptions = userSubscriptions.filter(sub => selectedCodes.includes(sub.code));
 
             if (selectedSubscriptions.length > 0) {
-                if (!fs.existsSync('./settings/tokens.json')) {
-                    return;
-                }
-
-                let tokens = [];
-                try {
-                    const tokensData = fs.readFileSync('./settings/tokens.json', 'utf8');
-                    tokens = JSON.parse(tokensData);
-                } catch (error) {
-                    console.error('حدث خطأ أثناء قراءة الملف tokens.json:', error);
-                    return;
-                }
+                const tokens = store.get('tokens') || [];
 
                 const userTokens = tokens.filter(token => selectedCodes.includes(token.code) && token.client === targetUser.id);
 
@@ -111,26 +122,20 @@ module.exports = {
 
                 const selectMenu = new StringSelectMenuBuilder()
                     .setCustomId('vipOptions')
-                    .setPlaceholder('يرجى الاختيار ..')
+                    .setPlaceholder('اختر العملية المطلوبة')
                     .addOptions([
                         {
-                            label: 'اشتراك',
+                            label: 'عرض الاشتراك',
                             emoji: '1265309996292378756',
-                            description: 'لعرض مُدة اشتراكك المتبقية',
+                            description: 'عرض المدة، العدد، السيرفر، ومعلومات الاشتراك',
                             value: 'musictime',
                         }, {
                             label: 'إعادة تشغيل',
                             emoji: '1356528848237367326',
                             description: 'إعادة تشغيل البوتات المملوكة لك جميعًا',
                             value: 'restart',
-                        },
-                        {
-                            label: 'إدارة مظهر البوتات',
-                            emoji: '1256869689015926845',
-                            description: 'تغير مظهر واسماء جميع البوتات التي تمتكلها',
-                            value: 'appearance',
                         }, {
-                            label: 'إدارة السيرفرات',
+                            label: 'نقل السيرفر',
                             emoji: '1256869694967644231',
                             description: 'نقل سيرفر البوتات إلي سيرفر جديد',
                             value: 'updateServerId',
@@ -140,22 +145,11 @@ module.exports = {
                             emoji: '1344186014448615435',
                             description: 'نقل ملكية البوتات إلى مستخدم آخر',
                             value: 'transferOwnership',
-                        },
-                        {
-                            label: 'تثبيت البوتات',
-                            emoji: '1344186548350095381',
-                            description: 'تثبيت جميع البوتات التي تمتلكها اليوم مُحدد',
-                            value: 'installBot',
                         }, {
                             label: 'روابط البوتات',
                             emoji: '1256869691004162068',
-                            description: 'احصل علي روابك جميع برامج البوتات التي تمتكلها',
+                            description: 'إرسال روابط بوتاتك في الخاص بإيمبد منظم',
                             value: 'mylinks',
-                        }, {
-                            label: 'منصة التشغيل',
-                            emoji: '1344144928967757897',
-                            description: 'من أجل أختيار منصة التشغيل الاساسية لبدء التشغيل',
-                            value: 'platform',
                         }
                     ]);
 
@@ -164,8 +158,27 @@ module.exports = {
                     .setLabel('إلغاء')
                     .setStyle('Danger');
 
+                const selectedServer = userTokens[0]?.Server || selectedSubscriptions[0]?.server || 'غير محدد';
+                const controlEmbed = new EmbedBuilder()
+                    .setColor(getEmbedColor(client))
+                    .setTitle('Music Control')
+                    .setThumbnail(targetUser.displayAvatarURL({ dynamic: true, size: 256 }))
+                    .setDescription([
+                        `**User :** *<@${targetUser.id}>*`,
+                        '',
+                        `**Subscriptions :** *\`${selectedCodes.length}\` اشتراك محدد*`,
+                        '',
+                        `**Bot Count :** *\`${totalBots}\` بوت*`,
+                        '',
+                        `**Server :** *\`${selectedServer}\`*`,
+                        '',
+                        '**Options :** *اختر العملية المطلوبة من القائمة بالأسفل.*',
+                    ].join('\n'))
+                    .setFooter({ text: `${client.user.username} | MU`, iconURL: client.user.displayAvatarURL({ dynamic: true }) });
+
                 const replyMessage = await interaction.update({
-                    content: `**عـدد بـُوتـاتـك :** \`${totalBots}\``,
+                    content: '',
+                    embeds: [controlEmbed],
                     components: [
                         new ActionRowBuilder().addComponents(selectMenu),
                         new ActionRowBuilder().addComponents(cancelButton)
@@ -174,6 +187,311 @@ module.exports = {
 
                 const filter = (i) => i.user.id === message.author.id;
                 const collector = replyMessage.createMessageComponentCollector({ filter, time: 60000 });
+
+                function disabledRowsFrom(rows = []) {
+                    return rows.map(row => new ActionRowBuilder().addComponents(
+                        row.components.map(component => {
+                            if (component.type === ComponentType.Button) return ButtonBuilder.from(component).setDisabled(true);
+                            if (component.type === ComponentType.StringSelect) return StringSelectMenuBuilder.from(component).setDisabled(true);
+                            return component;
+                        })
+                    ));
+                }
+
+                function clientIdFromToken(token) {
+                    try {
+                        return Buffer.from(String(token || '').split('.')[0], 'base64').toString('utf8');
+                    } catch {
+                        return null;
+                    }
+                }
+
+                function inviteUrlFromToken(token) {
+                    const clientId = clientIdFromToken(token);
+                    return clientId ? `https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=0&scope=bot` : null;
+                }
+
+                function botRuntimeInfo(tokenData) {
+                    let bot = null;
+                    try { bot = require('../../music').runningBots?.get(tokenData.token); } catch {}
+                    const inServer = !!(bot && tokenData.Server && bot.guilds.cache.has(tokenData.Server));
+                    return {
+                        bot,
+                        name: bot?.user?.username || tokenData.invalidBotName || 'Music Bot',
+                        inServer,
+                        status: bot ? (inServer ? 'داخل السيرفر' : 'خارج السيرفر') : 'غير متصل',
+                    };
+                }
+
+                async function sendLinksAsEmbeds(interaction, mode = 'all') {
+                    const key = mode === 'outside' ? `Off-serverlinks-${message.author.id}` : `linktime_${message.author.id}`;
+                    const lastClaimTime = await db.get(key) || 0;
+                    const currentTime = Date.now();
+                    const timeDifference = currentTime - lastClaimTime;
+
+                    if (timeDifference < 240000) {
+                        const remainingTime = 240000 - timeDifference;
+                        const minutes = Math.floor(remainingTime / 60000);
+                        const seconds = Math.ceil((remainingTime % 60000) / 1000);
+                        const formattedTime = `${minutes < 10 ? '0' : ''}${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
+                        return interaction.reply({ content: `**Cooldown :** *انتظر \`${formattedTime}\` قبل استخدام هذا الخيار مرة أخرى.*`, flags: MessageFlags.Ephemeral }).catch(() => {});
+                    }
+
+                    await interaction.deferUpdate().catch(() => {});
+                    const entries = userTokens
+                        .map((token, index) => {
+                            const runtime = botRuntimeInfo(token);
+                            const url = inviteUrlFromToken(token.token);
+                            return { token, index, runtime, url };
+                        })
+                        .filter(entry => entry.url && (mode === 'all' || !entry.runtime.inServer));
+
+                    if (!entries.length) {
+                        await interaction.followUp({
+                            content: mode === 'outside'
+                                ? '**Bot Links :** *كل البوتات موجودة داخل السيرفر بالفعل.*'
+                                : '**Bot Links :** *لا توجد روابط جاهزة للإرسال.*',
+                            flags: MessageFlags.Ephemeral,
+                        }).catch(() => {});
+                        return interaction.message.edit({ components: disabledRowsFrom(interaction.message.components) }).catch(() => {});
+                    }
+
+                    for (const [chunkIndex, chunk] of chunkArray(entries, 10).entries()) {
+                        const embed = new EmbedBuilder()
+                            .setColor(getEmbedColor(client))
+                            .setTitle(mode === 'outside' ? 'Outside Server Bot Links' : 'Bot Links')
+                            .setDescription(chunk.map(entry => [
+                                `**${entry.index + 1}. ${entry.runtime.name} :**`,
+                                `*${entry.url}*`,
+                                `**Status :** *${entry.runtime.status}*`,
+                            ].join('\n')).join('\n\n'))
+                            .setFooter({ text: `Page ${chunkIndex + 1} | ${selectedCodes.join(', ')}` });
+                        await interaction.user.send({ embeds: [embed] }).catch(() => {});
+                    }
+
+                    db.set(key, currentTime);
+                    await interaction.followUp({
+                        embeds: [new EmbedBuilder()
+                            .setColor(getEmbedColor(client))
+                            .setTitle('Links Sent')
+                            .setDescription([
+                                `**User :** *<@${interaction.user.id}>*`,
+                                '',
+                                `**Mode :** *${mode === 'outside' ? 'Outside Server' : 'All Links'}*`,
+                                '',
+                                `**Sent :** *\`${entries.length}\` رابط*`,
+                                '',
+                                `**Subscriptions :** *${selectedCodes.map(code => `\`${code}\``).join(', ')}*`,
+                            ].join('\n'))],
+                    }).catch(() => {});
+                    return interaction.message.edit({ components: disabledRowsFrom(interaction.message.components) }).catch(() => {});
+                }
+
+                async function showLinksMenu(interaction) {
+                    const linksMenu = new StringSelectMenuBuilder()
+                        .setCustomId('muLinksOptions')
+                        .setPlaceholder('اختر نوع الروابط')
+                        .addOptions([
+                            {
+                                label: 'كل الروابط',
+                                description: 'إرسال روابط كل بوتات الاشتراك في الخاص',
+                                value: 'all',
+                            },
+                            {
+                                label: 'خارج السيرفر فقط',
+                                description: 'إرسال روابط البوتات غير الموجودة في السيرفر',
+                                value: 'outside',
+                            },
+                        ]);
+
+                    const cancel = new ButtonBuilder().setCustomId('cancel').setLabel('إلغاء').setStyle(ButtonStyle.Danger);
+                    const embed = new EmbedBuilder()
+                        .setColor(getEmbedColor(client))
+                        .setTitle('Bot Links')
+                        .setDescription([
+                            `**Bot Count :** *\`${userTokens.length}\` بوت*`,
+                            '',
+                            '**All Links :** *يرسل كل روابط البوتات في الخاص بإيمبدات منظمة.*',
+                            '',
+                            '**Outside Server :** *يرسل فقط روابط البوتات غير الموجودة داخل السيرفر المحدد.*',
+                        ].join('\n'));
+
+                    await interaction.update({
+                        content: '',
+                        embeds: [embed],
+                        components: [
+                            new ActionRowBuilder().addComponents(linksMenu),
+                            new ActionRowBuilder().addComponents(cancel),
+                        ],
+                    });
+
+                    const linkCollector = interaction.message.createMessageComponentCollector({ filter: i => i.user.id === message.author.id, time: 60000 });
+                    linkCollector.on('collect', async i => {
+                        if (i.isButton() && i.customId === 'cancel') {
+                            await i.deferUpdate().catch(() => {});
+                            await i.message.delete().catch(() => {});
+                            linkCollector.stop('cancel');
+                            return;
+                        }
+                        if (!i.isStringSelectMenu() || i.customId !== 'muLinksOptions') return;
+                        linkCollector.stop('selected');
+                        return sendLinksAsEmbeds(i, i.values[0]);
+                    });
+                }
+
+                async function showSubscriptionInfo(interaction) {
+                    const logsArray = store.get('time') || [];
+                    const entries = logsArray.filter(entry => selectedCodes.includes(entry.code) && entry.user === targetUser.id);
+                    const selectedTokenCount = userTokens.length;
+                    const lines = entries.map((entry, index) => {
+                        const remainingTime = entry.expirationTime - Date.now();
+                        const serverId = entry.server || userTokens.find(token => token.code === entry.code)?.Server || 'غير محدد';
+                        return [
+                            `**${index + 1}. Subscription :** *\`${entry.code}\`*`,
+                            `**Bots :** *\`${entry.botsCount}\` بوت*`,
+                            `**Server :** *\`${serverId}\`*`,
+                            `**Remaining :** *\`${formatDuration(remainingTime)}\`*`,
+                            `**Expires :** *<t:${Math.floor(entry.expirationTime / 1000)}:R>*`,
+                        ].join('\n');
+                    });
+
+                    const embed = new EmbedBuilder()
+                        .setColor(getEmbedColor(client))
+                        .setTitle('Subscription Overview')
+                        .setThumbnail(targetUser.displayAvatarURL({ dynamic: true, size: 256 }))
+                        .setDescription([
+                            `**User :** *<@${targetUser.id}>*`,
+                            '',
+                            `**Selected Subscriptions :** *\`${entries.length}\`*`,
+                            '',
+                            `**Active Bots :** *\`${selectedTokenCount}\` بوت*`,
+                            '',
+                            lines.join('\n\n') || '*لا توجد بيانات اشتراك متاحة.*',
+                        ].join('\n'))
+                        .setFooter({ text: `${client.user.username} | Subscription`, iconURL: client.user.displayAvatarURL({ dynamic: true }) });
+
+                    return interaction.update({ content: '', embeds: [embed], components: [] }).catch(() => {});
+                }
+
+                async function transferOwnershipWithModal(interaction) {
+                    const modal = new ModalBuilder()
+                        .setCustomId(`mu_transfer_owner_${message.id}`)
+                        .setTitle('Transfer Ownership');
+                    modal.addComponents(new ActionRowBuilder().addComponents(
+                        new TextInputBuilder()
+                            .setCustomId('newOwner')
+                            .setLabel('New Owner ID')
+                            .setPlaceholder('User ID or mention')
+                            .setStyle(TextInputStyle.Short)
+                            .setRequired(true),
+                    ));
+                    await interaction.showModal(modal);
+                    const submit = await interaction.awaitModalSubmit({
+                        filter: i => i.customId === `mu_transfer_owner_${message.id}` && i.user.id === interaction.user.id,
+                        time: 60000,
+                    }).catch(() => null);
+                    if (!submit) return;
+
+                    const newUserId = parseUserId(submit.fields.getTextInputValue('newOwner'));
+                    if (!newUserId) return submit.reply({ content: '**Transfer Ownership :** *ارسل منشن أو ايدي مستخدم صحيح.*', flags: MessageFlags.Ephemeral });
+                    const newOwner = await client.users.fetch(newUserId).catch(() => null);
+                    if (!newOwner) return submit.reply({ content: '**Transfer Ownership :** *لم أستطع العثور على المستخدم الجديد.*', flags: MessageFlags.Ephemeral });
+
+                    const timeArray = store.get('time') || [];
+                    let movedBots = 0;
+                    timeArray.forEach(sub => {
+                        if (selectedCodes.includes(sub.code) && sub.user === targetUser.id) {
+                            sub.user = newUserId;
+                            movedBots += Number(sub.botsCount || 0);
+                        }
+                    });
+                    store.set('time', timeArray);
+
+                    const allTokens = store.get('tokens') || [];
+                    allTokens.forEach(token => {
+                        if (selectedCodes.includes(token.code) && token.client === targetUser.id) {
+                            token.client = newUserId;
+                        }
+                    });
+                    store.set('tokens', allTokens);
+
+                    const successEmbed = buildOwnershipTransferredDm(client, {
+                        oldOwnerId: targetUser.id,
+                        newOwnerId: newUserId,
+                        codes: selectedCodes,
+                        botCount: movedBots,
+                    });
+
+                    await submit.reply({ embeds: [successEmbed], flags: MessageFlags.Ephemeral }).catch(() => {});
+                    await newOwner.send({ embeds: [successEmbed] }).catch(() => {});
+                    await targetUser.send({ embeds: [successEmbed] }).catch(() => {});
+                }
+
+                async function moveServerWithModal(interaction) {
+                    const modal = new ModalBuilder()
+                        .setCustomId(`mu_move_server_${message.id}`)
+                        .setTitle('Move Server');
+                    modal.addComponents(new ActionRowBuilder().addComponents(
+                        new TextInputBuilder()
+                            .setCustomId('serverId')
+                            .setLabel('New Server ID')
+                            .setPlaceholder('Example: 123456789012345678')
+                            .setStyle(TextInputStyle.Short)
+                            .setRequired(true),
+                    ));
+                    await interaction.showModal(modal);
+                    const submit = await interaction.awaitModalSubmit({
+                        filter: i => i.customId === `mu_move_server_${message.id}` && i.user.id === interaction.user.id,
+                        time: 60000,
+                    }).catch(() => null);
+                    if (!submit) return;
+
+                    const newServerId = submit.fields.getTextInputValue('serverId').trim();
+                    if (!/^\d{15,20}$/.test(newServerId)) return submit.reply({ content: '**Move Server :** *اكتب ايدي سيرفر صحيح.*', flags: MessageFlags.Ephemeral });
+
+                    const timeArray = store.get('time') || [];
+                    timeArray.forEach(sub => {
+                        if (selectedCodes.includes(sub.code) && sub.user === targetUser.id) sub.server = newServerId;
+                    });
+                    store.set('time', timeArray);
+
+                    const allTokens = store.get('tokens') || [];
+                    let movedBots = 0;
+                    allTokens.forEach(token => {
+                        if (selectedCodes.includes(token.code) && token.client === targetUser.id) {
+                            token.Server = newServerId;
+                            token.channel = null;
+                            token.chat = null;
+                            movedBots++;
+                        }
+                    });
+                    store.set('tokens', allTokens);
+
+                    const linkEntries = userTokens
+                        .map((token, index) => ({ index, runtime: botRuntimeInfo(token), url: inviteUrlFromToken(token.token) }))
+                        .filter(entry => entry.url);
+                    for (const [chunkIndex, chunk] of chunkArray(linkEntries, 10).entries()) {
+                        const embed = new EmbedBuilder()
+                            .setColor(getEmbedColor(client))
+                            .setTitle('Move Server Links')
+                            .setDescription(chunk.map(entry => [
+                                `**${entry.index + 1}. ${entry.runtime.name} :**`,
+                                `*${entry.url}*`,
+                            ].join('\n')).join('\n\n'))
+                            .setFooter({ text: `Page ${chunkIndex + 1} | New server ${newServerId}` });
+                        await interaction.user.send({ embeds: [embed] }).catch(() => {});
+                    }
+
+                    const successEmbed = buildServerUpdatedDm(client, {
+                        serverId: newServerId,
+                        codes: selectedCodes,
+                        movedBots,
+                        linksSent: true,
+                    });
+
+                    await submit.reply({ embeds: [successEmbed], flags: MessageFlags.Ephemeral }).catch(() => {});
+                    await targetUser.send({ embeds: [successEmbed] }).catch(() => {});
+                }
 
                 collector.on('collect', async (interaction) => {
                     // زر الإلغاء
@@ -189,6 +507,11 @@ module.exports = {
 
                     collector.stop('selected');
                     const selectedOption = interaction.values[0];
+
+                    if (selectedOption === 'musictime') return showSubscriptionInfo(interaction);
+                    if (selectedOption === 'mylinks') return showLinksMenu(interaction);
+                    if (selectedOption === 'updateServerId') return moveServerWithModal(interaction);
+                    if (selectedOption === 'transferOwnership') return transferOwnershipWithModal(interaction);
 
                     if (selectedOption === 'mylinks') {
 
@@ -223,20 +546,20 @@ module.exports = {
                             ]
                         });
 
-						const filter = (i) => i.user.id === message.author.id;
-						const collector = replyMessage.createMessageComponentCollector({ filter, time: 60000 });
+                                                const filter = (i) => i.user.id === message.author.id;
+                                                const collector = replyMessage.createMessageComponentCollector({ filter, time: 60000 });
 
-						collector.on('collect', async (interaction) => {
-							// زر الإلغاء
-							if (interaction.isButton() && interaction.customId === 'cancel') {
-								await interaction.deferUpdate().catch(() => {});
-								await interaction.message.delete().catch(() => {});
-								collector.stop('cancel');
-								return;
-							}
+                                                collector.on('collect', async (interaction) => {
+                                                        // زر الإلغاء
+                                                        if (interaction.isButton() && interaction.customId === 'cancel') {
+                                                                await interaction.deferUpdate().catch(() => {});
+                                                                await interaction.message.delete().catch(() => {});
+                                                                collector.stop('cancel');
+                                                                return;
+                                                        }
 
-							if (!interaction.isStringSelectMenu() || interaction.customId !== 'vipOptions') return;
-							const selectedOption = interaction.values[0];
+                                                        if (!interaction.isStringSelectMenu() || interaction.customId !== 'vipOptions') return;
+                                                        const selectedOption = interaction.values[0];
                             if (selectedOption === 'allBotsLinks') {
                                 const lastClaimTime = await db.get(`linktime_${message.author.id}`) || 0;
                                 const currentTime = Date.now();
@@ -281,39 +604,38 @@ module.exports = {
                                     }));
                                 }
 
+                                const disabledComponentsLinks = interaction.message.components.map(row => {
+                                    return new ActionRowBuilder().addComponents(
+                                        row.components.map(component => {
+                                            if (component.type === ComponentType.Button) {
+                                                return ButtonBuilder.from(component).setDisabled(true);
+                                            } else if (component.type === ComponentType.StringSelect) {
+                                                return StringSelectMenuBuilder.from(component).setDisabled(true);
+                                            } else {
+                                                return component;
+                                            }
+                                        })
+                                    );
+                                });
+
                                 Promise.all(botInfoPromises)
                                     .then(botInfos => {
                                         botInfos.forEach((botInfo, index) => {
                                             interaction.user.send(`**🔗 : رابط بوت الميوزك رقم ${index + 1} :**\n${botInfo}`)
-                                                .catch((err) => {
-                                                    console.error("حدث خطأ أثناء إرسال الرابط:", err);
+                                                .catch((sendErr) => {
+                                                    console.error("حدث خطأ أثناء إرسال الرابط:", sendErr);
                                                 });
-                                        });
-
-                                        const disabledComponents = interaction.message.components.map(row => {
-                                            return new ActionRowBuilder().addComponents(
-                                                row.components.map(component => {
-                                                    if (component.type === ComponentType.Button) {
-                                                        return ButtonBuilder.from(component).setDisabled(true);
-                                                    } else if (component.type === ComponentType.StringSelect) {
-                                                        return StringSelectMenuBuilder.from(component).setDisabled(true);
-                                                    } else {
-                                                        return component;
-                                                    }
-                                                })
-                                            );
                                         });
 
                                         db.set(`linktime_${message.author.id}`, currentTime);
 
                                         interaction.followUp({ content: `تم إرسال **${totalBots}** من الروابط إلى الخاص.` });
-                                        interaction.editReply({ components: disabledComponents });
+                                        interaction.editReply({ components: disabledComponentsLinks });
                                     })
                                     .catch(err => {
                                         console.error("حدث خطأ أثناء جمع روابط البوتات:", err);
                                         interaction.followUp({ content: `\`\`\`.حدث خطأ، يرجى التواصل مع الدعم الفني\`\`\`` });
-                                        interaction.editReply({ components: disabledComponents });
-
+                                        interaction.editReply({ components: disabledComponentsLinks });
                                     });
                             } else if (selectedOption === 'Off-serverlinks') {
 
@@ -369,13 +691,27 @@ module.exports = {
                                     }));
                                 }
 
+                                const disabledComponentsOff = interaction.message.components.map(row => {
+                                    return new ActionRowBuilder().addComponents(
+                                        row.components.map(component => {
+                                            if (component.type === ComponentType.Button) {
+                                                return ButtonBuilder.from(component).setDisabled(true);
+                                            } else if (component.type === ComponentType.StringSelect) {
+                                                return StringSelectMenuBuilder.from(component).setDisabled(true);
+                                            } else {
+                                                return component;
+                                            }
+                                        })
+                                    );
+                                });
+
                                 Promise.all(botInfoPromises)
                                     .then(botInfos => {
                                         botInfos.forEach((botInfo, index) => {
                                             if (botInfo) {
                                                 interaction.user.send(`**🔗 : رابط بوت الميوزك رقم ${index + 1} :**\n${botInfo}`)
-                                                    .catch((err) => {
-                                                        console.error("حدث خطأ أثناء إرسال الرابط:", err);
+                                                    .catch((sendErr) => {
+                                                        console.error("حدث خطأ أثناء إرسال الرابط:", sendErr);
                                                     });
                                                 totalSentBots++;
                                             }
@@ -383,35 +719,17 @@ module.exports = {
 
                                         db.set(`Off-serverlinks-${message.author.id}`, currentTime);
 
-                                        const disabledComponents = interaction.message.components.map(row => {
-                                            return new ActionRowBuilder().addComponents(
-                                                row.components.map(component => {
-                                                    if (component.type === ComponentType.Button) {
-                                                        return ButtonBuilder.from(component).setDisabled(true);
-                                                    } else if (component.type === ComponentType.StringSelect) {
-                                                        return StringSelectMenuBuilder.from(component).setDisabled(true);
-                                                    } else {
-                                                        return component;
-                                                    }
-                                                })
-                                            );
-                                        });
-
-
                                         if (totalSentBots > 0) {
                                             interaction.followUp({ content: `تم إرسال **${totalSentBots}** من الروابط إلى الخاص.` });
-                                            interaction.editReply({ components: disabledComponents });
-
                                         } else {
                                             interaction.followUp({ content: `جميع البوتات موجودة بالسيرفر بالفعل.` });
-                                            interaction.editReply({ components: disabledComponents });
                                         }
+                                        interaction.editReply({ components: disabledComponentsOff });
                                     })
                                     .catch(err => {
                                         console.error("حدث خطأ أثناء جمع روابط البوتات:", err);
                                         interaction.followUp({ content: `\`\`\`.حدث خطأ، يرجى التواصل مع الدعم الفني\`\`\`` });
-                                        interaction.editReply({ components: disabledComponents });
-
+                                        interaction.editReply({ components: disabledComponentsOff });
                                     });
                             }
 
@@ -475,20 +793,20 @@ module.exports = {
                             ]
                         });
 
-						const filter = (i) => i.user.id === message.author.id;
-						const collector = replyMessage.createMessageComponentCollector({ filter, time: 60000 });
+                                                const filter = (i) => i.user.id === message.author.id;
+                                                const collector = replyMessage.createMessageComponentCollector({ filter, time: 60000 });
 
-						collector.on('collect', async (interaction) => {
-							// زر الإلغاء
-							if (interaction.isButton() && interaction.customId === 'cancel') {
-								await interaction.deferUpdate().catch(() => {});
-								await interaction.message.delete().catch(() => {});
-								collector.stop('cancel');
-								return;
-							}
+                                                collector.on('collect', async (interaction) => {
+                                                        // زر الإلغاء
+                                                        if (interaction.isButton() && interaction.customId === 'cancel') {
+                                                                await interaction.deferUpdate().catch(() => {});
+                                                                await interaction.message.delete().catch(() => {});
+                                                                collector.stop('cancel');
+                                                                return;
+                                                        }
 
-							if (!interaction.isStringSelectMenu() || interaction.customId !== 'vipOptions') return;
-							const selectedOption = interaction.values[0];
+                                                        if (!interaction.isStringSelectMenu() || interaction.customId !== 'vipOptions') return;
+                                                        const selectedOption = interaction.values[0];
 
                             if (selectedOption === 'editbuttons') {
 
@@ -535,7 +853,7 @@ module.exports = {
                                 });
 
                                 try {
-                                    fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2), 'utf8');
+                                    store.set('tokens', tokens);
                                     const botCount = currentTokenData.length;
                                     db.set(`editbuttons_${message.author.id}`, currentTime);
                                     await interaction.followUp({ content: `تم ${newButtonState === 'on' ? 'تفعيل' : 'إيقاف'} جميع الازرار لبوتات الميوزك بنجاح، البوتات المتأثرة : **${botCount}**` });
@@ -765,7 +1083,7 @@ module.exports = {
                                             const base64_banner_image = await axios.get(imageUrl, { responseType: 'arraybuffer' })
                                                 .then((res) => Buffer.from(res.data, 'binary').toString('base64'));
 
-                                            await axios.patch(`https://discord.com/api/v9/users/@me`, {
+                                            await axios.patch(`https://discord.com/api/v10/users/@me`, {
                                                 banner: `data:image/jpeg;base64,${base64_banner_image}`
                                             }, {
                                                 headers: {
@@ -814,13 +1132,13 @@ module.exports = {
 
                                 const last = await db.get(`statustime_${userId}`) || 0, now = Date.now();
                                 if (now - last < 240000)
-                                    return interaction.followUp({ content: `⌛`, ephemeral: true });
-                                const sentMsg = await interaction.update({ content: `يَرجى أرفاق إسم الحالة الجديدة.`, ephemeral: false, components: [] });
+                                    return interaction.followUp({ content: `⌛`, flags: MessageFlags.Ephemeral });
+                                const sentMsg = await interaction.update({ content: `يَرجى أرفاق إسم الحالة الجديدة.`, components: [] });
                                 const msgCollector = message.channel.createMessageCollector({ filter: m => m.author.id === message.author.id, time: 60000 });
                                 msgCollector.on('collect', async (msg) => {
                                     const status = msg.content.trim();
                                     userTokens.forEach(t => t.status = status);
-                                    fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2));
+                                    store.set('tokens', tokens);
                                     db.set(`statustime_${userId}`, now);
                                     msgCollector.stop();
                                     await sentMsg.edit({ content: `تم تغيير الحالة لـ **${userTokens.length}** بوت.` });
@@ -960,7 +1278,7 @@ module.exports = {
                                 tokenData.channel = voiceId;
                                 transferredBotCount++;
                             }
-                            fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2));
+                            store.set('tokens', tokens);
 
                             db.set(`installBottime_${message.author.id}`, currentTime);
                             await interaction.editReply({ content: `تم تحديث قناة الصوت لِـ **${transferredBotCount}** بوت بنجاح.`, components: [] });
@@ -1038,7 +1356,7 @@ module.exports = {
                             for (const token of userTokens) {
                                 token.Server = newServerId;
                             }
-                            fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2));
+                            store.set('tokens', tokens);
 
                             let botInfoPromises = [];
                             for (let [index, token] of userTokens.entries()) {
@@ -1082,8 +1400,8 @@ module.exports = {
 
                                     botInviteLinks.forEach((botInviteLink, index) => {
                                         message.author.send(`**🔗 : رابط بوت الميوزك رقم ${index + 1}:**\n${botInviteLink}`)
-                                            .catch(() => {
-                                                console.error("حدث خطأ أثناء إرسال رابط البوت:", err);
+                                            .catch((sendErr) => {
+                                                console.error("حدث خطأ أثناء إرسال رابط البوت:", sendErr);
                                             });
                                     });
 
@@ -1115,8 +1433,7 @@ module.exports = {
                         }
 
                         try {
-                            const logs = fs.readFileSync('./settings/time.json', 'utf8');
-                            const logsArray = JSON.parse(logs);
+                            const logsArray = store.get('time') || [];
 
                             const userSubscriptions = logsArray.filter(entry => entry.user === userId);
 
@@ -1125,7 +1442,7 @@ module.exports = {
                             }
 
                             const embed = new EmbedBuilder()
-                                .setColor(Colors)
+                                .setColor(getEmbedColor(client))
                             let description = '';
                             userSubscriptions.forEach((userSubscription, index) => {
                                 const expirationTime = userSubscription.expirationTime;
@@ -1193,8 +1510,7 @@ module.exports = {
 
                         let transferredBotsCount = 0;
                         try {
-                            const data = fs.readFileSync('./settings/time.json', 'utf8');
-                            let subscriptions = JSON.parse(data);
+                            let subscriptions = [...(store.get('time') || [])];
 
                             subscriptions.forEach(sub => {
                                 if (selectedCodes.includes(sub.code)) {
@@ -1203,7 +1519,7 @@ module.exports = {
                                 }
                             });
 
-                            fs.writeFileSync('./settings/time.json', JSON.stringify(subscriptions, null, 2));
+                            store.set('time', subscriptions);
 
                             await interaction.editReply({
                                 content: `تم نقل ملكية جميع البوتات بنجاح، البوتات المتأثرة: **${transferredBotsCount}**`,
@@ -1213,8 +1529,7 @@ module.exports = {
                             await response.first().delete();
 
                             try {
-                                const tokensData = fs.readFileSync('./settings/tokens.json', 'utf8');
-                                let tokens = JSON.parse(tokensData);
+                                let tokens = store.get('tokens') || [];
 
                                 tokens.forEach(token => {
                                     if (selectedCodes.includes(token.code)) {
@@ -1222,7 +1537,7 @@ module.exports = {
                                     }
                                 });
 
-                                fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2));
+                                store.set('tokens', tokens);
                             } catch (error) {
                                 return;
                             }
@@ -1256,7 +1571,7 @@ module.exports = {
 
 
                         const userId = message.author.id;
-                        let tokens = JSON.parse(fs.readFileSync('./settings/tokens.json', 'utf8'));
+                        let tokens = store.get('tokens') || [];
 
                         const userTokens = tokens.filter(token => token.client === userId);
                         const remainingTokens = tokens.filter(token => token.client !== userId);
@@ -1272,13 +1587,13 @@ module.exports = {
                         const formattedDate = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}_${date.getHours().toString().padStart(2, '0')}-${date.getMinutes().toString().padStart(2, '0')}-${date.getSeconds().toString().padStart(2, '0')}`;
                         const backupFile = `./settings/backup/tokensbackup-${formattedDate}.json`;
 
+                        fs.mkdirSync('./settings/backup', { recursive: true });
                         fs.copyFileSync('./settings/tokens.json', backupFile);
 
 
-                        const reply = await interaction.followUp({
-                            content: ` جاري إعادة تشغيل **${userTokens.length}** بوتات، الوقت المُقدر لتشغيلها (\`0:20\`) ثانيا تقريبًا`,
-                            ephemeral: false
-                        });
+	                        const reply = await interaction.followUp({
+	                            content: ` جاري إعادة تشغيل **${userTokens.length}** بوتات، الوقت المُقدر لتشغيلها (\`0:20\`) ثانيا تقريبًا`
+	                        });
 
                         const disabledComponents = interaction.message.components.map(row => {
                             return new ActionRowBuilder().addComponents(
@@ -1296,12 +1611,12 @@ module.exports = {
 
                         await interaction.message.edit({ components: disabledComponents });
 
-                        fs.writeFileSync('./settings/tokens.json', JSON.stringify(remainingTokens, null, 2), 'utf8');
+                        store.set('tokens', remainingTokens);
 
                         setTimeout(async () => {
-                            let updatedTokens = JSON.parse(fs.readFileSync('./settings/tokens.json', 'utf8'));
+                            let updatedTokens = store.get('tokens') || [];
                             updatedTokens.push(...userTokens);
-                            fs.writeFileSync('./settings/tokens.json', JSON.stringify(updatedTokens, null, 2), 'utf8');
+                            store.set('tokens', updatedTokens);
 
 
                             await reply.edit({
@@ -1340,20 +1655,20 @@ module.exports = {
                             ]
                         });
 
-						const filter = (i) => i.user.id === message.author.id;
-						const collector = replyMessage.createMessageComponentCollector({ filter, time: 60000 });
+                                                const filter = (i) => i.user.id === message.author.id;
+                                                const collector = replyMessage.createMessageComponentCollector({ filter, time: 60000 });
 
-						collector.on('collect', async (interaction) => {
-							// زر الإلغاء
-							if (interaction.isButton() && interaction.customId === 'cancel') {
-								await interaction.deferUpdate().catch(() => {});
-								await interaction.message.delete().catch(() => {});
-								collector.stop('cancel');
-								return;
-							}
+                                                collector.on('collect', async (interaction) => {
+                                                        // زر الإلغاء
+                                                        if (interaction.isButton() && interaction.customId === 'cancel') {
+                                                                await interaction.deferUpdate().catch(() => {});
+                                                                await interaction.message.delete().catch(() => {});
+                                                                collector.stop('cancel');
+                                                                return;
+                                                        }
 
-							if (!interaction.isStringSelectMenu() || interaction.customId !== 'vipOptions') return;
-							const selectedOption = interaction.values[0];
+                                                        if (!interaction.isStringSelectMenu() || interaction.customId !== 'vipOptions') return;
+                                                        const selectedOption = interaction.values[0];
                             if (selectedOption === 'YouTube') {
                                 const lastClaimTime = await db.get(`YouTubeeditbuttons_${message.author.id}`) || 0;
                                 const currentTime = Date.now();
@@ -1395,7 +1710,7 @@ module.exports = {
                                 });
 
                                 try {
-                                    fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2), 'utf8');
+                                    store.set('tokens', tokens);
                                     const botCount = currentTokenData.length;
                                     db.set(`YouTubeeditbuttons_${message.author.id}`, currentTime);
                                     await interaction.followUp({ content: `تم تعيين منصة التشغيل الأساسية لجميع البوتات إلى يوتيوب، البوتات المتأثرة : **${botCount}**` });
@@ -1408,7 +1723,7 @@ module.exports = {
 
                             } else if (selectedOption === 'SoundCloud') {
 
-                                const lastClaimTime = await db.get(`YouTubeeditbuttons_${message.author.id}`) || 0;
+                                const lastClaimTime = await db.get(`soundcloudeditbuttons_${message.author.id}`) || 0;
                                 const currentTime = Date.now();
                                 const timeDifference = currentTime - lastClaimTime;
 
@@ -1448,7 +1763,7 @@ module.exports = {
                                 });
 
                                 try {
-                                    fs.writeFileSync('./settings/tokens.json', JSON.stringify(tokens, null, 2), 'utf8');
+                                    store.set('tokens', tokens);
                                     const botCount = currentTokenData.length;
                                     db.set(`soundcloudeditbuttons_${message.author.id}`, currentTime);
                                     await interaction.followUp({ content: `تم تعيين منصة التشغيل الأساسية لجميع البوتات إلى ساندكلاود، البوتات المتأثرة : **${botCount}**` });
