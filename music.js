@@ -1778,7 +1778,7 @@ function waitUntil(predicate, timeoutMs = 500, intervalMs = 25) {
 async function setPlayerVolumeSynced(player, volume) {
     const nextVolume = clampPlayerVolume(volume);
     player.volume = nextVolume;
-    updateLavalinkPlayer(player, { volume: nextVolume }, 'volume update').catch(() => {});
+    await updateLavalinkPlayer(player, { volume: nextVolume }, 'volume update');
     return nextVolume;
 }
 
@@ -1821,10 +1821,10 @@ async function skipPlayerSynced(poru, player, currentTrack) {
     player.isPaused = false;
     player.position = 0;
     player.isPlaying = false;
-    // Fire skip to Lavalink without awaiting — local state is already updated so
-    // the bot feels instant. Lavalink will emit trackEnd which triggers the next
-    // track regardless of how long the network roundtrip takes.
-    updateLavalinkPlayer(player, { track: { encoded: null } }, 'skip update').catch(() => {});
+    // Wait for Lavalink to accept the command before reporting success. The
+    // local state is still updated first so the UI remains responsive, but a
+    // reaction must never be shown for an unconfirmed audio operation.
+    await updateLavalinkPlayer(player, { track: { encoded: null } }, 'skip update');
     return true;
 }
 
@@ -5545,6 +5545,17 @@ module.exports = {
 
 
         const reactCustom = (msg, emojiData, fallback) => MUSIC_EMOJIS.react(msg, emojiData, fallback, TrueMusic);
+        const commandProgress = async (msg, text) => {
+            const progress = await msg.reply({ content: `**${text}**` }).catch(() => null);
+            return async (payload) => {
+                if (!progress) return msg.reply(payload).catch(() => null);
+                const content = typeof payload === 'string' ? payload : payload?.content;
+                if (typeof content === 'string' && content.includes('❌')) {
+                    return progress.edit(payload).catch(() => null);
+                }
+                return progress.delete().catch(() => null);
+            };
+        };
 
         TrueMusic.on('messageCreate', async (message) => {
             if (message.author.bot || !message.guild) return;
@@ -5692,6 +5703,7 @@ module.exports = {
                         }
 
                                 clearStopped();
+                                const finishCommand = await commandProgress(message, 'جاري تشغيل الأغنية...');
                                 message.channel.sendTyping().catch(() => {});
 
                                 let player = await getPlayablePlayer(
@@ -5702,7 +5714,7 @@ module.exports = {
                                     'message_play',
                                 );
                                 if (!player) {
-                                    return message.reply(musicPayload(tokenObj, {
+                                    return finishCommand(musicPayload(tokenObj, {
                                         title: 'Voice Not Ready',
                                         description: '*The music node is reconnecting. Try again in a moment.*',
                                         thumbnail: 'attachment://Error.png',
@@ -5722,7 +5734,7 @@ module.exports = {
                             }
 
                             if (!res || !res.tracks || res.tracks.length === 0) {
-                                return message.reply(musicPayload(tokenObj, {
+                                return finishCommand(musicPayload(tokenObj, {
                             title: 'No Results',
                             description: `**No results found for __${song}__**.`,
                             color: '#ff0000',
@@ -5732,7 +5744,7 @@ module.exports = {
                     }
 
                     if (res.loadType === 'playlist') {
-                        message.reply(musicPayload(tokenObj, {
+                        finishCommand(musicPayload(tokenObj, {
                             title: 'Playing Playlist',
                             description: `**[${res.playlistInfo.name}](${res.playlistInfo.url || res.tracks[0].info.uri})**`,
                             fields: [{ name: 'Playlist Tracks', value: `**${res.tracks.length}**`, inline: true }],
@@ -5754,7 +5766,7 @@ module.exports = {
                                     // bump queue + Discord reply start at the same instant
                                     await Promise.all([
                                         bumpQueueVersion(player, 'track_add'),
-                                        message.reply(musicPayload(tokenObj, {
+                                        finishCommand(musicPayload(tokenObj, {
                                             title: 'Add Song',
                                             description: `**[${track.info.title}](${track.info.uri})**`,
                                             fields: [{ name: 'Song Duration', value: `**${shortDuration(track.info.length)}**`, inline: true }],
@@ -5768,15 +5780,11 @@ module.exports = {
                             }
 
                                     await safePlay(player);
+                                    await finishCommand({ content: '✅ تم تشغيل الأغنية بنجاح.' });
 
                 } catch (error) {
                     console.error('Error searching for song:', error.message);
-                    message.reply(musicPayload(tokenObj, {
-                        title: 'Search Error',
-                        description: '*An error occurred while searching for the song*.',
-                                thumbnail: 'attachment://Error.png',
-                                files: ['./assets/image/icons/Error.png'],
-                    }));
+                    await finishCommand({ content: '❌ تعذر تشغيل الأغنية، لم يصل تأكيد من مشغل الصوت.' });
                 }
             }
             else if (cmdsArray.stop.includes(command)) {
@@ -5792,6 +5800,7 @@ module.exports = {
                 }
 
                                 const stoppedTrack = player.currentTrack;
+                                const finishCommand = await commandProgress(message, 'جاري إيقاف الأغنية...');
                                 const finalOptions = finalUiOptionsFor(player, stoppedTrack);
                                 markStopped();
                                 player.setLoop('NONE');
@@ -5799,14 +5808,22 @@ module.exports = {
                                 setAutoPlayState(player, false);
                                 clearStoppedPlaybackCaches(player);
                                 clearProgressInterval(player, 'message stop');
-                                // Fire both without waiting — Lavalink stop + reaction run immediately
-                                stopPlayerAudio(player, { wait: false });
-                                reactCustom(message, MUSIC_EMOJIS.stop, '🔴');
-                                runBackground('stop cleanup', async () => {
+                                try {
+                                    await stopPlayerAudio(player);
+                                    await finishCommand(musicPayload(tokenObj, {
+                                        title: 'Stopped',
+                                        description: '**تم إيقاف الأغنية بنجاح.**',
+                                        thumbnail: 'attachment://Error.png',
+                                        files: ['./assets/image/icons/Error.png'],
+                                    }));
+                                    await reactCustom(message, MUSIC_EMOJIS.stop, '🔴');
                                     await finalizePlayerUi(player, finalOptions);
                                     await bumpQueueVersion(player, 'stop');
                                     await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
-                                });
+                                } catch (error) {
+                                    console.warn('[message stop] audio command was not confirmed:', error?.message || error);
+                                    await finishCommand({ content: '❌ تعذر إيقاف الأغنية، لم يصل تأكيد من مشغل الصوت.' });
+                                }
             }
 
 
@@ -5882,16 +5899,15 @@ module.exports = {
 
                 if (!memberVoice || !clientVoice || memberVoice.id !== clientVoice.id) return;
 
-                if (player.isPaused) {
-                    await Promise.all([
-                        pausePlayerSynced(player, false).catch(err => console.warn('[message resume]', err?.message || err)),
-                        reactCustom(message, MUSIC_EMOJIS.skip, '▶️'),
-                    ]);
-                } else {
-                    await Promise.all([
-                        pausePlayerSynced(player, true).catch(err => console.warn('[message pause]', err?.message || err)),
-                        reactCustom(message, MUSIC_EMOJIS.pause, '⏸️'),
-                    ]);
+                const resuming = player.isPaused;
+                const finishCommand = await commandProgress(message, resuming ? 'جاري استئناف الأغنية...' : 'جاري إيقاف الأغنية مؤقتًا...');
+                try {
+                    await pausePlayerSynced(player, !resuming);
+                    await finishCommand({ content: resuming ? '▶️ تم استئناف الأغنية.' : '⏸️ تم إيقاف الأغنية مؤقتًا.' });
+                    await reactCustom(message, resuming ? MUSIC_EMOJIS.skip : MUSIC_EMOJIS.pause, resuming ? '▶️' : '⏸️');
+                } catch (error) {
+                    console.warn(`[message ${resuming ? 'resume' : 'pause'}] audio command was not confirmed:`, error?.message || error);
+                    await finishCommand({ content: '❌ تعذر تنفيذ الأمر، لم يصل تأكيد من مشغل الصوت.' });
                 }
             }
 
@@ -6029,16 +6045,19 @@ module.exports = {
 
                         if (player.queue.length === 0 && player.data?.autoPlay) {
                             const skippedTrack = currentTrack;
-                            // Lavalink + Discord reply start at the same instant
-                            await Promise.all([
-                                skipPlayerSynced(TrueMusic.poru, player, currentTrack),
-                                message.reply(musicPayload(tokenObj, {
+                            const finishCommand = await commandProgress(message, 'جاري سكب الأغنية...');
+                            try {
+                                await skipPlayerSynced(TrueMusic.poru, player, currentTrack);
+                                await finishCommand(musicPayload(tokenObj, {
                                     title: 'Skipped',
                                     description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
                                     thumbnail: 'attachment://Skip.png',
                                     files: ['./assets/image/icons/Skip.png'],
-                                })),
-                            ]);
+                                }));
+                                await reactCustom(message, MUSIC_EMOJIS.skip, '⏭️');
+                            } catch (error) {
+                                await finishCommand({ content: '❌ تعذر سكب الأغنية، لم يصل تأكيد من مشغل الصوت.' });
+                            }
                             return;
                         }
 
@@ -6049,34 +6068,38 @@ module.exports = {
                             setAutoPlayState(player, false);
                             clearStoppedPlaybackCaches(player);
                             clearProgressInterval(player, 'message skip end');
-                            // Lavalink + Discord reply start at the same instant
-                            await Promise.all([
-                                stopPlayerAudio(player, { wait: false }),
-                                message.reply(musicPayload(tokenObj, {
+                            const finishCommand = await commandProgress(message, 'جاري سكب الأغنية...');
+                            try {
+                                await stopPlayerAudio(player);
+                                await finishCommand(musicPayload(tokenObj, {
                                     title: 'Skipped',
                                     description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
                                     thumbnail: 'attachment://Skip.png',
                                     files: ['./assets/image/icons/Skip.png'],
-                                })),
-                            ]);
-                            runBackground('skip end cleanup', async () => {
+                                }));
+                                await reactCustom(message, MUSIC_EMOJIS.skip, '⏭️');
                                 await finalizePlayerUi(player, finalOptions);
                                 await bumpQueueVersion(player, 'skip_end');
                                 await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
-                            });
+                            } catch (error) {
+                                await finishCommand({ content: '❌ تعذر سكب الأغنية، لم يصل تأكيد من مشغل الصوت.' });
+                            }
                             return;
                         } else {
                             const skippedTrack = currentTrack;
-                            // Lavalink + Discord reply start at the same instant
-                            await Promise.all([
-                                skipPlayerSynced(TrueMusic.poru, player, currentTrack),
-                                message.reply(musicPayload(tokenObj, {
+                            const finishCommand = await commandProgress(message, 'جاري سكب الأغنية...');
+                            try {
+                                await skipPlayerSynced(TrueMusic.poru, player, currentTrack);
+                                await finishCommand(musicPayload(tokenObj, {
                                     title: 'Skipped',
                                     description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
                                     thumbnail: 'attachment://Skip.png',
                                     files: ['./assets/image/icons/Skip.png'],
-                                })),
-                            ]);
+                                }));
+                                await reactCustom(message, MUSIC_EMOJIS.skip, '⏭️');
+                            } catch (error) {
+                                await finishCommand({ content: '❌ تعذر سكب الأغنية، لم يصل تأكيد من مشغل الصوت.' });
+                            }
                             runBackground('skip cleanup', () => bumpQueueVersion(player, 'skip'));
                             return;
                         }
@@ -6123,14 +6146,23 @@ module.exports = {
                     }));
                 }
 
-                setPlayerVolumeSynced(player, volume).catch(err => console.warn('[message volume]', err?.message || err));
-
-                return message.reply(musicPayload(tokenObj, {
-                    title: 'Volume',
-                    description: `**Volume changed from __${currentVolume}%__ to __${volume}%__.**`,
-                    thumbnail: `attachment://${volume < currentVolume ? 'Volumedowwn' : 'Volumeup'}.png`,
-                    files: [`./assets/image/icons/${volume < currentVolume ? 'Volumedowwn' : 'Volumeup'}.png`],
-                }));
+                const isLoweringVolume = volume < currentVolume;
+                const finishCommand = await commandProgress(
+                    message,
+                    isLoweringVolume ? 'جاري خفض الصوت...' : 'جاري رفع الصوت...',
+                );
+                try {
+                    await setPlayerVolumeSynced(player, volume);
+                    return finishCommand(musicPayload(tokenObj, {
+                        title: 'Volume',
+                        description: `**Volume changed from __${currentVolume}%__ to __${volume}%__.**`,
+                        thumbnail: `attachment://${isLoweringVolume ? 'Volumedowwn' : 'Volumeup'}.png`,
+                        files: [`./assets/image/icons/${isLoweringVolume ? 'Volumedowwn' : 'Volumeup'}.png`],
+                    }));
+                } catch (error) {
+                    console.warn('[message volume]', error?.message || error);
+                    return finishCommand({ content: '❌ تعذر تغيير مستوى الصوت، لم يصل تأكيد من مشغل الصوت.' });
+                }
             } else if (cmdsArray.seek.includes(command)) {
                 const player = TrueMusic.poru.players.get(message.guild.id);
 
@@ -6182,10 +6214,15 @@ module.exports = {
                 }
 
                 const seekTime = Math.min(seconds * 1000, player.currentTrack.info.length);
-                await Promise.all([
-                    player.seekTo(seekTime).catch(err => console.warn('[message seek]', err?.message || err)),
-                    reactCustom(message, MUSIC_EMOJIS.skip, '✅'),
-                ]);
+                const finishCommand = await commandProgress(message, 'جاري تغيير موضع الأغنية...');
+                try {
+                    await player.seekTo(seekTime);
+                    await finishCommand({ content: '✅ تم تغيير موضع الأغنية.' });
+                    await reactCustom(message, MUSIC_EMOJIS.skip, '✅');
+                } catch (error) {
+                    console.warn('[message seek]', error?.message || error);
+                    await finishCommand({ content: '❌ تعذر تغيير موضع الأغنية.' });
+                }
             }
 
             else if (cmdsArray.forward.includes(command)) {
@@ -6235,10 +6272,15 @@ module.exports = {
 
                 const currentPosition = Number(player.position || 0);
                 const newPosition = Math.min(currentPosition + seconds * 1000, player.currentTrack.info.length - 1000);
-                await Promise.all([
-                    player.seekTo(newPosition).catch(err => console.warn('[message forward]', err?.message || err)),
-                    reactCustom(message, MUSIC_EMOJIS.skip, '⏩'),
-                ]);
+                const finishCommand = await commandProgress(message, 'جاري تقديم الأغنية...');
+                try {
+                    await player.seekTo(newPosition);
+                    await finishCommand({ content: '✅ تم تقديم الأغنية.' });
+                    await reactCustom(message, MUSIC_EMOJIS.skip, '⏩');
+                } catch (error) {
+                    console.warn('[message forward]', error?.message || error);
+                    await finishCommand({ content: '❌ تعذر تقديم الأغنية.' });
+                }
             }
 
             else if (cmdsArray.remove.includes(command)) {
@@ -6757,6 +6799,12 @@ module.exports = {
                             const filterName = interaction.values[0];
                             // ── C: debounce — only apply filter 300ms after last click ──
                             await interaction.deferUpdate().catch(() => {});
+                            const filterStatus = await interaction.followUp({
+                                content: `**جاري تطبيق الفلتر${FILTER_NAMES[filterName] ? ` (${FILTER_NAMES[filterName]})` : ''}...**`,
+                                flags: MessageFlags.Ephemeral,
+                            }).catch(() => null);
+                            await player.data._filterStatusMessage?.delete().catch(() => {});
+                            player.data._filterStatusMessage = filterStatus;
                             if (player.data._filterDebounceTimer) {
                                 clearTimeout(player.data._filterDebounceTimer);
                                 player.data._filterDebounceTimer = null;
@@ -6771,9 +6819,15 @@ module.exports = {
                                     const label = FILTER_NAMES[applied] || applied;
                                     const response = applied === 'clear' ? '**Filter stopped.**' : `**Done applied : ${label}.**`;
                                     runBackground('filter panel edit', () => editPanel(!!ui.liked));
+                                    await filterStatus?.delete().catch(() => {});
+                                    if (player.data._filterStatusMessage === filterStatus) player.data._filterStatusMessage = null;
                                     replyEphemeral(response);
                                 } catch (err) {
                                     console.error('[Filters] failed:', err?.message || err);
+                                    if (filterStatus) {
+                                        await filterStatus.edit({ content: '❌ تعذر تطبيق الفلتر، لم يصل تأكيد من مشغل الصوت.' }).catch(() => {});
+                                    }
+                                    if (player.data._filterStatusMessage === filterStatus) player.data._filterStatusMessage = null;
                                     replyEphemeral('Failed to apply.');
                                 }
                             }, 300);
