@@ -5883,15 +5883,15 @@ module.exports = {
                 if (!memberVoice || !clientVoice || memberVoice.id !== clientVoice.id) return;
 
                 if (player.isPaused) {
-                    await Promise.all([
-                        pausePlayerSynced(player, false).catch(err => console.warn('[message resume]', err?.message || err)),
-                        reactCustom(message, MUSIC_EMOJIS.skip, '▶️'),
-                    ]);
+                    player.isPaused = false;
+                    player.isPlaying = true;
+                    runBackground('message resume audio', () => pausePlayerSynced(player, false));
+                    runBackground('message resume reaction', () => reactCustom(message, MUSIC_EMOJIS.skip, '▶️'));
                 } else {
-                    await Promise.all([
-                        pausePlayerSynced(player, true).catch(err => console.warn('[message pause]', err?.message || err)),
-                        reactCustom(message, MUSIC_EMOJIS.pause, '⏸️'),
-                    ]);
+                    player.isPaused = true;
+                    player.isPlaying = false;
+                    runBackground('message pause audio', () => pausePlayerSynced(player, true));
+                    runBackground('message pause reaction', () => reactCustom(message, MUSIC_EMOJIS.pause, '⏸️'));
                 }
             }
 
@@ -6029,16 +6029,13 @@ module.exports = {
 
                         if (player.queue.length === 0 && player.data?.autoPlay) {
                             const skippedTrack = currentTrack;
-                            // Lavalink + Discord reply start at the same instant
-                            await Promise.all([
-                                skipPlayerSynced(TrueMusic.poru, player, currentTrack),
-                                message.reply(musicPayload(tokenObj, {
-                                    title: 'Skipped',
-                                    description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
-                                    thumbnail: 'attachment://Skip.png',
-                                    files: ['./assets/image/icons/Skip.png'],
-                                })),
-                            ]);
+                            runBackground('message skip audio', () => skipPlayerSynced(TrueMusic.poru, player, currentTrack));
+                            message.reply(musicPayload(tokenObj, {
+                                title: 'Skipped',
+                                description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
+                                thumbnail: 'attachment://Skip.png',
+                                files: ['./assets/image/icons/Skip.png'],
+                            })).catch(() => {});
                             return;
                         }
 
@@ -6049,16 +6046,13 @@ module.exports = {
                             setAutoPlayState(player, false);
                             clearStoppedPlaybackCaches(player);
                             clearProgressInterval(player, 'message skip end');
-                            // Lavalink + Discord reply start at the same instant
-                            await Promise.all([
-                                stopPlayerAudio(player, { wait: false }),
-                                message.reply(musicPayload(tokenObj, {
-                                    title: 'Skipped',
-                                    description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
-                                    thumbnail: 'attachment://Skip.png',
-                                    files: ['./assets/image/icons/Skip.png'],
-                                })),
-                            ]);
+                            runBackground('message final skip audio', () => stopPlayerAudio(player, { wait: false }));
+                            message.reply(musicPayload(tokenObj, {
+                                title: 'Skipped',
+                                description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
+                                thumbnail: 'attachment://Skip.png',
+                                files: ['./assets/image/icons/Skip.png'],
+                            })).catch(() => {});
                             runBackground('skip end cleanup', async () => {
                                 await finalizePlayerUi(player, finalOptions);
                                 await bumpQueueVersion(player, 'skip_end');
@@ -6067,16 +6061,13 @@ module.exports = {
                             return;
                         } else {
                             const skippedTrack = currentTrack;
-                            // Lavalink + Discord reply start at the same instant
-                            await Promise.all([
-                                skipPlayerSynced(TrueMusic.poru, player, currentTrack),
-                                message.reply(musicPayload(tokenObj, {
-                                    title: 'Skipped',
-                                    description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
-                                    thumbnail: 'attachment://Skip.png',
-                                    files: ['./assets/image/icons/Skip.png'],
-                                })),
-                            ]);
+                            runBackground('message skip audio', () => skipPlayerSynced(TrueMusic.poru, player, currentTrack));
+                            message.reply(musicPayload(tokenObj, {
+                                title: 'Skipped',
+                                description: `**${skippedTrack.info.title}\nBy : ${message.author.displayName}**`,
+                                thumbnail: 'attachment://Skip.png',
+                                files: ['./assets/image/icons/Skip.png'],
+                            })).catch(() => {});
                             runBackground('skip cleanup', () => bumpQueueVersion(player, 'skip'));
                             return;
                         }
@@ -6727,7 +6718,7 @@ module.exports = {
 
                     if (isMusicMenu) {
                         if (interaction.customId === 'np_artist') {
-                            await interaction.deferUpdate().catch(() => {});
+                            interaction.deferUpdate().catch(() => {});
                             if (ui.requesterId && interaction.user.id !== ui.requesterId) {
                                 return replyEphemeral('هذه القائمة لصاحب الطلب فقط.');
                             }
@@ -6748,41 +6739,32 @@ module.exports = {
                                                     player.data.ui = ui;
 
                                     runBackground('artist panel edit', () => editPanel(!!ui.liked));
-
-                                    await safePlay(player);
+                                    runBackground('artist queue playback', () => safePlay(player));
                                     return replyEphemeral(`**تمت إضافة ${queuedTrack.info.title || 'الأغنية'} للطابور.**`);
                                 }
 
                         if (interaction.customId === 'np_filter') {
                             const filterName = interaction.values[0];
-                            // ── C: debounce — only apply filter 300ms after last click ──
-                            await interaction.deferUpdate().catch(() => {});
-                            if (player.data._filterDebounceTimer) {
-                                clearTimeout(player.data._filterDebounceTimer);
-                                player.data._filterDebounceTimer = null;
-                            }
-                            player.data._filterDebounceTimer = setTimeout(async () => {
-                                player.data._filterDebounceTimer = null;
+                            // Acknowledge immediately; filter application continues in the background.
+                            interaction.deferUpdate().catch(() => {});
+                            // Apply the filter asynchronously; do not hold the interaction or audio path.
+                            runBackground('filter apply', async () => {
                                 try {
                                     const applied = await applyFilter(player, filterName);
                                     ui.selectedFilter = applied;
                                     ui.selectedArtistIndex = null;
                                     player.data.ui = ui;
-                                    const label = FILTER_NAMES[applied] || applied;
-                                    const response = applied === 'clear' ? '**Filter stopped.**' : `**Done applied : ${label}.**`;
                                     runBackground('filter panel edit', () => editPanel(!!ui.liked));
-                                    replyEphemeral(response);
                                 } catch (err) {
                                     console.error('[Filters] failed:', err?.message || err);
-                                    replyEphemeral('Failed to apply.');
                                 }
-                            }, 300);
-                            // ─────────────────────────────────────────────────────────
-                            return;
+                            });
+                            return replyEphemeral('**Filter request received.**');
                         }
                     }
 
-                    await interaction.deferUpdate().catch(() => {});
+                    // Acknowledge immediately; never block the audio-control path on Discord REST.
+                    interaction.deferUpdate().catch(() => {});
                     let responseMessage = '';
 
                     if (interaction.customId === 'loop') {
@@ -6790,7 +6772,7 @@ module.exports = {
                         player.setLoop(newLoopMode);
                         responseMessage = `**Loop is ${newLoopMode === 'TRACK' ? 'ON' : 'OFF'}.**`;
                         // Fire panel update in background — no need to await for instant response
-                        editPanel(!!ui.liked).catch(() => {});
+                        runBackground('loop panel edit', () => editPanel(!!ui.liked));
                     }
 
                     if (interaction.customId === 'pause') {
@@ -6799,14 +6781,14 @@ module.exports = {
                             // Update local state immediately, fire both tasks in background
                             player.isPaused = false;
                             player.isPlaying = true;
-                            pausePlayerSynced(player, false).catch(err => console.warn('[button resume]', err?.message || err));
-                            editPanel(!!ui.liked).catch(() => {});
+                            runBackground('button resume audio', () => pausePlayerSynced(player, false));
+                            runBackground('button resume panel edit', () => editPanel(!!ui.liked));
                         } else {
                             responseMessage = '**Done pause the music.**';
                             player.isPaused = true;
                             player.isPlaying = false;
-                            pausePlayerSynced(player, true).catch(err => console.warn('[button pause]', err?.message || err));
-                            editPanel(!!ui.liked).catch(() => {});
+                            runBackground('button pause audio', () => pausePlayerSynced(player, true));
+                            runBackground('button pause panel edit', () => editPanel(!!ui.liked));
                         }
                     }
 
@@ -6814,15 +6796,15 @@ module.exports = {
                         const newVolume = clampPlayerVolume(playerVolumeValue(player) - 10);
                         responseMessage = `**Volume is now __${newVolume}%__.**`;
                         // setPlayerVolumeSynced already updates local state + fires lavalink fire-and-forget
-                        setPlayerVolumeSynced(player, newVolume).catch(err => console.warn('[button volume down]', err?.message || err));
-                        editPanel(!!ui.liked).catch(() => {});
+                        runBackground('button volume down audio', () => setPlayerVolumeSynced(player, newVolume));
+                        runBackground('button volume down panel edit', () => editPanel(!!ui.liked));
                     }
 
                     if (interaction.customId === 'volume_up') {
                         const newVolume = clampPlayerVolume(playerVolumeValue(player) + 10);
                         responseMessage = `**Volume is now __${newVolume}%__.**`;
-                        setPlayerVolumeSynced(player, newVolume).catch(err => console.warn('[button volume up]', err?.message || err));
-                        editPanel(!!ui.liked).catch(() => {});
+                        runBackground('button volume up audio', () => setPlayerVolumeSynced(player, newVolume));
+                        runBackground('button volume up panel edit', () => editPanel(!!ui.liked));
                     }
 
                             if (interaction.customId === 'skip') {
@@ -6869,18 +6851,14 @@ module.exports = {
                             player.queue.unshift(prevTrack);
                             responseMessage = `⏮ رجعنا للأغنية السابقة.`;
                             // Lavalink + panel in parallel — same instant
-                            await Promise.all([
-                                skipPlayerSynced(TrueMusic.poru, player, currentBeforePrev).catch(() => {}),
-                                editPanel(!!ui.liked),
-                            ]);
+                            runBackground('button prev audio', () => skipPlayerSynced(TrueMusic.poru, player, currentBeforePrev));
+                            runBackground('button prev panel edit', () => editPanel(!!ui.liked));
                             runBackground('button prev cleanup', () => bumpQueueVersion(player, 'button_prev'));
                         } else {
                             responseMessage = `⏮ تم إعادة الأغنية من البداية.`;
                             // Seek + panel in parallel — same instant
-                            await Promise.all([
-                                player.seekTo(0).catch(err => console.warn('[button prev seek]', err?.message || err)),
-                                editPanel(!!ui.liked),
-                            ]);
+                            runBackground('button replay audio', () => player.seekTo(0));
+                            runBackground('button replay panel edit', () => editPanel(!!ui.liked));
                         }
                     }
 
@@ -6980,22 +6958,21 @@ module.exports = {
                                 if (!currentTrack) {
                                     responseMessage = '*لا يوجد شيء يعمل الآن.*';
                                 } else {
-                                    try {
-                                        const { liked } = await likes.toggle(interaction.user.id, currentTrack);
-                                        responseMessage = liked
-                                            ? `✅ Added **${currentTrack.info.title || 'الأغنية'}** to liked songs.`
-                                            : `💔 Removed **${currentTrack.info.title || 'الأغنية'}** from liked songs.`;
-                                        if (!requesterId || interaction.user.id === requesterId) {
-                                            await editPanel(liked);
+                                    responseMessage = '**Like request received.**';
+                                    runBackground('like toggle', async () => {
+                                        try {
+                                            const { liked } = await likes.toggle(interaction.user.id, currentTrack);
+                                            if (!requesterId || interaction.user.id === requesterId) {
+                                                runBackground('like panel edit', () => editPanel(liked));
+                                            }
+                                        } catch (err) {
+                                            console.error('[Likes] toggle failed:', err?.message || err);
                                         }
-                                    } catch (err) {
-                                        console.error('[Likes] toggle failed:', err?.message || err);
-                                        responseMessage = '*تعذر حفظ اللايك الآن*.';
+                                    });
+                                }
                             }
-                        }
-                    }
 
-                    await replyEphemeral(responseMessage || '*Done*.');
+                    replyEphemeral(responseMessage || '*Done*.');
                 });
 
 
