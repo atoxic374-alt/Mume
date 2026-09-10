@@ -21,6 +21,7 @@ const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
 const MUSIC_EMOJIS = require('../../utils/musicEmojis');
 const { getEmbedColor, refreshEmbedColor } = require('../../utils/embedColor');
+const { createTintedControlEmojis } = require('../../utils/subControlEmojis');
 
 const SETTINGS_PROCESS_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PROCESS_CONCURRENCY || 16));
 const SETTINGS_PROFILE_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PROFILE_CONCURRENCY || 4));
@@ -88,6 +89,7 @@ const SETTINGS_EMOJI = {
     removeOwner:   MUSIC_EMOJIS.stg.owners,
     toggleButtons: MUSIC_EMOJIS.stg.display,
     toggleEmbeds:  MUSIC_EMOJIS.stg.display,
+    controlEmojis: MUSIC_EMOJIS.stg.display,
 };
 const activeSmartDistributions = new Set();
 const activeSettingsProcesses = new Set();
@@ -350,6 +352,7 @@ module.exports = {
                             const customId = `stg_mod_${mid}_${type}_${++modalSeq}`;
                             pendingModalContexts.set(customId, {
                                 type,
+                                ...context,
                                 code: context.code || selectedCode,
                                 createdAt: Date.now(),
                             });
@@ -1749,7 +1752,12 @@ module.exports = {
                                     const code = selectedCode;
                                     if (!(await requireSubscriptionGuild(interaction, 'تثبيت الروم', code))) return;
 
-                            const state = { code, scope: null, channelId: null };
+                            const state = { code, scope: null, channelId: null, count: null };
+                            // ترتيب التوكنات هو ترتيب أرقام البوتات؛ آخر N عناصر هي الأعلى رقماً.
+                            const getPinTargets = () => {
+                                const targets = distributionTargets(state.scope, state.code);
+                                return state.count ? targets.slice(-state.count) : targets;
+                            };
 
                             const renderScope = async (i = interaction) => {
                                 const buckets = distributionBuckets(state.code);
@@ -1785,27 +1793,28 @@ module.exports = {
                     };
 
                             const renderChannel = async (i) => {
-                                const targets = distributionTargets(state.scope, state.code);
+                                const targets = getPinTargets();
                         if (!targets.length) {
-                            return i.update({
+                            const payload = {
                                 content: '',
                                 embeds: [buildDistributionEmbed('Pin Bots To Room', 'لا توجد بوتات مناسبة لهذا النطاق حالياً.')],
                                 components: [new ActionRowBuilder().addComponents(
                                     new ButtonBuilder().setCustomId(`stg_pin_${mid}_scope_back`).setLabel('Choose Again').setStyle(ButtonStyle.Secondary),
                                     new ButtonBuilder().setCustomId(`stg_pin_${mid}_back`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary),
                                 )],
-                            });
+                            };
+                            return i && !i.deferred && !i.replied ? i.update(payload) : mainMsg.edit(payload);
                         }
 
                         const select = new ChannelSelectMenuBuilder()
                             .setCustomId(`stg_pin_${mid}_channel`)
                             .setPlaceholder('Select target voice room')
                             .setChannelTypes(ChannelType.GuildVoice);
-                        return i.update({
+                        const payload = {
                             content: '',
                             embeds: [buildDistributionEmbed(
                                 'Pin Bots To Room',
-                                `النطاق: **${SCOPE_LABELS[state.scope] || state.scope}**\nالبوتات المستهدفة: **${targets.length}**\nاختر الروم الذي سيتم تثبيتهم فيه.`,
+                                `النطاق: **${SCOPE_LABELS[state.scope] || state.scope}**\nالبوتات المستهدفة: **${targets.length}**${state.count ? ` من أعلى الأرقام (آخر ${state.count})` : ''}\nاختر الروم الذي سيتم تثبيتهم فيه.`,
                             )],
                             components: [
                                 new ActionRowBuilder().addComponents(select),
@@ -1813,7 +1822,8 @@ module.exports = {
                                     new ButtonBuilder().setCustomId(`stg_pin_${mid}_scope_back`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary),
                                 ),
                             ],
-                        });
+                        };
+                        return i && !i.deferred && !i.replied ? i.update(payload) : mainMsg.edit(payload);
                     };
 
                     await renderScope();
@@ -1836,18 +1846,31 @@ module.exports = {
                         }
                         if (i.customId === `stg_pin_${mid}_scope`) {
                             state.scope = i.values[0];
-                            return renderChannel(i);
+                            const available = distributionTargets(state.scope, state.code).length;
+                            if (!available) return renderChannel(i);
+                            const modal = new ModalBuilder()
+                                .setCustomId(createSettingsModalId('pin_count', { code: state.code, state, render: renderChannel }))
+                                .setTitle('عدد البوتات المراد نقلها');
+                            modal.addComponents(new ActionRowBuilder().addComponents(
+                                new TextInputBuilder()
+                                    .setCustomId('count')
+                                    .setLabel(`العدد (المتاح: ${available})`)
+                                    .setPlaceholder(`مثال: ${Math.min(10, available)}`)
+                                    .setStyle(TextInputStyle.Short)
+                                    .setRequired(true)
+                            ));
+                            return i.showModal(modal);
                         }
                         if (i.customId === `stg_pin_${mid}_channel`) {
                             state.channelId = i.values[0];
                             pinCollector.stop('execute');
                             await i.update({
                                 content: `<@${userId}>`,
-                                    embeds: [buildProcessEmbed('Pin Bots To Room', 0, distributionTargets(state.scope, state.code).length, 0, 0, [`⏳ Target room: <#${state.channelId}>`])],
+                                    embeds: [buildProcessEmbed('Pin Bots To Room', 0, getPinTargets().length, 0, 0, [`⏳ Target room: <#${state.channelId}>`])],
                                 components: [],
                                 allowedMentions: { users: [userId] },
                             });
-                                    const targets = distributionTargets(state.scope, state.code);
+                                    const targets = getPinTargets();
                                     await runBotProcess(`Pin Bots To Room — ${SCOPE_LABELS[state.scope] || state.scope}`, targets, async (t) => {
                                         await moveTokenToVoice(t, state.channelId);
                                     }, { code: state.code });
@@ -2113,7 +2136,7 @@ module.exports = {
                             const display = getDisplay(selectedCode);
                             const embed = new EmbedBuilder()
                                 .setTitle(`Display Settings — ${selectedCode}`)
-                                .setDescription('فعّل أو عطّل عناصر التشغيل التي تظهر للمستخدمين.')
+                                .setDescription(`فعّل أو عطّل عناصر التشغيل التي تظهر للمستخدمين.\nلون إيموجيات التحكم الحالي: \`${display.controlEmojiColor || 'غير محدد'}\``)
                                 .setColor(getEmbedColor(client));
                     embeds.push(embed);
 
@@ -2126,6 +2149,10 @@ module.exports = {
                                             .setCustomId(`stg_${mid}_toggle_embeds`)
                                             .setLabel(`Embeds: ${display.embeds ? 'ON' : 'OFF'}`)
                                             .setStyle(display.embeds ? ButtonStyle.Success : ButtonStyle.Danger), SETTINGS_EMOJI.toggleEmbeds),
+                                        setSettingsEmoji(client, new ButtonBuilder()
+                                            .setCustomId(`stg_${mid}_control_emojis`)
+                                            .setLabel('Color Control Emojis')
+                                            .setStyle(ButtonStyle.Primary), SETTINGS_EMOJI.controlEmojis),
                                 new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
                             );
                     components.push(row);
@@ -2370,6 +2397,21 @@ module.exports = {
                 tokens.forEach(t => { if (t.code === selectedCode) t.embeds = newVal ? 'on' : 'off'; });
                 store.set('tokens', tokens);
                 return updatePanel(i);
+            }
+
+            if (i.customId === `stg_${mid}_control_emojis`) {
+                const modal = new ModalBuilder()
+                    .setCustomId(createSettingsModalId('control_color', { code: selectedCode }))
+                    .setTitle('لون إيموجيات أزرار التشغيل');
+                modal.addComponents(new ActionRowBuilder().addComponents(
+                    new TextInputBuilder()
+                        .setCustomId('color')
+                        .setLabel('Hex color')
+                        .setPlaceholder('#5865F2')
+                        .setRequired(true)
+                        .setStyle(TextInputStyle.Short)
+                ));
+                return i.showModal(modal);
             }
 
             // Platform
@@ -2630,7 +2672,57 @@ module.exports = {
                                     await interaction.deferUpdate();
                                     const modalContext = consumeSettingsModalContext(interaction.customId);
                                     if (!modalContext) return;
-                                    const modalCode = modalContext.code || selectedCode;
+                            const modalCode = modalContext.code || selectedCode;
+
+                            if (modalContext.type === 'pin_count') {
+                                const pinState = modalContext.state;
+                                const available = distributionTargets(pinState?.scope, modalCode).length;
+                                const count = Number.parseInt(interaction.fields.getTextInputValue('count').trim(), 10);
+                                if (!Number.isInteger(count) || count < 1 || count > available) {
+                                    await mainMsg.edit({
+                                        content: `❌ اكتب رقماً من 1 إلى ${available}.`,
+                                        embeds: [],
+                                        components: [],
+                                    });
+                                    setTimeout(() => modalContext.render(interaction), 1500);
+                                    return;
+                                }
+                                pinState.count = count;
+                                return modalContext.render(interaction);
+                            }
+
+                            if (modalContext.type === 'control_color') {
+                                const rawColor = interaction.fields.getTextInputValue('color').trim();
+                                if (!/^#?[0-9a-fA-F]{6}$/.test(rawColor)) {
+                                    await mainMsg.edit({
+                                        content: '❌ اللون غير صحيح. استخدم Hex من 6 خانات مثل `#5865F2`.',
+                                        embeds: [],
+                                        components: [],
+                                    });
+                                    setTimeout(() => updatePanel(), 2000);
+                                    return;
+                                }
+                                const color = `#${rawColor.replace(/^#/, '')}`;
+                                const selected = getSelectedTokens({ code: modalCode });
+                                setDisplay(modalCode, { controlEmojiColor: color });
+                                await runBotProcess(`Color Control Emojis — ${color}`, selected, async (t, bot) => {
+                                    if (!bot?.application?.emojis) throw new Error('البوت غير متصل أو لا يملك صلاحية الإيموجيات');
+                                    t.controlEmojis = await createTintedControlEmojis(bot, MUSIC_EMOJIS, color, t.controlEmojis || {});
+                                    t.controlEmojiColor = color;
+                                }, { concurrency: Math.min(3, Math.max(1, selected.length)), code: modalCode });
+                                tokens = store.get('tokens') || [];
+                                const byToken = new Map(selected.map(t => [t.token, t]));
+                                tokens.forEach(t => {
+                                    const updated = byToken.get(t.token);
+                                    if (updated?.controlEmojis) {
+                                        t.controlEmojis = updated.controlEmojis;
+                                        t.controlEmojiColor = updated.controlEmojiColor;
+                                    }
+                                });
+                                store.set('tokens', tokens);
+                                setTimeout(() => updatePanel(), 3000);
+                                return;
+                            }
 
                             // ── توزيع ذكي: modal اسم الترقيم ─────────────────────────────
                             if (modalContext.type === 'dist_prefix') {

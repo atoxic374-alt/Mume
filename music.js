@@ -41,6 +41,7 @@ const { getEmbedColor, refreshEmbedColor } = require('./utils/embedColor');
 const statusStore = require('./statusStore');
 const { tintAttachmentPayload, warmTintCache } = require('./utils/tintedThumbnail');
 const { buildProgressBarAttachment, normalizeColorNumber, prewarmProgressBarCache } = require('./utils/progressBar');
+const { controlEmojiData } = require('./utils/subControlEmojis');
 const { liftDiscordClientLimits } = require('./utils/discordClientTuning');
 
 const runningBots = new Collection();
@@ -446,6 +447,7 @@ function displaySettings(tokenObj) {
         platform: tokenObj?.source || saved.platform || 'ytsearch',
         voiceStatus: tokenObj?.voiceStatus ? tokenObj.voiceStatus === 'on' : saved.voiceStatus === true,
         voiceStatusEmoji: tokenObj?.voiceStatusEmoji || saved.voiceStatusEmoji || '🎵',
+        controlEmojis: tokenObj?.controlEmojis || saved.controlEmojis || {},
     };
 }
 
@@ -476,7 +478,9 @@ function shortDuration(ms) {
     return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
 }
 
-function createMusicControlButtons(paused = false, liked = false, { includeLike = true, dangerStop = true, likeInPrevSlot = false } = {}) {
+function createMusicControlButtons(paused = false, liked = false, { includeLike = true, dangerStop = true, likeInPrevSlot = false, tokenObj = null } = {}) {
+    const custom = displaySettings(tokenObj).controlEmojis;
+    const emoji = (key, fallback) => MUSIC_EMOJIS.componentEmoji(controlEmojiData(custom, key, fallback), null, fallback);
     const row1 = new ActionRowBuilder()
         .addComponents(
             likeInPrevSlot
@@ -490,34 +494,34 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
                     .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('stop')
-                .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.stop))
+                .setEmoji(emoji('stop', '⏹️'))
                 .setStyle(dangerStop ? ButtonStyle.Danger : ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('pause')
-                .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.pause))
+                .setEmoji(emoji('pause', '⏯️'))
                 .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('skip')
-                .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.skip))
+                .setEmoji(emoji('skip', '⏭️'))
                 .setStyle(ButtonStyle.Secondary),
         );
     const row2 = new ActionRowBuilder()
         .addComponents(
             new ButtonBuilder()
                 .setCustomId('volume_down')
-                .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.volumeDown))
+                .setEmoji(emoji('volumeDown', '🔉'))
                 .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('loop')
-                .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.loop))
+                .setEmoji(emoji('loop', '🔁'))
                 .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('queue_btn')
-                .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.queue))
+                .setEmoji(emoji('queue', '📜'))
                 .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('volume_up')
-                .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.volumeUp))
+                .setEmoji(emoji('volumeUp', '🔊'))
                 .setStyle(ButtonStyle.Secondary),
         );
 
@@ -525,7 +529,7 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
         row2.addComponents(
             new ButtonBuilder()
                 .setCustomId('like')
-                .setEmoji(MUSIC_EMOJIS.componentEmoji(liked ? MUSIC_EMOJIS.dislike : MUSIC_EMOJIS.like))
+                .setEmoji(emoji(liked ? 'dislike' : 'like', liked ? '👎' : '👍'))
                 .setStyle(ButtonStyle.Secondary),
         );
     }
@@ -533,7 +537,7 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
     return [row1, row2];
 }
 
-function buildMusicComponents({ liked = false, paused = false, artistTracks = [], selectedFilter = 'clear', selectedArtistIndex = null, showControls = true, compactControls = false }) {
+function buildMusicComponents({ liked = false, paused = false, artistTracks = [], selectedFilter = 'clear', selectedArtistIndex = null, showControls = true, compactControls = false, tokenObj = null }) {
     const rows = [];
 
     if (showControls && artistTracks.length > 0) {
@@ -578,6 +582,7 @@ function buildMusicComponents({ liked = false, paused = false, artistTracks = []
         includeLike: true,
         dangerStop: !compactControls,
         likeInPrevSlot: compactControls,
+        tokenObj,
     }));
 
     return rows.slice(0, 5);
@@ -909,7 +914,9 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     const accentColor = normalizeColorNumber(embedColor);
     const useEmbedAccent = options.useEmbedAccent === true;
     const showProgressLabels = options.showProgressLabels === true;
-    const progressColor = useEmbedAccent ? accentColor : normalizeColorNumber(options.progressColor || '#9d9ad1');
+    const progressColor = tokenObj?.code
+        ? accentColor
+        : (useEmbedAccent ? accentColor : normalizeColorNumber(options.progressColor || '#9d9ad1'));
     const showDisabledNowPlayingInfo = compactPlayLayout && options.includeControls && !settings.buttons;
 
     const interactiveRows = options.includeControls && settings.buttons
@@ -921,6 +928,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
             selectedArtistIndex: options.selectedArtistIndex ?? null,
             showControls: true,
             compactControls: compactPlayLayout,
+            tokenObj,
         })
         : [];
 

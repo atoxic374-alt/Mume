@@ -369,5 +369,6 @@ function warmTintCache(files = [], colors = []) {
 module.exports = {
     tintAttachmentPayload,
     tintPngFile,
+    tintPngBuffer,
     warmTintCache,
 };
