@@ -205,6 +205,7 @@ setInterval(() => {
 // يُشارك بين كل البوتات في نفس الغيلد — يمنع مئات الطلبات المتزامنة
 const _movedByBotCache = new Map(); // guildId → { result: bool, ts: number, pending: Promise|null }
 const _MOVED_BY_BOT_TTL = 2500;
+const _onlyBotDisplacements = new Map(); // token → timestamp
 setInterval(() => {
     const cutoff = Date.now() - _MOVED_BY_BOT_TTL * 4; // احتياط: 10 ثواني
     for (const [k, v] of _movedByBotCache) if (!v.pending && v.ts < cutoff) _movedByBotCache.delete(k);
@@ -237,6 +238,16 @@ async function checkMovedByBot(guild) {
 
     _movedByBotCache.set(guildId, { result: false, ts: now, pending });
     return pending;
+}
+
+function isPlaybackIdle(player) {
+    return !player?.currentTrack && !player?.isPlaying && !player?.isPaused && !(player?.queue?.length > 0);
+}
+
+async function clearVoiceNickname(guild) {
+    const member = guild?.members?.me;
+    if (!member?.nickname) return;
+    await member.setNickname(null, 'Restore music bot voice assignment').catch(() => {});
 }
 
 // ── B: resolveTrack cache (1-hour TTL, max 500 entries) ──────────────────────
@@ -4229,6 +4240,8 @@ module.exports = {
 
             try {
                 await ensureConfiguredVoice(guild, tokenObj, `voice_state_update_retry_${attempt}`);
+                _onlyBotDisplacements.delete(token);
+                await clearVoiceNickname(guild);
             } catch {
                 // فشل — أعد المحاولة بـ backoff (2s → 4s → 8s → 12s → 20s)
                 const delays = [2000, 4000, 8000, 12000, 20000];
@@ -4263,11 +4276,14 @@ module.exports = {
             // تم نقله لروم ثاني — تحقق من onlyBot و backToVoice
             if (newState.channelId) {
                 if (tokenObj.onlyBot === 'on') {
-                    // onlyBot: لو بوت سحبه يبقى في الروم الجديد حتى ينطرد
+                    // onlyBot: لو بوت سحبه يبقى في الروم الجديد حتى يصبح خاملًا
                     // لو إنسان سحبه يرجع لرومه الأصلي فوراً
                     const guild = newState.guild || oldState.guild;
                     const movedByBot = await checkMovedByBot(guild);
-                    if (movedByBot) return; // بوت سحبه — لا نرجعه
+                    if (movedByBot) {
+                        _onlyBotDisplacements.set(token, Date.now());
+                        return;
+                    }
                     // إنسان سحبه — نكمل للرجوع أدناه
                 } else if (tokenObj.backToVoice === 'off') {
                     return;
@@ -4653,12 +4669,18 @@ module.exports = {
                             const shouldReconnect = !currentVC || (backToVoice && currentVC.id !== musicChannel.id);
 
                             if (shouldReconnect) {
+                                if (tokenObj.onlyBot === 'on' && _onlyBotDisplacements.has(token)) {
+                                    const player = TrueMusic.poru.players.get(guild.id);
+                                    if (!isPlaybackIdle(player)) return;
+                                    _onlyBotDisplacements.delete(token);
+                                }
                                 if (!TrueMusic.readyAt) return;
                                 // لا نتحقق من isStopped() — البوت يبقى في الروم دائماً
                                 // حتى لو أوقف المستخدم التشغيل، الـ 24/7 channel يعني البوت لا يخرج
 
                                 try {
                                     await ensureConfiguredVoice(guild, tokenObj, 'periodic_guard');
+                                    await clearVoiceNickname(guild);
                                 } catch (err) {
                                 }
                             }
