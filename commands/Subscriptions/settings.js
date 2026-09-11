@@ -2153,6 +2153,10 @@ module.exports = {
                                             .setCustomId(`stg_${mid}_control_emojis`)
                                             .setLabel('Color Control Emojis')
                                             .setStyle(ButtonStyle.Primary), SETTINGS_EMOJI.controlEmojis),
+                                        new ButtonBuilder()
+                                            .setCustomId(`stg_${mid}_toggle_control_bar`)
+                                            .setLabel(`Bar Color: ${display.controlBarColorEnabled ? 'ON' : 'OFF'}`)
+                                            .setStyle(display.controlBarColorEnabled ? ButtonStyle.Success : ButtonStyle.Secondary),
                                 new ButtonBuilder().setCustomId(`stg_${mid}_back_to_main`).setLabel('Back').setEmoji(MUSIC_EMOJIS.pagePrev).setStyle(ButtonStyle.Secondary)
                             );
                     components.push(row);
@@ -2412,6 +2416,23 @@ module.exports = {
                         .setStyle(TextInputStyle.Short)
                 ));
                 return i.showModal(modal);
+            }
+            if (i.customId === `stg_${mid}_toggle_control_bar`) {
+                const current = getDisplay(selectedCode);
+                const enabled = !current.controlBarColorEnabled;
+                const selected = getSelectedTokens({ code: selectedCode });
+                const result = await runBotProcess(`Control Bar Color — ${enabled ? 'ON' : 'OFF'}`, selected, async t => {
+                    t.controlBarColorEnabled = enabled ? 'on' : 'off';
+                }, { concurrency: Math.min(8, Math.max(1, selected.length)), code: selectedCode });
+                tokens = store.get('tokens') || [];
+                const byToken = new Map(selected.map(t => [t.token, t]));
+                tokens.forEach(t => {
+                    const updated = byToken.get(t.token);
+                    if (updated && updated.controlBarColorEnabled) t.controlBarColorEnabled = updated.controlBarColorEnabled;
+                });
+                store.set('tokens', tokens);
+                if (result.failed === 0) setDisplay(selectedCode, { controlBarColorEnabled: enabled });
+                return updatePanel(i);
             }
 
             // Platform

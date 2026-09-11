@@ -12,6 +12,8 @@ function getDisplay(code) {
         platform: 'ytsearch',
         voiceStatus: false,
         voiceStatusEmoji: '🎵',
+        controlEmojiColor: null,
+        controlBarColorEnabled: false,
         ...(data[code] || {}),
     };
 }

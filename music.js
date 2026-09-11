@@ -448,6 +448,12 @@ function displaySettings(tokenObj) {
         voiceStatus: tokenObj?.voiceStatus ? tokenObj.voiceStatus === 'on' : saved.voiceStatus === true,
         voiceStatusEmoji: tokenObj?.voiceStatusEmoji || saved.voiceStatusEmoji || '🎵',
         controlEmojis: tokenObj?.controlEmojis || saved.controlEmojis || {},
+        controlEmojiColor: tokenObj?.controlEmojiColor || saved.controlEmojiColor || null,
+        controlBarColorEnabled: tokenObj?.controlBarColorEnabled === 'on'
+            ? true
+            : tokenObj?.controlBarColorEnabled === 'off'
+                ? false
+                : saved.controlBarColorEnabled === true,
     };
 }
 
@@ -911,12 +917,16 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     const artworkUrl = trackArtworkUrl(track, TrueMusic, requester);
     const compactPlayLayout = options.compactPlayLayout === true;
     const embedColor = getEmbedColor(TrueMusic);
-    const accentColor = normalizeColorNumber(embedColor);
-    const useEmbedAccent = options.useEmbedAccent === true;
+    const subscriptionControlColor = settings.controlBarColorEnabled && settings.controlEmojiColor
+        ? normalizeColorNumber(settings.controlEmojiColor)
+        : null;
+    const accentColor = subscriptionControlColor || normalizeColorNumber(embedColor);
+    const useEmbedAccent = tokenObj?.code
+        ? Boolean(subscriptionControlColor)
+        : options.useEmbedAccent === true;
     const showProgressLabels = options.showProgressLabels === true;
-    const progressColor = tokenObj?.code
-        ? accentColor
-        : (useEmbedAccent ? accentColor : normalizeColorNumber(options.progressColor || '#9d9ad1'));
+    const progressColor = subscriptionControlColor
+        || (useEmbedAccent ? accentColor : normalizeColorNumber(options.progressColor || '#9d9ad1'));
     const showDisabledNowPlayingInfo = compactPlayLayout && options.includeControls && !settings.buttons;
 
     const interactiveRows = options.includeControls && settings.buttons
