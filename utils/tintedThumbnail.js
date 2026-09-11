@@ -79,10 +79,11 @@ function pruneDiskCache() {
         });
 }
 
-function blendChannel(target, sourceLuma, targetLuma) {
-    const shade = 0.72 + (sourceLuma / 255) * 0.48;
-    const contrastLift = targetLuma < 80 ? 18 : targetLuma > 190 ? -16 : 0;
-    return Math.max(0, Math.min(255, Math.round(target * shade + contrastLift)));
+function blendChannel(target, sourceLuma) {
+    // Keep original light/shadow detail while using the requested target RGB
+    // as the midpoint. Avoid gray lifts and darkening that make the result dull.
+    const shade = 0.82 + (sourceLuma / 255) * 0.36;
+    return Math.max(0, Math.min(255, Math.round(target * shade)));
 }
 
 let crcTable = null;
@@ -254,7 +255,6 @@ function encodeRgbaPng(width, height, rgba) {
 function tintPngBuffer(buffer, color) {
     const { width, height, rgba } = decodePngToRgba(buffer);
     const { r, g, b } = colorParts(color);
-    const targetLuma = (r * 0.2126) + (g * 0.7152) + (b * 0.0722);
     let visiblePixels = 0;
 
     for (let i = 0; i < rgba.length; i += 4) {
@@ -263,9 +263,9 @@ function tintPngBuffer(buffer, color) {
         visiblePixels++;
 
         const sourceLuma = (rgba[i] * 0.2126) + (rgba[i + 1] * 0.7152) + (rgba[i + 2] * 0.0722);
-        rgba[i] = blendChannel(r, sourceLuma, targetLuma);
-        rgba[i + 1] = blendChannel(g, sourceLuma, targetLuma);
-        rgba[i + 2] = blendChannel(b, sourceLuma, targetLuma);
+        rgba[i] = blendChannel(r, sourceLuma);
+        rgba[i + 1] = blendChannel(g, sourceLuma);
+        rgba[i + 2] = blendChannel(b, sourceLuma);
     }
 
     if (!visiblePixels) throw new Error('PNG has no visible pixels');

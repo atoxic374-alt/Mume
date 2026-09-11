@@ -184,12 +184,14 @@ function dominantColorFromPixels(data, width, height) {
     const r = Math.round(best.r / best.weight);
     const g = Math.round(best.g / best.weight);
     const b = Math.round(best.b / best.weight);
-    return enhanceVibrantColor(r, g, b);
+    // Preserve the measured dominant color exactly. The same RGB value is
+    // shared by embeds, progress bars, thumbnails, and generated emojis.
+    return (r << 16) + (g << 8) + b;
 }
 
 async function dominantColorFromImage(buffer) {
     const image = await loadImage(buffer);
-    const size = 160;
+    const size = 256;
     const canvas = createCanvas(size, size);
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     ctx.drawImage(image, 0, 0, size, size);
