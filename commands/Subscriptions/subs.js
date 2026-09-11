@@ -23,6 +23,7 @@ const BTN = {
   ADD_SUB:     'subs_panel_add',
   REMOVE_SUB:  'subs_panel_remove',
   ADD_TIME:    'subs_panel_addtime',
+  ADD_BOTS:    'subs_panel_addbots',
   ADD_TOKENS:  'subs_panel_tokens',
   ALL_SUBS:    'subs_panel_list',
   STOCK:       'subs_panel_stock',
@@ -70,7 +71,10 @@ function statusText(en, ar) {
             ),
             new ActionRowBuilder().addComponents(
               new ButtonBuilder().setCustomId(BTN.ADD_TOKENS).setLabel('Add Bots | بوتات').setStyle(ButtonStyle.Secondary),
+              new ButtonBuilder().setCustomId(BTN.ADD_BOTS).setLabel('Add to Sub | إضافة للاشتراك').setStyle(ButtonStyle.Primary),
               new ButtonBuilder().setCustomId(BTN.ALL_SUBS).setLabel('List | القائمة').setStyle(ButtonStyle.Secondary),
+            ),
+            new ActionRowBuilder().addComponents(
               new ButtonBuilder().setCustomId(BTN.STOCK).setLabel('Stock | الستوك').setStyle(ButtonStyle.Secondary),
             ),
           ];
@@ -429,6 +433,75 @@ async function executeAddTime(code, durationMs, durationStr, interaction, client
   } catch (e) { console.error('[Subs] addTime error:', e); }
 }
 
+// ─── Flow: Add Bots to Existing Subscription ─────────────────────────────────
+async function handleAddBots(interaction, client) {
+  const timeData = store.get('time') || [];
+  const bots = store.get('bots') || [];
+  if (!timeData.length) return interaction.reply({ content: statusText('No active subscriptions.', 'لا توجد اشتراكات نشطة.'), flags: MessageFlags.Ephemeral });
+  if (!bots.length) return interaction.reply({ content: statusText('No bots are available in stock.', 'لا توجد بوتات متاحة في الستوك.'), flags: MessageFlags.Ephemeral });
+
+  const mid = interaction.id;
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`ab_sel_${mid}`)
+    .setPlaceholder('Select subscription | اختر الاشتراك')
+    .addOptions(timeData.slice(0, 25).map(e => ({
+      label: `SuID: ${e.code}`,
+      description: `Current bots: ${e.botsCount || 0} | User: ${e.user}`,
+      value: e.code,
+    })));
+  await interaction.reply({
+    content: statusText('Select the subscription to add bots to.', 'اختر الاشتراك المراد إضافة البوتات إليه.'),
+    components: [new ActionRowBuilder().addComponents(select)],
+    flags: MessageFlags.Ephemeral,
+  });
+  const prompt = await interaction.fetchReply();
+  const collector = prompt.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id, time: 60000, max: 1 });
+  collector.on('collect', async i => {
+    if (i.customId !== `ab_sel_${mid}`) return;
+    const code = i.values[0];
+    const entry = (store.get('time') || []).find(e => e.code === code);
+    if (!entry) return i.update({ content: statusText('Subscription not found.', 'الاشتراك غير موجود.'), components: [] });
+
+    const modal = new ModalBuilder().setCustomId(`ab_modal_${mid}`).setTitle('Add Bots | إضافة بوتات');
+    modal.addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId('count').setLabel(`Bot count | العدد (available ${bots.length})`).setPlaceholder(`1 - ${bots.length}`).setStyle(TextInputStyle.Short).setRequired(true)
+    ));
+    await i.showModal(modal);
+    try {
+      const submitted = await i.awaitModalSubmit({ filter: mi => mi.customId === `ab_modal_${mid}` && mi.user.id === interaction.user.id, time: 60000 });
+      const count = Number.parseInt(submitted.fields.getTextInputValue('count').trim(), 10);
+      const currentBots = store.get('bots') || [];
+      if (!Number.isInteger(count) || count <= 0 || count > currentBots.length) {
+        return submitted.reply({ content: statusText(`Invalid count. Available: ${currentBots.length}`, `العدد غير صحيح. المتاح: ${currentBots.length}`), flags: MessageFlags.Ephemeral });
+      }
+      const timeArray = store.get('time') || [];
+      const freshEntry = timeArray.find(e => e.code === code);
+      if (!freshEntry) return submitted.reply({ content: statusText('Subscription not found.', 'الاشتراك غير موجود.'), flags: MessageFlags.Ephemeral });
+      const givenBots = currentBots.splice(0, count);
+      const tokens = store.get('tokens') || [];
+      const defaultStatus = getSubBotProfile().status || null;
+      givenBots.forEach(bot => tokens.push({ token: bot.token, Server: freshEntry.server, channel: null, chat: null, status: defaultStatus, client: freshEntry.user, code }));
+      freshEntry.botsCount = Number(freshEntry.botsCount || 0) + count;
+      store.set('time', timeArray);
+      store.set('tokens', tokens);
+      store.set('bots', currentBots);
+      await submitted.reply({ embeds: [basePanelEmbed(client, 'Bots Added | تمت إضافة البوتات').addFields(
+        { name: 'Subscription ID | رقم الاشتراك', value: `\`${code}\``, inline: true },
+        { name: 'Added Bots | البوتات المضافة', value: `\`${count}\``, inline: true },
+        { name: 'New Total | الإجمالي الجديد', value: `\`${freshEntry.botsCount}\``, inline: true },
+        { name: 'Remaining Stock | المتبقي', value: `\`${currentBots.length}\``, inline: true },
+      )], flags: MessageFlags.Ephemeral });
+      const logCh = client.channels.cache.get(logChannelId);
+      if (logCh) logCh.send({ embeds: [basePanelEmbed(client, 'Bots Added to Subscription | تمت إضافة بوتات للاشتراك').addFields(
+        { name: 'User | المستخدم', value: `<@${freshEntry.user}>`, inline: true },
+        { name: 'Subscription ID | رقم الاشتراك', value: `\`${code}\``, inline: true },
+        { name: 'Added Bots | البوتات المضافة', value: `\`${count}\``, inline: true },
+        { name: 'By | بواسطة', value: `<@${interaction.user.id}>`, inline: true },
+      )] });
+    } catch (e) { console.error('[Subs] addBots error:', e); }
+  });
+}
+
 // ─── Flow: Add Tokens ─────────────────────────────────────────────────────────
 async function handleAddTokens(interaction, client) {
   const modal = new ModalBuilder().setCustomId('subs_tokens_modal').setTitle('Add Bot Tokens | توكنات');
@@ -578,6 +651,7 @@ function installSubsPanelHandler(client) {
         case BTN.ADD_SUB:     return await handleAddSub(interaction, client);
         case BTN.REMOVE_SUB:  return await handleRemoveSub(interaction, client);
         case BTN.ADD_TIME:    return await handleAddTime(interaction, client);
+        case BTN.ADD_BOTS:    return await handleAddBots(interaction, client);
         case BTN.ADD_TOKENS:  return await handleAddTokens(interaction, client);
         case BTN.ALL_SUBS:    return await handleAllSubs(interaction, client);
         case BTN.STOCK:       return await handleStock(interaction, client);

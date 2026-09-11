@@ -598,7 +598,7 @@ function buildMusicComponents({ liked = false, paused = false, artistTracks = []
 
 function buildNowPlayingPayload(TrueMusic, tokenObj, track, requester, options = {}) {
     const settings = displaySettings(tokenObj);
-    const embedColor = getEmbedColor(TrueMusic);
+    const embedColor = getEmbedColor(TrueMusic, settings.controlEmojiColor);
     const title = cleanInlineText(track?.info?.title, 'Unknown track', 96);
     const author = cleanInlineText(track?.info?.author, 'Unknown artist', 72);
     const uri = track?.info?.uri;
@@ -612,6 +612,8 @@ function buildNowPlayingPayload(TrueMusic, tokenObj, track, requester, options =
         selectedFilter: options.selectedFilter || 'clear',
         selectedArtistIndex: options.selectedArtistIndex ?? null,
         showControls: settings.buttons,
+        tokenObj,
+        client: TrueMusic,
     });
 
     if (settings.embeds) {
@@ -683,7 +685,7 @@ function compactMusicText({ title, description, fields = [], footer = null }) {
 function musicPayload(tokenObj, { title, description, fields = [], components = [], color = undefined, thumbnail = null, files = [], footer = null }) {
     const settings = displaySettings(tokenObj);
     const colorSource = tokenObj?.token ? runningBots.get(tokenObj.token) : null;
-    const embedColor = getEmbedColor(colorSource, color);
+    const embedColor = getEmbedColor(colorSource, settings.controlEmojiColor || color);
     const payload = {
         components: settings.buttons && components.length ? components : [],
     };
@@ -918,13 +920,13 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     const volume = player.volume || 100;
     const artworkUrl = trackArtworkUrl(track, TrueMusic, requester);
     const compactPlayLayout = options.compactPlayLayout === true;
-    const embedColor = getEmbedColor(TrueMusic);
+    const embedColor = getEmbedColor(TrueMusic, settings.controlEmojiColor);
     const subscriptionControlColor = settings.controlEmojiColor
         ? normalizeColorNumber(settings.controlEmojiColor)
         : null;
     const accentColor = subscriptionControlColor || normalizeColorNumber(embedColor);
     const useEmbedAccent = tokenObj?.code
-        ? Boolean(settings.controlBarColorEnabled && subscriptionControlColor)
+        ? Boolean(subscriptionControlColor)
         : options.useEmbedAccent === true;
     const showProgressLabels = options.showProgressLabels === true;
     const progressColor = subscriptionControlColor
@@ -1088,7 +1090,7 @@ function buildBotInfoEmbed(TrueMusic, tokenObj, guildId) {
         : '> **Nothing is playing right now.**';
 
     return new EmbedBuilder()
-        .setColor(getEmbedColor(TrueMusic))
+        .setColor(getEmbedColor(TrueMusic, settings.controlEmojiColor))
         .setAuthor({
             name: TrueMusic.user?.username || 'Music Bot',
             iconURL: TrueMusic.user?.displayAvatarURL?.({ dynamic: true }),
