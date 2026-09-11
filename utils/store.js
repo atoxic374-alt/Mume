@@ -8,11 +8,12 @@ const FILES = {
   time:     './settings/time.json',
   host:     './settings/host.json',
   display:  './settings/display.json',
+  playback: './settings/playback.json',
   emojis:   './assets/emojis.json',
   history:  './settings/history.json',
   database: './settings/database.json',
 };
-const OBJ_KEYS = ['display', 'database'];
+const OBJ_KEYS = ['display', 'playback', 'database'];
 
 class Store {
   constructor() {

@@ -484,16 +484,22 @@ function shortDuration(ms) {
     return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
 }
 
-function createMusicControlButtons(paused = false, liked = false, { includeLike = true, dangerStop = true, likeInPrevSlot = false, tokenObj = null } = {}) {
+function createMusicControlButtons(paused = false, liked = false, { includeLike = true, dangerStop = true, likeInPrevSlot = false, tokenObj = null, client = null } = {}) {
     const custom = displaySettings(tokenObj).controlEmojis;
-    const emoji = (key, fallback) => MUSIC_EMOJIS.componentEmoji(controlEmojiData(custom, key, fallback), null, fallback);
-    const likeEmoji = liked ? controlEmojiData(custom, 'dislike', '👎') : controlEmojiData(custom, 'like', '👍');
+    const emoji = (key, fallback) => MUSIC_EMOJIS.componentEmoji(
+        controlEmojiData(custom, key, MUSIC_EMOJIS[key] || fallback),
+        client,
+        fallback,
+    );
+    const likeEmoji = liked
+        ? controlEmojiData(custom, 'dislike', MUSIC_EMOJIS.dislike || '👎')
+        : controlEmojiData(custom, 'like', MUSIC_EMOJIS.like || '👍');
     const row1 = new ActionRowBuilder()
         .addComponents(
             likeInPrevSlot
                 ? new ButtonBuilder()
                     .setCustomId('like')
-                    .setEmoji(MUSIC_EMOJIS.componentEmoji(likeEmoji, null, liked ? '👎' : '👍'))
+                    .setEmoji(MUSIC_EMOJIS.componentEmoji(likeEmoji, client, liked ? '👎' : '👍'))
                     .setStyle(ButtonStyle.Secondary)
                 : new ButtonBuilder()
                     .setCustomId('prev')
@@ -591,6 +597,7 @@ function buildMusicComponents({ liked = false, paused = false, artistTracks = []
         dangerStop: !compactControls,
         likeInPrevSlot: compactControls,
         tokenObj,
+        client,
     }));
 
     return rows.slice(0, 5);
@@ -926,7 +933,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
         : null;
     const accentColor = subscriptionControlColor || normalizeColorNumber(embedColor);
     const useEmbedAccent = tokenObj?.code
-        ? Boolean(subscriptionControlColor)
+        ? Boolean(settings.controlBarColorEnabled && subscriptionControlColor)
         : options.useEmbedAccent === true;
     const showProgressLabels = options.showProgressLabels === true;
     const progressColor = subscriptionControlColor
@@ -1177,6 +1184,50 @@ function trackIdentity(track) {
     if (source && identifier) return `${source}:${identifier}`;
     if (identifier) return identifier;
     return track?.track || [source, info.author, info.title, info.length].filter(Boolean).join(':');
+}
+
+function playbackStateKey(token, guildId) {
+    return `${String(token || '')}:${String(guildId || '')}`;
+}
+
+function snapshotPlaybackTrack(track) {
+    if (!track) return null;
+    const info = track.info || {};
+    return {
+        track: track.track || null,
+        info: {
+            identifier: info.identifier || null,
+            uri: info.uri || null,
+            title: info.title || 'Unknown',
+            author: info.author || 'Unknown',
+            length: Number(info.length || 0),
+            sourceName: info.sourceName || null,
+            artworkUrl: info.artworkUrl || null,
+            thumbnail: info.thumbnail || null,
+        },
+    };
+}
+
+function savePlaybackState(token, player, track = player?.currentTrack) {
+    if (!token || !player?.guildId || !track) return;
+    const snapshot = snapshotPlaybackTrack(track);
+    if (!snapshot) return;
+    const all = store.get('playback') || {};
+    all[playbackStateKey(token, player.guildId)] = {
+        track: snapshot,
+        position: Math.max(0, Number(player.position || player.data?.lastPosition || 0)),
+        savedAt: Date.now(),
+    };
+    store.set('playback', all);
+}
+
+function clearPlaybackState(token, guildId) {
+    if (!token || !guildId) return;
+    const all = store.get('playback') || {};
+    const key = playbackStateKey(token, guildId);
+    if (!Object.prototype.hasOwnProperty.call(all, key)) return;
+    delete all[key];
+    store.set('playback', all);
 }
 
 function warnPlayerOnce(player, key, message, minDelay = 30_000) {
@@ -4296,6 +4347,12 @@ module.exports = {
         });
 
         TrueMusic.once('clientReady', async () => {
+            // setSubscriptionEmojiMap runs before login as well, but at that point
+            // the client has no user/application ID yet and the map is stored under
+            // the global key. Rebind it after login so select-menu emojis (filters,
+            // suggestions, etc.) resolve to the subscription's tinted emojis too.
+            const readyTokenObj = (store.get('tokens') || []).find(entry => entry.token === token);
+            MUSIC_EMOJIS.setSubscriptionEmojiMap(TrueMusic, readyTokenObj?.controlEmojis || null);
             await refreshEmbedColor(TrueMusic).catch(() => {});
             // Sync custom emojis to this bot's application so react() can use them
             syncMusicEmojis(TrueMusic, MUSIC_EMOJIS)
@@ -4322,6 +4379,36 @@ module.exports = {
                 });
             }
             collection.set(TrueMusic.user.id, TrueMusic);
+
+            // Restore only a player that was actively playing before a full
+            // project restart. This is deliberately guarded so it never adds a
+            // duplicate track to an already active player or interrupts a new play.
+            setTimeout(() => (async () => {
+                try {
+                    const playback = store.get('playback') || {};
+                    const prefix = `${token}:`;
+                    const savedEntry = Object.entries(playback)
+                        .find(([key, value]) => key.startsWith(prefix) && value?.track?.info);
+                    if (!savedEntry || Date.now() - Number(savedEntry[1].savedAt || 0) > 7 * 86400000) return;
+                    const [, saved] = savedEntry;
+                    const guildId = saved.guildId || savedEntry[0].slice(prefix.length);
+                    const tokenObj = (store.get('tokens') || []).find(entry => entry.token === token);
+                    const guild = TrueMusic.guilds.cache.get(guildId);
+                    if (!tokenObj?.channel || !guild) return;
+                    if (!await waitForPoruReady(12_000)) return;
+                    const player = await ensureConfiguredVoice(guild, tokenObj, 'startup_playback_restore');
+                    if (!player || player.currentTrack || player.isPlaying || player.isPaused || player.queue?.length) return;
+                    const restorePosition = Math.max(0, Number(saved.position || 0));
+                    player.data.pendingPlaybackRestore = {
+                        identity: trackIdentity(saved.track),
+                        position: restorePosition,
+                    };
+                    player.queue.add(saved.track);
+                    await safePlay(player);
+                } catch (error) {
+                    console.warn(`[PlaybackRestore] skipped: ${error?.message || error}`);
+                }
+            })(), 2500).unref?.();
 
             // ── Startup Guarantee (Layer 1) ────────────────────────────────────────
             // poru.init() fires the WS connection but doesn't wait for it.
@@ -5009,6 +5096,10 @@ module.exports = {
             player.data.recoveryAttempts = 0;
         }
         player.data.lastPosition = position;
+        if (player.currentTrack && Date.now() - Number(player.data.lastPlaybackSaveAt || 0) >= 10_000) {
+            player.data.lastPlaybackSaveAt = Date.now();
+            savePlaybackState(token, player);
+        }
     });
 
     // ── trackStuck: Poru v5 يُطلقه كـ event مستقل (منفصل عن trackError) ─────────
@@ -5119,6 +5210,9 @@ module.exports = {
       // ─────────────────────────────────────────────────────────────────────────
       const reason = data?.reason || 'unknown';
       const naturalEnd = isNaturalTrackEnd(reason);
+      if (reason !== 'replaced' || !player.data._recovering) {
+          clearPlaybackState(token, player.guildId);
+      }
       player.data.lastTrackEndReason = reason;
       player.data.lastTrackEndNatural = naturalEnd;
 
@@ -5337,6 +5431,27 @@ module.exports = {
         player.data.trackStartedAt = Date.now();
         player.data.lastProgressAt = Date.now();
         player.data.lastPosition = 0;
+        player.data.lastPlaybackSaveAt = Date.now();
+        savePlaybackState(token, player, track);
+        const pendingRestore = player.data.pendingPlaybackRestore;
+        if (pendingRestore?.identity && pendingRestore.identity === identity && pendingRestore.position > 0) {
+            const restorePosition = pendingRestore.position;
+            delete player.data.pendingPlaybackRestore;
+            player.data.lastPosition = restorePosition;
+            setTimeout(() => {
+                if (!player.currentTrack || trackIdentity(player.currentTrack) !== identity) return;
+                const seek = typeof player.seekTo === 'function' ? player.seekTo.bind(player) : player.seek?.bind(player);
+                if (seek) {
+                    Promise.resolve(seek(restorePosition)).then(() => {
+                        player.data.lastPosition = restorePosition;
+                        player.data.lastPlaybackSaveAt = Date.now();
+                        savePlaybackState(token, player, track);
+                    }).catch(() => {});
+                }
+            }, 1200).unref?.();
+        } else if (pendingRestore) {
+            delete player.data.pendingPlaybackRestore;
+        }
         player.data.recoveryAttempts = 0;
 
         // ── Pre-warm progress bar cache for all positions ─────────────────────
