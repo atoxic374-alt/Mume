@@ -267,6 +267,13 @@ function componentEmoji(data, client = null, fallback = null) {
     if (!emoji) return fallback;
     if (!emoji.id) return emoji.name || fallback;
 
+    const custom = tintedEmojiForSource(
+        MUSIC_EMOJIS,
+        _subscriptionEmojiMapsByClientId.get(clientKey(client)),
+        emoji,
+    );
+    if (custom) return { id: custom.id, name: custom.name, animated: false };
+
     const cached = cachedEmoji(data, client);
     if (cached) {
         return { id: cached.id, name: cached.name || emoji.name || 'emoji', animated: cached.animated === true };
@@ -280,6 +287,13 @@ function messageEmoji(data, client = null, fallback = '') {
     const emoji = parseEmojiData(data);
     if (!emoji) return fallback;
     if (!emoji.id) return emoji.name || fallback;
+
+    const custom = tintedEmojiForSource(
+        MUSIC_EMOJIS,
+        _subscriptionEmojiMapsByClientId.get(clientKey(client)),
+        emoji,
+    );
+    if (custom) return `<:${custom.name}:${custom.id}>`;
 
     // ── Primary: use the cached emoji object (guild or application) ─────────
     const cached = cachedEmoji(data, client);

@@ -543,7 +543,7 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
     return [row1, row2];
 }
 
-function buildMusicComponents({ liked = false, paused = false, artistTracks = [], selectedFilter = 'clear', selectedArtistIndex = null, showControls = true, compactControls = false, tokenObj = null }) {
+function buildMusicComponents({ liked = false, paused = false, artistTracks = [], selectedFilter = 'clear', selectedArtistIndex = null, showControls = true, compactControls = false, tokenObj = null, client = null }) {
     const rows = [];
 
     if (showControls && artistTracks.length > 0) {
@@ -553,14 +553,14 @@ function buildMusicComponents({ liked = false, paused = false, artistTracks = []
                 label: 'Suggest For You',
                 value: ARTIST_MENU_HEADER_VALUE,
                 description: 'Songs from the same artist',
-                emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.artistTop),
+                emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.artistTop, client, '🎤'),
                 default: safeSelectedArtistIndex === null,
             },
             ...artistTracks.slice(0, 6).map((t, i) => ({
                 label: (t.info.title || 'Unknown').slice(0, 99),
                 value: String(i),
                 description: `${shortDuration(t.info.length)} · ${(t.info.author || '').slice(0, 50)}`.slice(0, 99),
-                emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.artistTop),
+                emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.artistTop, client, '🎤'),
                 default: safeSelectedArtistIndex === i,
             })),
         ];
@@ -579,6 +579,7 @@ function buildMusicComponents({ liked = false, paused = false, artistTracks = []
             .setPlaceholder(` Current Filter : ${activeFilterName}`)
             .addOptions(FILTER_OPTIONS.map(option => ({
                 ...option,
+                emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters, client, option.emoji),
                 default: option.value === safeSelectedFilter,
             })));
         rows.push(new ActionRowBuilder().addComponents(filterMenu));
@@ -939,6 +940,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
             showControls: true,
             compactControls: compactPlayLayout,
             tokenObj,
+            client: TrueMusic,
         })
         : [];
 
@@ -6329,7 +6331,7 @@ module.exports = {
                 let completed = false;
 
                         const platformOptions = [
-                            { label: 'Smart Search', value: 'auto', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.smartSearch), description: 'All Source' },
+                            { label: 'Smart Search', value: 'auto', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.smartSearch, TrueMusic, '🔎'), description: 'All Source' },
                             { label: 'YouTube', value: 'ytsearch', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.platforms.ytsearch) },
                             { label: 'YouTube Music', value: 'ytmsearch', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.platforms.ytmsearch) },
                     { label: 'SoundCloud', value: 'scsearch', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.platforms.scsearch) },

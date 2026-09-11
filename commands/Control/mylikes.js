@@ -204,23 +204,23 @@ module.exports = {
             return new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
                     .setCustomId(`ml_prev_${message.id}`)
-                    .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.pagePrev))
+                    .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.pagePrev, client))
                     .setStyle(ButtonStyle.Secondary)
                     .setDisabled(page === 0),
                 new ButtonBuilder()
                     .setCustomId(`ml_next_${message.id}`)
-                    .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.pageNext))
+                    .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.pageNext, client))
                     .setStyle(ButtonStyle.Secondary)
                     .setDisabled(page >= pages - 1),
                 new ButtonBuilder()
                     .setCustomId(`ml_all_${message.id}`)
-                    .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.skip))
+                    .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.skip, client))
                     .setLabel('Play All')
                     .setStyle(ButtonStyle.Secondary)
                     .setDisabled(total === 0),
                 new ButtonBuilder()
                     .setCustomId(`ml_close_${message.id}`)
-                    .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.stop))
+                    .setEmoji(MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.stop, client))
                     .setLabel('Close')
                     .setStyle(ButtonStyle.Danger),
             );
@@ -238,7 +238,7 @@ module.exports = {
                         label: r.title.length > 99 ? r.title.slice(0, 96) + '…' : r.title,
                         value: String(offset + i),
                         description: `${fmt(r.duration)}`.slice(0, 99),
-                        emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.like),
+                        emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.like, client),
                     })))
             );
         }

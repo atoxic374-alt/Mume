@@ -16,6 +16,12 @@ function sourceEntries(musicEmojis) {
         like: { key: 'like', emoji: musicEmojis.like, fallback: '👍' },
         dislike: { key: 'dislike', emoji: musicEmojis.dislike, fallback: '👎' },
         settings: { key: 'settings', emoji: musicEmojis.settings, fallback: '⚙️' },
+        filters: { key: 'filters', emoji: musicEmojis.filters, fallback: '🎛️' },
+        artistTop: { key: 'artistTop', emoji: musicEmojis.artistTop, fallback: '🎤' },
+        smartSearch: { key: 'smartSearch', emoji: musicEmojis.smartSearch, fallback: '🔎' },
+        pageNext: { key: 'pageNext', emoji: musicEmojis.pageNext, fallback: '▶️' },
+        pagePrev: { key: 'pagePrev', emoji: musicEmojis.pagePrev, fallback: '◀️' },
+        clear: { key: 'clear', emoji: musicEmojis.clear, fallback: '🧹' },
     };
 }
 
