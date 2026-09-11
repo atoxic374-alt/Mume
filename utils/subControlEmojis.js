@@ -15,6 +15,7 @@ function sourceEntries(musicEmojis) {
         volumeUp: { key: 'volumeUp', emoji: musicEmojis.volumeUp, fallback: '🔊' },
         like: { key: 'like', emoji: musicEmojis.like, fallback: '👍' },
         dislike: { key: 'dislike', emoji: musicEmojis.dislike, fallback: '👎' },
+        settings: { key: 'settings', emoji: musicEmojis.settings, fallback: '⚙️' },
     };
 }
 
@@ -90,7 +91,19 @@ function controlEmojiData(map, key, fallback) {
     return item?.unicode || fallback;
 }
 
+function tintedEmojiForSource(musicEmojis, map, sourceEmoji) {
+    const sourceId = emojiId(sourceEmoji);
+    if (!sourceId || !map) return null;
+    const entries = sourceEntries(musicEmojis);
+    for (const [key, entry] of Object.entries(entries)) {
+        if (emojiId(entry.emoji) !== sourceId) continue;
+        const item = map[key];
+        if (item?.id && item?.name) return { id: item.id, name: item.name };
+    }
+    return null;
+}
 module.exports = {
     createTintedControlEmojis,
     controlEmojiData,
+    tintedEmojiForSource,
 };

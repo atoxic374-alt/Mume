@@ -2983,6 +2983,8 @@ module.exports = {
             failIfNotExists: false,
         });
         liftDiscordClientLimits(TrueMusic);
+        const subscriptionTokenObj = (store.get('tokens') || []).find(entry => entry.token === token);
+        MUSIC_EMOJIS.setSubscriptionEmojiMap(TrueMusic, subscriptionTokenObj?.controlEmojis || null);
 
 
         runningBots.set(token, TrueMusic);

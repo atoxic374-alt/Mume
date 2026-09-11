@@ -2738,6 +2738,7 @@ module.exports = {
                                     if (updated?.controlEmojis) {
                                         t.controlEmojis = updated.controlEmojis;
                                         t.controlEmojiColor = updated.controlEmojiColor;
+                                        MUSIC_EMOJIS.setSubscriptionEmojiMap(runningBots.get(t.token), t.controlEmojis);
                                     }
                                 });
                                 store.set('tokens', tokens);

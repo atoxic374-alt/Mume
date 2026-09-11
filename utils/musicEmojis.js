@@ -1,5 +1,7 @@
 'use strict';
 
+const { tintedEmojiForSource } = require('./subControlEmojis');
+
 const MUSIC_EMOJIS = {
     loop:        { id: '1511836496053796879', name: 'loop' },
     volumeUp:    { id: '1511836494057312359', name: 'volumeUp' },
@@ -40,6 +42,7 @@ const MUSIC_EMOJIS = {
 // allowing cachedEmoji() to find them in client.application.emojis.cache.
 let _emojiIdMap = {};
 const _emojiMapsByClientId = new Map();
+const _subscriptionEmojiMapsByClientId = new Map();
 
 function clientKey(client = null) {
     return client?.application?.id || client?.user?.id || 'global';
@@ -60,6 +63,19 @@ function emojiMapFor(client = null) {
         if (_emojiMapsByClientId.has(key)) return _emojiMapsByClientId.get(key);
     }
     return _emojiIdMap;
+}
+
+function setSubscriptionEmojiMap(client, map) {
+    const key = clientKey(client);
+    if (!client || !map || typeof map !== 'object' || !Object.keys(map).length) {
+        _subscriptionEmojiMapsByClientId.delete(key);
+        return;
+    }
+    _subscriptionEmojiMapsByClientId.set(key, map);
+}
+
+function clearSubscriptionEmojiMap(client) {
+    if (client) _subscriptionEmojiMapsByClientId.delete(clientKey(client));
 }
 
 function reactionCacheKey(client, emojiId) {
@@ -354,8 +370,21 @@ async function react(message, emojiData, fallback = null, client = null) {
     const emoji = parseEmojiData(emojiData);
 
     if (emoji?.id) {
+        const custom = tintedEmojiForSource(
+            MUSIC_EMOJIS,
+            _subscriptionEmojiMapsByClientId.get(clientKey(client)),
+            emoji,
+        );
+        let reactionEmoji = emoji;
+        if (custom) {
+            try {
+                return await message.react(`${custom.name}:${custom.id}`);
+            } catch {
+                // Continue with the original/default emoji path.
+            }
+        }
         // ── Fast path: startup cache hit ─────────────────────────────────────
-        const cacheKey = reactionCacheKey(client, emoji.id);
+        const cacheKey = reactionCacheKey(client, reactionEmoji.id);
         if (_reactionCache.has(cacheKey)) {
             const cached = _reactionCache.get(cacheKey);
             try {
@@ -365,31 +394,31 @@ async function react(message, emojiData, fallback = null, client = null) {
                 // Application emojis often need the string form for reactions.
                 if (cached && typeof cached === 'object' && cached.id) {
                     try {
-                        const reactName = cached.name || emoji.name || 'emoji';
+                        const reactName = cached.name || reactionEmoji.name || emoji.name || 'emoji';
                         return await message.react(`${reactName}:${cached.id}`);
                     } catch {
                         // String form also failed — evict cache entry
                     }
                 }
                 _reactionCache.delete(cacheKey);
-                _reactionFailedIds.add(emoji.id);
+                _reactionFailedIds.add(reactionEmoji.id);
             }
         }
 
         // ── Slow path: cache not yet populated (startup race) ─────────────────
-        if (!_reactionFailedIds.has(emoji.id)) {
-            const name = emoji.name || 'emoji';
+        if (!_reactionFailedIds.has(reactionEmoji.id)) {
+            const name = reactionEmoji.name || emoji.name || 'emoji';
             // Prefer the mapped application emoji ID so Discord can resolve it
-            const mappedId = emojiMapFor(client)[emoji.id];
-            if (mappedId && mappedId !== emoji.id) {
+            const mappedId = emojiMapFor(client)[reactionEmoji.id];
+            if (mappedId && mappedId !== reactionEmoji.id) {
                 try {
                     return await message.react(`${name}:${mappedId}`);
                 } catch { /* fall through to original ID */ }
             }
             try {
-                return await message.react(`${name}:${emoji.id}`);
+                return await message.react(`${name}:${reactionEmoji.id}`);
             } catch {
-                _reactionFailedIds.add(emoji.id);
+                _reactionFailedIds.add(reactionEmoji.id);
             }
         }
     }
@@ -404,6 +433,8 @@ async function react(message, emojiData, fallback = null, client = null) {
 
 module.exports = MUSIC_EMOJIS;
 module.exports.setEmojiMap        = setEmojiMap;
+module.exports.setSubscriptionEmojiMap = setSubscriptionEmojiMap;
+module.exports.clearSubscriptionEmojiMap = clearSubscriptionEmojiMap;
 module.exports.loadMusicEmojis    = loadMusicEmojis;
 module.exports.emojiStr           = emojiStr;
 module.exports.parseEmojiData     = parseEmojiData;

@@ -298,6 +298,11 @@ client.once('clientReady', () => {
           const tokensArray = store.get('tokens') || [];
     
           const tokensToRemove = tokensArray.filter(tokenEntry => tokenEntry.code === log.code);
+          const { runningBots: subscriptionBots } = require('./music');
+          const subscriptionEmojis = require('./utils/musicEmojis');
+          tokensToRemove.forEach(tokenEntry => {
+            subscriptionEmojis.clearSubscriptionEmojiMap(subscriptionBots.get(tokenEntry.token));
+          });
     
           const botsArray = store.get('bots') || [];
     
