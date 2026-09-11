@@ -22,6 +22,8 @@ const { check } = require('../../utils/rateLimit');
 const MUSIC_EMOJIS = require('../../utils/musicEmojis');
 const { getEmbedColor, refreshEmbedColor } = require('../../utils/embedColor');
 const { createTintedControlEmojis } = require('../../utils/subControlEmojis');
+const { buildSubscriptionBotsAddedDm } = require('../../utils/subscriptionDm');
+const { getSubBotProfile } = require('../../utils/subBotProfile');
 
 const SETTINGS_PROCESS_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PROCESS_CONCURRENCY || 16));
 const SETTINGS_PROFILE_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PROFILE_CONCURRENCY || 4));
@@ -93,6 +95,8 @@ const SETTINGS_EMOJI = {
 };
 const activeSmartDistributions = new Set();
 const activeSettingsProcesses = new Set();
+// Prevent two owners from taking the same stock bots while an addition is in progress.
+const activeStockAdditions = new Set();
 
 function resolveSettingsEmoji(client, emojiId) {
     const id = String(emojiId || '');
@@ -386,6 +390,133 @@ module.exports = {
 
         function getClientId(token) {
             try { return Buffer.from(token.split('.')[0], 'base64').toString('utf8'); } catch { return ''; }
+        }
+
+        function inviteLinkForToken(token) {
+            const clientId = getClientId(token);
+            return /^\d{17,20}$/.test(clientId)
+                ? `https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot`
+                : null;
+        }
+
+        async function addStockBotsToSubscription(interaction, code) {
+            if (!isAdmin) {
+                return interaction.reply({ content: '❌ هذا الخيار متاح للأونرات الأساسيين في الكونفق فقط.', flags: MessageFlags.Ephemeral });
+            }
+            if (!check(userId, 'settings_add_stock_bots')) {
+                return interaction.reply({ content: '⚠️ انتظر قليلاً قبل تنفيذ عملية إضافة جديدة.', flags: MessageFlags.Ephemeral });
+            }
+
+            const available = (store.get('bots') || []).length;
+            if (!available) {
+                return interaction.reply({ content: '❌ لا توجد بوتات متاحة في الستوك حالياً.', flags: MessageFlags.Ephemeral });
+            }
+
+            const modalId = `stg_add_bots_${mid}_${Date.now()}`;
+            const modal = new ModalBuilder().setCustomId(modalId).setTitle(`Add Bots — ${code}`);
+            modal.addComponents(new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                    .setCustomId('count')
+                    .setLabel(`عدد البوتات (1-${Math.min(available, 50)})`)
+                    .setPlaceholder(`المتاح في الستوك: ${available}`)
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(true)
+                    .setMaxLength(2),
+            ));
+            await interaction.showModal(modal);
+
+            let submit;
+            try {
+                submit = await interaction.awaitModalSubmit({
+                    filter: modalInteraction => modalInteraction.customId === modalId && modalInteraction.user.id === userId,
+                    time: 60_000,
+                });
+            } catch {
+                return;
+            }
+
+            const countText = submit.fields.getTextInputValue('count').trim();
+            const count = Number.parseInt(countText, 10);
+            if (!/^\d+$/.test(countText) || count < 1 || count > 50) {
+                return submit.reply({ content: '❌ أدخل عدداً صحيحاً من 1 إلى 50 بوت.', flags: MessageFlags.Ephemeral });
+            }
+            if (activeStockAdditions.has(code)) {
+                return submit.reply({ content: '⚠️ توجد عملية إضافة بوتات جارية لهذا الاشتراك. حاول بعد انتهائها.', flags: MessageFlags.Ephemeral });
+            }
+
+            activeStockAdditions.add(code);
+            await submit.deferReply({ flags: MessageFlags.Ephemeral });
+            try {
+                const timeData = store.get('time') || [];
+                const subscription = timeData.find(entry => entry.code === code);
+                const stock = store.get('bots') || [];
+                if (!subscription) {
+                    return submit.editReply('❌ لم يعد هذا الاشتراك موجوداً.');
+                }
+                if (stock.length < count) {
+                    return submit.editReply(`❌ الستوك غير كافٍ الآن. المتاح: \`${stock.length}\` بوت.`);
+                }
+
+                // Mutate the three related stores synchronously before any network work,
+                // so no stock token can be assigned to two subscriptions.
+                const assigned = stock.splice(0, count);
+                const allTokens = store.get('tokens') || [];
+                const knownTokens = new Set(allTokens.map(entry => entry.token).filter(Boolean));
+                if (assigned.some(bot => !bot?.token || knownTokens.has(bot.token))) {
+                    stock.unshift(...assigned);
+                    return submit.editReply('❌ تعذر استخدام بوت من الستوك لأن بياناته مكررة أو غير صالحة. لم يتم إجراء أي تغيير.');
+                }
+
+                const profile = getSubBotProfile();
+                const paused = Boolean(subscription.pausedAt);
+                assigned.forEach(bot => allTokens.push({
+                    token: bot.token,
+                    Server: subscription.server,
+                    channel: null,
+                    chat: null,
+                    status: profile.status || null,
+                    client: subscription.user,
+                    code,
+                    paused,
+                }));
+                subscription.botsCount = Number(subscription.botsCount || 0) + assigned.length;
+                store.set('bots', stock);
+                store.set('tokens', allTokens);
+                store.set('time', timeData);
+
+                if (!paused) {
+                    try {
+                        const { runsys } = require('../../music');
+                        assigned.forEach(bot => runsys(bot.token, subscription.server).catch(error =>
+                            console.error('[settings:addBots] runsys error:', error?.message || error),
+                        ));
+                    } catch (error) {
+                        console.error('[settings:addBots] unable to start new bots:', error?.message || error);
+                    }
+                }
+
+                const ownerId = parseUserId(subscription.user) || primaryOwnerIdFor(code);
+                const botLinks = assigned.map(bot => inviteLinkForToken(bot.token)).filter(Boolean);
+                const owner = ownerId ? await client.users.fetch(ownerId).catch(() => null) : null;
+                if (owner) {
+                    await owner.send({
+                        embeds: [buildSubscriptionBotsAddedDm(client, {
+                            code,
+                            addedBots: assigned.length,
+                            totalBots: subscription.botsCount,
+                            botLinks,
+                        })],
+                    }).catch(() => {});
+                }
+
+                await submit.editReply(`✅ تمت إضافة \`${assigned.length}\` بوت من الستوك إلى الاشتراك \`${code}\`. تم إرسال الإيمبد والروابط لصاحب الاشتراك في الخاص.`);
+                await updatePanel();
+            } catch (error) {
+                console.error('[settings:addBots] failed:', error);
+                await submit.editReply('❌ حدث خطأ أثناء إضافة البوتات. تحقق من السجل ثم حاول مجدداً.').catch(() => {});
+            } finally {
+                activeStockAdditions.delete(code);
+            }
         }
 
                 function getBotVoiceInfo(t) {
@@ -2070,6 +2201,14 @@ module.exports = {
                     const row2 = new ActionRowBuilder().addComponents(
                         new ButtonBuilder().setCustomId(`stg_${mid}_close`).setLabel('Close').setStyle(ButtonStyle.Danger)
                     );
+                    if (isAdmin) {
+                        row2.addComponents(
+                            new ButtonBuilder()
+                                .setCustomId(`stg_${mid}_add_bots`)
+                                .setLabel('Add Bots')
+                                .setStyle(ButtonStyle.Success),
+                        );
+                    }
                     if (uniqueCodes.length > 1) {
                         row2.addComponents(new ButtonBuilder().setCustomId(`stg_${mid}_back_to_select`).setLabel('Change Subscription').setStyle(ButtonStyle.Secondary));
                     }
@@ -2343,6 +2482,10 @@ module.exports = {
                         stopChildCollector('replaced');
                         currentPanel = 'SELECT';
                         return updatePanel(i);
+                    }
+
+                    if (i.customId === `stg_${mid}_add_bots`) {
+                        return addStockBotsToSubscription(i, selectedCode);
                     }
 
                     if (i.customId === `stg_${mid}_back_to_main`) {
