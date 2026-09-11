@@ -9,6 +9,7 @@ const cache = new Map();
 const MAX_CACHE_ITEMS = 160;
 const MAX_DISK_CACHE_ITEMS = Math.max(100, Number(process.env.TINT_ICON_DISK_CACHE_ITEMS || 5000));
 const DISK_CACHE_DIR = path.resolve(process.env.TINT_ICON_CACHE_DIR || path.join(process.cwd(), '.cache', 'tinted-thumbnails'));
+const TINT_ALGORITHM_VERSION = 'v2-fidelity';
 let lastDiskPruneAt = 0;
 
 function normalizeColor(input) {
@@ -276,7 +277,7 @@ function tintPngFile(filePath, color) {
     const resolvedPath = path.resolve(filePath);
     const stat = fs.statSync(resolvedPath);
     const { value } = colorParts(color);
-    const cacheKey = `${resolvedPath}:${stat.mtimeMs}:${stat.size}:${value}`;
+    const cacheKey = `${TINT_ALGORITHM_VERSION}:${resolvedPath}:${stat.mtimeMs}:${stat.size}:${value}`;
     const cached = cache.get(cacheKey);
     if (cached) return cached;
 
