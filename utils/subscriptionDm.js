@@ -68,7 +68,7 @@ function buildSubscriptionTimeUpdatedDm(client, data = {}) {
 }
 
 function buildSubscriptionBotsAddedDm(client, data = {}) {
-    return baseEmbed(
+    const embed = baseEmbed(
         client,
         'Subscription Updated | تم تحديث الاشتراك',
         [
@@ -80,6 +80,10 @@ function buildSubscriptionBotsAddedDm(client, data = {}) {
         field('Added Bots', 'البوتات المضافة', `\`${data.addedBots || 0}\``),
         field('Total Bots', 'اجمالي البوتات', `\`${data.totalBots || 0}\``),
     );
+    if (Array.isArray(data.links) && data.links.length) {
+        embed.addFields(field('Bot Links', 'روابط البوتات', data.links.join('\n'), false));
+    }
+    return embed;
 }
 
 function buildSubscriptionRemovedDm(client, data = {}) {

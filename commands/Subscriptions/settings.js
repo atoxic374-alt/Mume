@@ -15,13 +15,14 @@ const {
     MessageFlags
 } = require('discord.js');
 const { owners, TwitchUrl } = require('../../config');
-const { runningBots, botLastActivity, restorePoruNodes } = require('../../music');
+const { runningBots, botLastActivity, restorePoruNodes, runsys } = require('../../music');
 const { getDisplay, setDisplay } = require('../../utils/display');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
 const MUSIC_EMOJIS = require('../../utils/musicEmojis');
 const { getEmbedColor, refreshEmbedColor } = require('../../utils/embedColor');
 const { createTintedControlEmojis } = require('../../utils/subControlEmojis');
+const { buildSubscriptionBotsAddedDm } = require('../../utils/subscriptionDm');
 
 const SETTINGS_PROCESS_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PROCESS_CONCURRENCY || 16));
 const SETTINGS_PROFILE_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PROFILE_CONCURRENCY || 4));
@@ -93,6 +94,8 @@ const SETTINGS_EMOJI = {
 };
 const activeSmartDistributions = new Set();
 const activeSettingsProcesses = new Set();
+// Prevent two Settings panels from taking the same stock bots at once.
+const activeStockAssignments = new Set();
 
 function resolveSettingsEmoji(client, emojiId) {
     const id = String(emojiId || '');
@@ -386,6 +389,158 @@ module.exports = {
 
         function getClientId(token) {
             try { return Buffer.from(token.split('.')[0], 'base64').toString('utf8'); } catch { return ''; }
+        }
+
+        function isPrimarySubscriptionOwner(code = selectedCode) {
+            return primaryOwnerIdFor(code) === userId;
+        }
+
+        function buildInviteLinks(tokenEntries) {
+            return tokenEntries.map((entry, index) => {
+                const clientId = getClientId(entry.token);
+                if (!/^\d{17,20}$/.test(clientId)) return `**Bot ${index + 1}:** \`Link unavailable\``;
+                return `**Bot ${index + 1}:** [Invite Bot](https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot)`;
+            });
+        }
+
+        async function notifyOwnerOfAddedBots(code, addedTokens, totalBots) {
+            const ownerId = primaryOwnerIdFor(code);
+            if (!ownerId) return;
+            const owner = await client.users.fetch(ownerId).catch(() => null);
+            if (!owner) return;
+
+            // Discord fields are limited to 1024 characters. Keep the summary and
+            // the first page of links together, then continue in matching embeds.
+            const links = buildInviteLinks(addedTokens);
+            const chunks = [];
+            let chunk = [];
+            let chunkLength = 0;
+            for (const link of links) {
+                // A field value may not exceed 1024 characters; leave a small
+                // margin for Discord markdown handling as well as keeping pages readable.
+                if (chunk.length && (chunk.length >= 10 || chunkLength + link.length + 1 > 950)) {
+                    chunks.push(chunk);
+                    chunk = [];
+                    chunkLength = 0;
+                }
+                chunk.push(link);
+                chunkLength += link.length + 1;
+            }
+            if (chunk.length) chunks.push(chunk);
+            let page = 0;
+            const pageCount = Math.max(1, chunks.length);
+            const previousId = `stg_add_links_prev_${mid}_${Date.now()}`;
+            const nextId = `stg_add_links_next_${mid}_${Date.now()}`;
+
+            function pageEmbed() {
+                const pageLinks = chunks[page] || [];
+                if (page === 0) {
+                    return buildSubscriptionBotsAddedDm(client, {
+                        code,
+                        addedBots: addedTokens.length,
+                        totalBots,
+                        links: pageLinks,
+                    }).setFooter({ text: `Subscription Notice | اشعار الاشتراك • ${page + 1}/${pageCount}` });
+                }
+                return new EmbedBuilder()
+                    .setTitle(`Bot Links — ${code}`)
+                    .setDescription(pageLinks.join('\n'))
+                    .setColor(getEmbedColor(client))
+                    .setFooter({ text: `Subscription Notice | اشعار الاشتراك • ${page + 1}/${pageCount}` })
+                    .setTimestamp();
+            }
+
+            function pageRows(disabled = false) {
+                if (pageCount === 1) return [];
+                return [new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(previousId)
+                        .setLabel('Previous | السابق')
+                        .setStyle(ButtonStyle.Secondary)
+                        .setDisabled(disabled || page === 0),
+                    new ButtonBuilder()
+                        .setCustomId(nextId)
+                        .setLabel('Next | التالي')
+                        .setStyle(ButtonStyle.Secondary)
+                        .setDisabled(disabled || page >= pageCount - 1),
+                )];
+            }
+
+            const dmMessage = await owner.send({ embeds: [pageEmbed()], components: pageRows() }).catch(() => null);
+            if (!dmMessage || pageCount === 1) return;
+
+            const linksCollector = dmMessage.createMessageComponentCollector({
+                componentType: ComponentType.Button,
+                filter: interaction => interaction.user.id === ownerId
+                    && (interaction.customId === previousId || interaction.customId === nextId),
+                time: 5 * 60 * 1000,
+            });
+            linksCollector.on('collect', async interaction => {
+                if (interaction.customId === previousId) page = Math.max(0, page - 1);
+                if (interaction.customId === nextId) page = Math.min(pageCount - 1, page + 1);
+                await interaction.update({ embeds: [pageEmbed()], components: pageRows() }).catch(() => {});
+            });
+            linksCollector.on('end', () => {
+                dmMessage.edit({ components: pageRows(true) }).catch(() => {});
+            });
+        }
+
+        async function addStockBotsToSubscription(code, count) {
+            if (!isPrimarySubscriptionOwner(code)) throw new Error('هذا الخيار متاح لمالك الاشتراك الأساسي فقط.');
+            if (!Number.isInteger(count) || count < 1) throw new Error('عدد البوتات غير صحيح.');
+            if (activeStockAssignments.has(code)) throw new Error('توجد عملية إضافة قيد التنفيذ لهذا الاشتراك.');
+
+            activeStockAssignments.add(code);
+            try {
+                const freshTokens = store.get('tokens') || [];
+                const subscriptionTokens = freshTokens.filter(token => token.code === code);
+                const template = subscriptionTokens[0];
+                const subInfo = (store.get('time') || []).find(entry => entry.code === code);
+                const serverId = template?.Server || subInfo?.server;
+                if (!template || !serverId) throw new Error('تعذر العثور على إعدادات الاشتراك أو السيرفر.');
+
+                const stock = [...(store.get('bots') || [])];
+                if (stock.length < count) throw new Error(`المتاح في الستوك الآن: ${stock.length} بوت.`);
+
+                const assigned = stock.splice(0, count);
+                const inherited = { ...template };
+                const addedEntries = assigned.map(bot => ({
+                    ...inherited,
+                    token: bot.token,
+                    // A newly assigned bot must be configured independently of
+                    // the original bot's active voice channel.
+                    channel: null,
+                    client: primaryOwnerIdFor(code) || template.client,
+                    code,
+                    Server: serverId,
+                    awaitingReplacement: false,
+                    invalidTokenNotifiedAt: null,
+                    invalidBotId: null,
+                    invalidBotName: null,
+                }));
+
+                store.set('bots', stock);
+                store.set('tokens', [...freshTokens, ...addedEntries]);
+                const timeData = store.get('time') || [];
+                const entry = timeData.find(item => item.code === code);
+                if (entry) {
+                    // Use the actual stored subscription count as the source of truth.
+                    entry.botsCount = subscriptionTokens.length + addedEntries.length;
+                    store.set('time', timeData);
+                }
+
+                // Persist before starting clients so a restart can safely recover
+                // every allocated bot even if one login fails.
+                await Promise.allSettled(addedEntries.map(entry =>
+                    runsys(entry.token, serverId).catch(error => {
+                        console.error(`[settings:add-bots] failed to start …${String(entry.token).slice(-6)}:`, error?.message || error);
+                    }),
+                ));
+                await notifyOwnerOfAddedBots(code, addedEntries, subscriptionTokens.length + addedEntries.length);
+                return { added: addedEntries.length, total: subscriptionTokens.length + addedEntries.length };
+            } finally {
+                activeStockAssignments.delete(code);
+            }
         }
 
                 function getBotVoiceInfo(t) {
@@ -2070,6 +2225,14 @@ module.exports = {
                     const row2 = new ActionRowBuilder().addComponents(
                         new ButtonBuilder().setCustomId(`stg_${mid}_close`).setLabel('Close').setStyle(ButtonStyle.Danger)
                     );
+                    if (isPrimarySubscriptionOwner(selectedCode)) {
+                        row2.addComponents(
+                            new ButtonBuilder()
+                                .setCustomId(`stg_${mid}_add_bots`)
+                                .setLabel('Add Bots')
+                                .setStyle(ButtonStyle.Success),
+                        );
+                    }
                     if (uniqueCodes.length > 1) {
                         row2.addComponents(new ButtonBuilder().setCustomId(`stg_${mid}_back_to_select`).setLabel('Change Subscription').setStyle(ButtonStyle.Secondary));
                     }
@@ -2331,6 +2494,28 @@ module.exports = {
                         stopChildCollector('replaced');
                         currentPanel = i.values[0];
                         return updatePanel(i);
+                    }
+
+                    if (i.customId === `stg_${mid}_add_bots`) {
+                        if (!isPrimarySubscriptionOwner(selectedCode)) {
+                            return i.reply({ content: '❌ إضافة البوتات متاحة لمالك الاشتراك الأساسي فقط.', flags: MessageFlags.Ephemeral });
+                        }
+                        const available = (store.get('bots') || []).length;
+                        if (!available) {
+                            return i.reply({ content: '❌ لا توجد بوتات متاحة في الستوك حالياً.', flags: MessageFlags.Ephemeral });
+                        }
+                        const modal = new ModalBuilder()
+                            .setCustomId(createSettingsModalId('add_bots', { code: selectedCode }))
+                            .setTitle('Add Bots From Stock | إضافة بوتات');
+                        modal.addComponents(new ActionRowBuilder().addComponents(
+                            new TextInputBuilder()
+                                .setCustomId('count')
+                                .setLabel(`Bot count | العدد (المتاح: ${available})`)
+                                .setPlaceholder(`1-${available}`)
+                                .setRequired(true)
+                                .setStyle(TextInputStyle.Short),
+                        ));
+                        return i.showModal(modal);
                     }
 
                     if (i.customId === `stg_${mid}_close`) {
@@ -2690,10 +2875,42 @@ module.exports = {
                             if (!interaction.isModalSubmit()) return;
                             if (!interaction.customId.startsWith(`stg_mod_${mid}_`)) return;
 
+                            if (interaction.user.id !== userId) {
+                                return interaction.reply({ content: '❌ هذه العملية ليست لك.', flags: MessageFlags.Ephemeral }).catch(() => {});
+                            }
+
                                     await interaction.deferUpdate();
                                     const modalContext = consumeSettingsModalContext(interaction.customId);
                                     if (!modalContext) return;
                             const modalCode = modalContext.code || selectedCode;
+
+                            if (modalContext.type === 'add_bots') {
+                                const count = Number(interaction.fields.getTextInputValue('count').trim());
+                                try {
+                                    const result = await addStockBotsToSubscription(modalCode, count);
+                                    await mainMsg.edit({
+                                        content: '',
+                                        embeds: [new EmbedBuilder()
+                                            .setTitle('Bots Added To Subscription')
+                                            .setDescription('تمت إضافة البوتات من الستوك بنجاح، وتم إرسال روابط الدعوة لصاحب الاشتراك في الخاص.')
+                                            .addFields(
+                                                { name: 'Subscription ID', value: `\`${modalCode}\``, inline: true },
+                                                { name: 'Added Bots', value: `\`${result.added}\``, inline: true },
+                                                { name: 'Total Bots', value: `\`${result.total}\``, inline: true },
+                                            )
+                                            .setColor(getEmbedColor(client))],
+                                        components: [],
+                                    });
+                                } catch (error) {
+                                    await mainMsg.edit({
+                                        content: `❌ ${String(error?.message || error).slice(0, 180)}`,
+                                        embeds: [],
+                                        components: [],
+                                    });
+                                }
+                                setTimeout(() => updatePanel(), 3000);
+                                return;
+                            }
 
                             if (modalContext.type === 'pin_count') {
                                 const pinState = modalContext.state;
