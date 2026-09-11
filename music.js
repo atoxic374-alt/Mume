@@ -612,8 +612,6 @@ function buildNowPlayingPayload(TrueMusic, tokenObj, track, requester, options =
         selectedFilter: options.selectedFilter || 'clear',
         selectedArtistIndex: options.selectedArtistIndex ?? null,
         showControls: settings.buttons,
-        tokenObj,
-        client: TrueMusic,
     });
 
     if (settings.embeds) {
