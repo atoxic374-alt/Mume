@@ -2152,7 +2152,7 @@ module.exports = {
                                         setSettingsEmoji(client, new ButtonBuilder()
                                             .setCustomId(`stg_${mid}_control_emojis`)
                                             .setLabel('Color Control Emojis')
-                                            .setStyle(ButtonStyle.Primary), SETTINGS_EMOJI.controlEmojis),
+                                            .setStyle(display.controlEmojiColor ? ButtonStyle.Success : ButtonStyle.Secondary), SETTINGS_EMOJI.controlEmojis),
                                         new ButtonBuilder()
                                             .setCustomId(`stg_${mid}_toggle_control_bar`)
                                             .setLabel(`Bar Color: ${display.controlBarColorEnabled ? 'ON' : 'OFF'}`)
@@ -2410,8 +2410,8 @@ module.exports = {
                 modal.addComponents(new ActionRowBuilder().addComponents(
                     new TextInputBuilder()
                         .setCustomId('color')
-                        .setLabel('Hex color')
-                        .setPlaceholder('#5865F2')
+                        .setLabel('Hex color or S for bot avatar color')
+                        .setPlaceholder('#5865F2 أو S')
                         .setRequired(true)
                         .setStyle(TextInputStyle.Short)
                 ));
@@ -2714,22 +2714,28 @@ module.exports = {
 
                             if (modalContext.type === 'control_color') {
                                 const rawColor = interaction.fields.getTextInputValue('color').trim();
-                                if (!/^#?[0-9a-fA-F]{6}$/.test(rawColor)) {
+                                const useAvatarColor = /^s$/i.test(rawColor);
+                                if (!useAvatarColor && !/^#?[0-9a-fA-F]{6}$/.test(rawColor)) {
                                     await mainMsg.edit({
-                                        content: '❌ اللون غير صحيح. استخدم Hex من 6 خانات مثل `#5865F2`.',
+                                        content: '❌ اللون غير صحيح. استخدم Hex من 6 خانات مثل `#5865F2` أو اكتب `S` لاستخدام لون أفاتار كل بوت.',
                                         embeds: [],
                                         components: [],
                                     });
                                     setTimeout(() => updatePanel(), 2000);
                                     return;
                                 }
-                                const color = `#${rawColor.replace(/^#/, '')}`;
+                                const color = useAvatarColor ? 'S' : `#${rawColor.replace(/^#/, '')}`;
                                 const selected = getSelectedTokens({ code: modalCode });
                                 setDisplay(modalCode, { controlEmojiColor: color });
-                                await runBotProcess(`Color Control Emojis — ${color}`, selected, async (t, bot) => {
+                                await runBotProcess(`Color Control Emojis — ${useAvatarColor ? 'Avatar' : color}`, selected, async (t, bot) => {
                                     if (!bot?.application?.emojis) throw new Error('البوت غير متصل أو لا يملك صلاحية الإيموجيات');
-                                    t.controlEmojis = await createTintedControlEmojis(bot, MUSIC_EMOJIS, color, t.controlEmojis || {});
-                                    t.controlEmojiColor = color;
+                                    let appliedColor = color;
+                                    if (useAvatarColor) {
+                                        await refreshEmbedColor(bot);
+                                        appliedColor = getEmbedColor(bot);
+                                    }
+                                    t.controlEmojis = await createTintedControlEmojis(bot, MUSIC_EMOJIS, appliedColor, t.controlEmojis || {});
+                                    t.controlEmojiColor = appliedColor;
                                 }, { concurrency: Math.min(3, Math.max(1, selected.length)), code: modalCode });
                                 tokens = store.get('tokens') || [];
                                 const byToken = new Map(selected.map(t => [t.token, t]));
@@ -2738,7 +2744,11 @@ module.exports = {
                                     if (updated?.controlEmojis) {
                                         t.controlEmojis = updated.controlEmojis;
                                         t.controlEmojiColor = updated.controlEmojiColor;
-                                        MUSIC_EMOJIS.setSubscriptionEmojiMap(runningBots.get(t.token), t.controlEmojis);
+                                        const updatedBot = runningBots.get(t.token);
+                                        MUSIC_EMOJIS.setSubscriptionEmojiMap(updatedBot, t.controlEmojis);
+                                        for (const player of updatedBot?.poru?.players?.values?.() || []) {
+                                            if (player?.data) player.data._lastProgressBarCache = null;
+                                        }
                                     }
                                 });
                                 store.set('tokens', tokens);

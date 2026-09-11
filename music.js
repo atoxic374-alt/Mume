@@ -448,7 +448,7 @@ function displaySettings(tokenObj) {
         voiceStatus: tokenObj?.voiceStatus ? tokenObj.voiceStatus === 'on' : saved.voiceStatus === true,
         voiceStatusEmoji: tokenObj?.voiceStatusEmoji || saved.voiceStatusEmoji || '🎵',
         controlEmojis: tokenObj?.controlEmojis || saved.controlEmojis || {},
-        controlEmojiColor: tokenObj?.controlEmojiColor || saved.controlEmojiColor || null,
+        controlEmojiColor: tokenObj?.controlEmojiColor || (saved.controlEmojiColor === 'S' ? null : saved.controlEmojiColor) || null,
         controlBarColorEnabled: tokenObj?.controlBarColorEnabled === 'on'
             ? true
             : tokenObj?.controlBarColorEnabled === 'off'
@@ -487,12 +487,13 @@ function shortDuration(ms) {
 function createMusicControlButtons(paused = false, liked = false, { includeLike = true, dangerStop = true, likeInPrevSlot = false, tokenObj = null } = {}) {
     const custom = displaySettings(tokenObj).controlEmojis;
     const emoji = (key, fallback) => MUSIC_EMOJIS.componentEmoji(controlEmojiData(custom, key, fallback), null, fallback);
+    const likeEmoji = liked ? controlEmojiData(custom, 'dislike', '👎') : controlEmojiData(custom, 'like', '👍');
     const row1 = new ActionRowBuilder()
         .addComponents(
             likeInPrevSlot
                 ? new ButtonBuilder()
                     .setCustomId('like')
-                    .setEmoji(MUSIC_EMOJIS.componentEmoji(liked ? MUSIC_EMOJIS.dislike : MUSIC_EMOJIS.like))
+                    .setEmoji(MUSIC_EMOJIS.componentEmoji(likeEmoji, null, liked ? '👎' : '👍'))
                     .setStyle(ButtonStyle.Secondary)
                 : new ButtonBuilder()
                     .setCustomId('prev')
@@ -918,12 +919,12 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
     const artworkUrl = trackArtworkUrl(track, TrueMusic, requester);
     const compactPlayLayout = options.compactPlayLayout === true;
     const embedColor = getEmbedColor(TrueMusic);
-    const subscriptionControlColor = settings.controlBarColorEnabled && settings.controlEmojiColor
+    const subscriptionControlColor = settings.controlEmojiColor
         ? normalizeColorNumber(settings.controlEmojiColor)
         : null;
     const accentColor = subscriptionControlColor || normalizeColorNumber(embedColor);
     const useEmbedAccent = tokenObj?.code
-        ? Boolean(subscriptionControlColor)
+        ? Boolean(settings.controlBarColorEnabled && subscriptionControlColor)
         : options.useEmbedAccent === true;
     const showProgressLabels = options.showProgressLabels === true;
     const progressColor = subscriptionControlColor
