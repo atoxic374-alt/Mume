@@ -1,11 +1,19 @@
 'use strict';
 const { runsys, runningBots, botLastActivity } = require('./music');
 const store = require('./utils/store');
+const {
+  applyProfileToClient,
+  getSubBotProfile,
+  resolveProfileAssets,
+  buildSequentialSubBotNames,
+} = require('./utils/subBotProfile');
 
 // Semaphore: max 5 bots starting simultaneously
 let starting = 0;
 const MAX_CONCURRENT = 5;
 const startQueue = [];
+let profileSyncStarted = false;
+let profileSyncCompleted = false;
 
 // startQueue holds { botData, attempt } to preserve retry state across concurrency waits
 async function tryStart(botData, attempt = 0) {
@@ -47,6 +55,48 @@ async function checkForNewBots() {
       tryStart(botData); // non-blocking
     }
   }
+  if (!profileSyncStarted) {
+    profileSyncStarted = true;
+    setTimeout(() => syncSubscriptionProfiles().catch(error => {
+      profileSyncStarted = false;
+      console.warn('[Manager] subscription profile sync failed:', error?.message || error);
+    }), 60_000).unref?.();
+  }
+}
+
+async function syncSubscriptionProfiles() {
+  if (profileSyncCompleted) return;
+  const tokens = store.get('tokens') || [];
+  const profile = getSubBotProfile();
+  let assets = { avatarData: null, bannerData: null };
+  try { assets = await resolveProfileAssets(profile); } catch (error) {
+    console.warn('[Manager] profile assets unavailable:', error?.message || error);
+  }
+  const byCode = new Map();
+  for (const entry of tokens) {
+    if (!entry?.token || !entry.code) continue;
+    if (!byCode.has(entry.code)) byCode.set(entry.code, []);
+    byCode.get(entry.code).push(entry);
+  }
+  for (const entries of byCode.values()) {
+    const readyEntries = entries.filter(entry => {
+      const bot = runningBots.get(entry.token);
+      return bot?.isReady?.() && bot.user;
+    });
+    if (!readyEntries.length) continue;
+    const existingNames = readyEntries.map(entry => runningBots.get(entry.token).user.username).filter(Boolean);
+    const names = buildSequentialSubBotNames(profile, existingNames, readyEntries.length, { startAt: 1 });
+    for (let index = 0; index < readyEntries.length; index++) {
+      const entry = readyEntries[index];
+      const bot = runningBots.get(entry.token);
+      await applyProfileToClient(bot, entry.token, { profile, assets, name: names[index] })
+        .catch(error => console.warn(`[Manager] profile sync failed for …${String(entry.token).slice(-6)}:`, error?.message || error));
+      entry.profileName = names[index];
+    }
+  }
+  store.set('tokens', tokens);
+  profileSyncCompleted = true;
+  console.log('[Manager] subscription profiles synchronized.');
 }
 
 // Lazy unloading: only destroy truly ORPHANED bots (running but no longer in tokens list).

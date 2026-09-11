@@ -23,6 +23,12 @@ const MUSIC_EMOJIS = require('../../utils/musicEmojis');
 const { getEmbedColor, refreshEmbedColor } = require('../../utils/embedColor');
 const { createTintedControlEmojis } = require('../../utils/subControlEmojis');
 const { buildSubscriptionBotsAddedDm } = require('../../utils/subscriptionDm');
+const {
+    applyProfileToClient,
+    getSubBotProfile,
+    resolveProfileAssets,
+    buildSequentialSubBotNames,
+} = require('../../utils/subBotProfile');
 
 const SETTINGS_PROCESS_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PROCESS_CONCURRENCY || 16));
 const SETTINGS_PROFILE_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PROFILE_CONCURRENCY || 4));
@@ -503,8 +509,15 @@ module.exports = {
                 if (stock.length < count) throw new Error(`المتاح في الستوك الآن: ${stock.length} بوت.`);
 
                 const assigned = stock.splice(0, count);
+                const profile = getSubBotProfile();
+                let assets = { avatarData: null, bannerData: null };
+                try { assets = await resolveProfileAssets(profile); } catch {}
+                const existingNames = subscriptionTokens
+                    .map(entry => runningBots.get(entry.token)?.user?.username)
+                    .filter(Boolean);
+                const names = buildSequentialSubBotNames(profile, existingNames, assigned.length);
                 const inherited = { ...template };
-                const addedEntries = assigned.map(bot => ({
+                const addedEntries = assigned.map((bot, index) => ({
                     ...inherited,
                     token: bot.token,
                     // A newly assigned bot must be configured independently of
@@ -517,6 +530,7 @@ module.exports = {
                     invalidTokenNotifiedAt: null,
                     invalidBotId: null,
                     invalidBotName: null,
+                    profileName: names[index],
                 }));
 
                 store.set('bots', stock);
@@ -536,6 +550,15 @@ module.exports = {
                         console.error(`[settings:add-bots] failed to start …${String(entry.token).slice(-6)}:`, error?.message || error);
                     }),
                 ));
+                await Promise.allSettled(addedEntries.map(async entry => {
+                    const bot = runningBots.get(entry.token);
+                    if (!bot) throw new Error('bot is not running');
+                    await applyProfileToClient(bot, entry.token, {
+                        profile,
+                        assets,
+                        name: entry.profileName,
+                    });
+                }));
                 await notifyOwnerOfAddedBots(code, addedEntries, subscriptionTokens.length + addedEntries.length);
                 return { added: addedEntries.length, total: subscriptionTokens.length + addedEntries.length };
             } finally {

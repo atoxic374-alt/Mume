@@ -129,6 +129,26 @@ function buildSubBotName(profile = getSubBotProfile(), number = null) {
   return `${profile.prefix || 'music'}-${num}`.slice(0, 32);
 }
 
+function buildSequentialSubBotNames(profile = getSubBotProfile(), existingNames = [], count = 1, options = {}) {
+  const names = (Array.isArray(existingNames) ? existingNames : [])
+    .map(name => String(name || '').trim())
+    .filter(Boolean);
+  const numbered = names
+    .map(name => name.match(/^(.*?)[\s_-]+(\d+)$/))
+    .filter(Boolean);
+  const template = numbered[0];
+  const base = (template?.[1] || names[0] || profile.prefix || 'music').trim() || 'music';
+  const separator = template ? (template[0].match(/[\s_-]+/)?.[0] || '-') : ' ';
+  const maximum = numbered.reduce((max, match) => Math.max(max, Number(match[2]) || 0), 0);
+  const requestedStart = Number(options.startAt);
+  const start = Number.isInteger(requestedStart) && requestedStart > 0
+    ? requestedStart
+    : (maximum > 0 ? maximum + 1 : names.length + 1);
+  return Array.from({ length: Math.max(0, Number(count) || 0) }, (_, index) =>
+    `${base}${separator}${start + index}`.slice(0, 32),
+  );
+}
+
 function twitchUrl() {
   return Array.isArray(TwitchUrl) ? TwitchUrl[0] : TwitchUrl;
 }
@@ -236,6 +256,7 @@ module.exports = {
   fetchImageDataUri,
   resolveProfileAssets,
   buildSubBotName,
+  buildSequentialSubBotNames,
   applyProfileToClient,
   applyProfileToToken,
 };

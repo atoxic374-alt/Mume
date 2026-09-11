@@ -11,6 +11,7 @@ const {
   applyProfileToToken,
   getSubBotProfile,
   resolveProfileAssets,
+  buildSequentialSubBotNames,
 } = require('../../utils/subBotProfile');
 const {
   buildSubscriptionActivatedDm,
@@ -479,12 +480,37 @@ async function handleAddBots(interaction, client) {
       if (!freshEntry) return submitted.reply({ content: statusText('Subscription not found.', 'الاشتراك غير موجود.'), flags: MessageFlags.Ephemeral });
       const givenBots = currentBots.splice(0, count);
       const tokens = store.get('tokens') || [];
-      const defaultStatus = getSubBotProfile().status || null;
-      givenBots.forEach(bot => tokens.push({ token: bot.token, Server: freshEntry.server, channel: null, chat: null, status: defaultStatus, client: freshEntry.user, code }));
+      const profile = getSubBotProfile();
+      let assets = { avatarData: null, bannerData: null };
+      try { assets = await resolveProfileAssets(profile); } catch {}
+      const existingNames = tokens
+        .filter(t => t.code === code)
+        .map(t => require('../../music').runningBots.get(t.token)?.user?.username)
+        .filter(Boolean);
+      const names = buildSequentialSubBotNames(profile, existingNames, givenBots.length);
+      const addedEntries = givenBots.map((bot, index) => ({
+        token: bot.token,
+        Server: freshEntry.server,
+        channel: null,
+        chat: null,
+        status: profile.status || null,
+        client: freshEntry.user,
+        code,
+        profileName: names[index],
+      }));
+      addedEntries.forEach(entry => tokens.push(entry));
       freshEntry.botsCount = Number(freshEntry.botsCount || 0) + count;
       store.set('time', timeArray);
       store.set('tokens', tokens);
       store.set('bots', currentBots);
+      await Promise.allSettled(addedEntries.map(async entry => {
+        await applyProfileToToken(entry.token, {
+          profile,
+          assets,
+          name: entry.profileName,
+          leaveGuilds: true,
+        });
+      }));
       await submitted.reply({ embeds: [basePanelEmbed(client, 'Bots Added | تمت إضافة البوتات').addFields(
         { name: 'Subscription ID | رقم الاشتراك', value: `\`${code}\``, inline: true },
         { name: 'Added Bots | البوتات المضافة', value: `\`${count}\``, inline: true },
