@@ -201,42 +201,60 @@ setInterval(() => {
     for (const [k, ts] of _limitGuardCooldown) if (ts < cutoff) _limitGuardCooldown.delete(k);
 }, 5 * 60_000).unref?.();
 
-// ── onlyBot: audit-log cache per guild (TTL 2.5s) ────────────────────────────
+// ── onlyBot: delayed Audit Log matching ──────────────────────────────────────
 // يُشارك بين كل البوتات في نفس الغيلد — يمنع مئات الطلبات المتزامنة
-const _movedByBotCache = new Map(); // guildId → { result: bool, ts: number, pending: Promise|null }
-const _MOVED_BY_BOT_TTL = 2500;
+const _movedByBotCache = new Map(); // guildId:memberId → { ts: number, pending: Promise }
 const _onlyBotDisplacements = new Map(); // token → timestamp
 setInterval(() => {
-    const cutoff = Date.now() - _MOVED_BY_BOT_TTL * 4; // احتياط: 10 ثواني
-    for (const [k, v] of _movedByBotCache) if (!v.pending && v.ts < cutoff) _movedByBotCache.delete(k);
+    const cutoff = Date.now() - 30_000;
+    for (const [k, v] of _movedByBotCache) if (v.ts < cutoff) _movedByBotCache.delete(k);
 }, 60_000).unref?.();
 
-async function checkMovedByBot(guild) {
+async function checkMovedByBot(guild, memberId, expectedChannelId = null) {
     if (!guild) return false;
-    const guildId = guild.id;
-    const now = Date.now();
-    const cached = _movedByBotCache.get(guildId);
-
-    // نتيجة محفوظة وما زالت صالحة
-    if (cached && !cached.pending && now - cached.ts < _MOVED_BY_BOT_TTL) return cached.result;
+    if (!memberId) return false;
+    const cacheKey = `${guild.id}:${memberId}:${expectedChannelId || '*'}`;
+    const cached = _movedByBotCache.get(cacheKey);
 
     // طلب جارٍ بالفعل — أرجع نتيجته بدون طلب ثانٍ
     if (cached?.pending) return cached.pending;
 
     const pending = (async () => {
+        // Discord can publish voiceStateUpdate before the corresponding audit
+        // entry. Retry with increasing delays instead of trusting one snapshot.
+        const delays = [0, 350, 900, 1800, 3500, 6000];
         try {
-            const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberMove, limit: 1 });
-            const entry = logs.entries.first();
-            const result = !!(entry && Date.now() - entry.createdTimestamp < 3000 && entry.executor?.bot === true);
-            _movedByBotCache.set(guildId, { result, ts: Date.now(), pending: null });
-            return result;
-        } catch {
-            _movedByBotCache.set(guildId, { result: false, ts: Date.now(), pending: null });
+            for (const delay of delays) {
+                if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+                const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberMove, limit: 10 });
+                const now = Date.now();
+                const entry = logs.entries.find(candidate => {
+                    const age = now - Number(candidate.createdTimestamp || 0);
+                    if (String(candidate.target?.id || candidate.targetId || '') !== String(memberId)) return false;
+                    if (age < -2000 || age > 10_000 || candidate.executor?.bot !== true) return false;
+
+                    // Some Discord.js versions expose the destination in changes,
+                    // others only expose the target. Enforce it when available.
+                    const channelChange = candidate.changes?.find(change => (
+                        change.key === 'channel_id' || change.key === 'channelId'
+                    ));
+                    if (expectedChannelId && channelChange?.new != null
+                        && String(channelChange.new) !== String(expectedChannelId)) return false;
+                    return true;
+                });
+                if (entry) return true;
+            }
             return false;
+        } catch {
+            return false;
+        } finally {
+            // Never cache a completed result: a later human move must not reuse
+            // an earlier bot move for the same member.
+            _movedByBotCache.delete(cacheKey);
         }
     })();
 
-    _movedByBotCache.set(guildId, { result: false, ts: now, pending });
+    _movedByBotCache.set(cacheKey, { ts: Date.now(), pending });
     return pending;
 }
 
@@ -244,10 +262,21 @@ function isPlaybackIdle(player) {
     return !player?.currentTrack && !player?.isPlaying && !player?.isPaused && !(player?.queue?.length > 0);
 }
 
-async function clearVoiceNickname(guild) {
-    const member = guild?.members?.me;
-    if (!member?.nickname) return;
-    await member.setNickname(null, 'Restore music bot voice assignment').catch(() => {});
+async function clearVoiceNickname(guild, botUserId = guild?.client?.user?.id) {
+    if (!guild || !botUserId) return false;
+    const delays = [0, 500, 1500, 3500, 7000];
+    for (const delay of delays) {
+        if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+        const member = await guild.members.fetch(botUserId).catch(() => null);
+        if (!member?.nickname) return true;
+        try {
+            await member.setNickname(null, 'Restore music bot voice assignment');
+            const verified = await guild.members.fetch(botUserId).catch(() => null);
+            if (!verified?.nickname) return true;
+        } catch {}
+    }
+    console.warn(`[Voice] Failed to clear nickname for bot ${botUserId} in guild ${guild.id}`);
+    return false;
 }
 
 // ── B: resolveTrack cache (1-hour TTL, max 500 entries) ──────────────────────
@@ -1239,6 +1268,33 @@ function clearPlaybackState(token, guildId) {
     if (!Object.prototype.hasOwnProperty.call(all, key)) return;
     delete all[key];
     store.set('playback', all);
+}
+
+function getSavedPlaybackState(token, guildId) {
+    if (!token || !guildId) return null;
+    const saved = (store.get('playback') || {})[playbackStateKey(token, guildId)];
+    if (!saved?.track?.info) return null;
+    if (Date.now() - Number(saved.savedAt || 0) > 7 * 86400000) return null;
+    return saved;
+}
+
+function cancelPendingPlaybackRestore(token, player) {
+    if (!player) return false;
+    const hadRestore = !!player.data?.pendingPlaybackRestore;
+    player.data.restoreCancelled = true;
+    delete player.data.pendingPlaybackRestore;
+    if (hadRestore) clearPlaybackState(token, player.guildId);
+    return hadRestore;
+}
+
+async function waitForRestoredPlayback(player, timeoutMs = 15_000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (player?.currentTrack) return true;
+        if (player?.data?.restoreCancelled) return false;
+        await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    return !!player?.currentTrack;
 }
 
 function warnPlayerOnce(player, key, message, minDelay = 30_000) {
@@ -4241,7 +4297,7 @@ module.exports = {
             try {
                 await ensureConfiguredVoice(guild, tokenObj, `voice_state_update_retry_${attempt}`);
                 _onlyBotDisplacements.delete(token);
-                await clearVoiceNickname(guild);
+                await clearVoiceNickname(guild, TrueMusic.user.id);
             } catch {
                 // فشل — أعد المحاولة بـ backoff (2s → 4s → 8s → 12s → 20s)
                 const delays = [2000, 4000, 8000, 12000, 20000];
@@ -4265,6 +4321,7 @@ module.exports = {
 
             const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
             if (!tokenObj?.channel || tokenObj.awaitingReplacement) return;
+            if (tokenObj.onlyBot !== 'on') _onlyBotDisplacements.delete(token);
 
             const targetChannelId = tokenObj.channel;
             // البوت وصل للروم الصح — ألغِ أي retry معلق
@@ -4284,7 +4341,7 @@ module.exports = {
                     // onlyBot: لو بوت سحبه يبقى في الروم الجديد حتى يصبح خاملًا
                     // لو إنسان سحبه يرجع لرومه الأصلي فوراً
                     const guild = newState.guild || oldState.guild;
-                    const movedByBot = await checkMovedByBot(guild);
+                    const movedByBot = await checkMovedByBot(guild, TrueMusic.user.id, newState.channelId);
                     if (movedByBot) {
                         _onlyBotDisplacements.set(token, Date.now());
                         return;
@@ -4419,6 +4476,7 @@ module.exports = {
                     if (!await waitForPoruReady(12_000)) return;
                     const player = await ensureConfiguredVoice(guild, tokenObj, 'startup_playback_restore');
                     if (!player || player.currentTrack || player.isPlaying || player.isPaused || player.queue?.length) return;
+                    if (player.data?.restoreCancelled) return;
                     const restorePosition = Math.max(0, Number(saved.position || 0));
                     player.data.pendingPlaybackRestore = {
                         identity: trackIdentity(saved.track),
@@ -4688,7 +4746,7 @@ module.exports = {
 
                                 try {
                                     await ensureConfiguredVoice(guild, tokenObj, 'periodic_guard');
-                                    await clearVoiceNickname(guild);
+                                    await clearVoiceNickname(guild, TrueMusic.user.id);
                                 } catch (err) {
                                 }
                             }
@@ -5240,7 +5298,8 @@ module.exports = {
       // ─────────────────────────────────────────────────────────────────────────
       const reason = data?.reason || 'unknown';
       const naturalEnd = isNaturalTrackEnd(reason);
-      if (reason !== 'replaced' || !player.data._recovering) {
+      const transientEnd = /disconnect|shutdown|destroy|reconnect|node|voice|session|connection|cleanup/i.test(String(reason));
+      if (!transientEnd && (reason !== 'replaced' || !player.data._recovering)) {
           clearPlaybackState(token, player.guildId);
       }
       player.data.lastTrackEndReason = reason;
@@ -5462,6 +5521,7 @@ module.exports = {
         player.data.lastProgressAt = Date.now();
         player.data.lastPosition = 0;
         player.data.lastPlaybackSaveAt = Date.now();
+        player.data.restoreCancelled = false;
         savePlaybackState(token, player, track);
         const pendingRestore = player.data.pendingPlaybackRestore;
         if (pendingRestore?.identity && pendingRestore.identity === identity && pendingRestore.position > 0) {
@@ -5949,7 +6009,19 @@ module.exports = {
                     }));
                 }
             }
-            else if (cmdsArray.stop.includes(command)) {
+            // All non-play commands share the same restart-aware state gate.
+            // This prevents stop/volume/pause/queue/etc. from seeing an empty
+            // Poru player while the previous track is still being restored.
+            if (!isPlayCommand) {
+                const savedPlayback = getSavedPlaybackState(token, message.guild.id);
+                let statePlayer = TrueMusic.poru.players.get(message.guild.id);
+                if (savedPlayback && (!statePlayer || !statePlayer.currentTrack)) {
+                    statePlayer = statePlayer || await ensureConfiguredVoice(message.guild, tokenObj, 'message_restore_wait').catch(() => null);
+                    if (statePlayer) await waitForRestoredPlayback(statePlayer);
+                }
+            }
+
+            if (cmdsArray.stop.includes(command)) {
                 let player = TrueMusic.poru.players.get(message.guild.id);
 
                 if (!player) {
@@ -5963,6 +6035,8 @@ module.exports = {
 
                                 const stoppedTrack = player.currentTrack;
                                 const finalOptions = finalUiOptionsFor(player, stoppedTrack);
+                                cancelPendingPlaybackRestore(token, player);
+                                clearPlaybackState(token, player.guildId);
                                 markStopped();
                                 player.setLoop('NONE');
                                 player.queue.clear();
@@ -6845,7 +6919,24 @@ module.exports = {
                         return replyEphemeral('**ادخل نفس الروم الصوتي أولاً.**');
                     }
 
-                            const player = TrueMusic.poru.players.get(interaction.guildId);
+                            const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
+                            let responseMessage = '';
+                            let player = TrueMusic.poru.players.get(interaction.guildId);
+                            const savedPlayback = getSavedPlaybackState(token, interaction.guildId);
+                            if (!player && savedPlayback && tokenObj) {
+                                player = await ensureConfiguredVoice(interaction.guild, tokenObj, 'control_restore_wait').catch(() => null);
+                            }
+                            if (player && !player.currentTrack && interaction.customId === 'stop' && (savedPlayback || player.data?.pendingPlaybackRestore)) {
+                                cancelPendingPlaybackRestore(token, player);
+                                player.queue?.clear?.();
+                                clearPlaybackState(token, interaction.guildId);
+                                clearStoppedPlaybackCaches(player);
+                                responseMessage = '**تم إيقاف الأغنية المحفوظة قبل اكتمال الاستعادة.**';
+                                return replyEphemeral(responseMessage);
+                            }
+                            if (player && !player.currentTrack && savedPlayback) {
+                                await waitForRestoredPlayback(player);
+                            }
                             if (!player || !player.currentTrack) {
                                 return replyEphemeral('**لا يوجد شيء يعمل الآن.**');
                             }
@@ -6855,7 +6946,6 @@ module.exports = {
                                         return replyEphemeral('انتهت صلاحية لوحة التحكم لأن الأغنية تغيّرت.');
                                     }
 
-                            const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
                             const ui = player.data.ui || {};
                             const requesterId = ui.requesterId || player.currentTrack?.info?.requester?.id || player.currentTrack?.info?.requester;
                             const editPanel = async (liked = false, targetInteraction = null) => {
@@ -6935,7 +7025,6 @@ module.exports = {
 
                     // Acknowledge immediately; never block the audio-control path on Discord REST.
                     interaction.deferUpdate().catch(() => {});
-                    let responseMessage = '';
 
                     if (interaction.customId === 'loop') {
                         const newLoopMode = player.loop === 'NONE' ? 'TRACK' : 'NONE';
@@ -7035,6 +7124,8 @@ module.exports = {
                     if (interaction.customId === 'stop') {
                         const stoppedTrack = player.currentTrack;
                         const finalOptions = finalUiOptionsFor(player, stoppedTrack);
+                        cancelPendingPlaybackRestore(token, player);
+                        clearPlaybackState(token, player.guildId);
                         markStopped();
                         player.setLoop('NONE');
                         player.queue.clear();
