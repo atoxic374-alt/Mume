@@ -2932,20 +2932,24 @@ module.exports = {
                                     const match = String(item.info.bot?.user?.username || '').match(/(\d+)\s*$/);
                                     if (match) usedNumbers.add(Number(match[1]));
                                 });
-                                const targets = ordered.filter(item => !/(\d+)\s*$/.test(String(item.info.bot?.user?.username || '')));
+                                const targets = ordered;
                                 await runBotProcess('Change Names', targets.map(item => item.token), async (t, bot) => {
                                     if (!bot?.user) throw new Error('bot offline');
+                                    const currentName = String(bot.user.username || '');
+                                    const existingNumber = currentName.match(/(\d+)\s*$/)?.[1];
                                     let safeName;
                                     if (nameOnly) {
-                                        safeName = (prefix || bot.user.username).slice(0, 32);
+                                        safeName = (prefix || currentName.replace(/[\s_-]*\d+\s*$/, '').trim()).slice(0, 32);
                                     } else {
-                                        while (usedNumbers.has(nextNumber)) nextNumber++;
-                                        usedNumbers.add(nextNumber);
+                                        const number = existingNumber ? Number(existingNumber) : (() => {
+                                            while (usedNumbers.has(nextNumber)) nextNumber++;
+                                            usedNumbers.add(nextNumber);
+                                            return nextNumber++;
+                                        })();
                                         safeName = prefix
-                                            ? (position === 'before' ? `${nextNumber}${prefix}` : `${prefix}${nextNumber}`)
-                                            : String(nextNumber);
+                                            ? (position === 'before' ? `${number}${prefix}` : `${prefix}${number}`)
+                                            : String(number);
                                         safeName = safeName.slice(0, 32);
-                                        nextNumber++;
                                     }
                                     await bot.user.setUsername(safeName);
                                     await patchCurrentApplication(t.token, { name: safeName })
@@ -2953,7 +2957,7 @@ module.exports = {
                                 }, { concurrency: SETTINGS_NAME_CONCURRENCY, code: modalCode });
                                 await mainMsg.edit({ content: '', embeds: [new EmbedBuilder()
                                     .setTitle('Names Updated | تم تحديث الأسماء')
-                                    .setDescription(`تم تحديث ${targets.length} بوت فقط، مع إبقاء الأسماء التي تحتوي أرقاماً كما هي.`)
+                                    .setDescription(`تم تحديث ${targets.length} بوت، مع الحفاظ على أرقام الأسماء الموجودة وإعادة استخدام ترتيب الرومات لغير المرقمة.`)
                                     .setColor(getEmbedColor(client))], components: [] });
                                 setTimeout(() => updatePanel(), 3000);
                                 return;
