@@ -4273,6 +4273,11 @@ module.exports = {
                 voiceRejoinRetryTimer = null;
                 return;
             }
+            if (!newState.channelId && tokenObj.onlyBot === 'on' && _onlyBotDisplacements.has(token)) {
+                // It was moved by another bot and has now left voice. Let the
+                // periodic guard return it only when it is idle outside voice.
+                return;
+            }
             // تم نقله لروم ثاني — تحقق من onlyBot و backToVoice
             if (newState.channelId) {
                 if (tokenObj.onlyBot === 'on') {
@@ -4671,7 +4676,10 @@ module.exports = {
                             if (shouldReconnect) {
                                 if (tokenObj.onlyBot === 'on' && _onlyBotDisplacements.has(token)) {
                                     const player = TrueMusic.poru.players.get(guild.id);
-                                    if (!isPlaybackIdle(player)) return;
+                                    // A bot moved by another bot stays in that room—even
+                                    // after playback stops. Return only after it has left
+                                    // voice entirely and is idle outside the room.
+                                    if (currentVC || !isPlaybackIdle(player)) return;
                                     _onlyBotDisplacements.delete(token);
                                 }
                                 if (!TrueMusic.readyAt) return;
