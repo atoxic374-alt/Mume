@@ -149,6 +149,19 @@ function buildSequentialSubBotNames(profile = getSubBotProfile(), existingNames 
   );
 }
 
+function profileFromClient(botClient, fallback = getSubBotProfile()) {
+  const user = botClient?.user;
+  const activity = user?.presence?.activities?.find(item => item?.name)?.name || null;
+  const username = String(user?.username || '').trim();
+  const prefix = username.replace(/[\s_-]*\d+\s*$/, '').trim() || fallback.prefix;
+  return {
+    prefix,
+    avatar: user?.displayAvatarURL?.({ extension: 'png', size: 1024 }) || fallback.avatar || null,
+    banner: user?.bannerURL?.({ extension: 'png', size: 1024 }) || fallback.banner || null,
+    status: activity || fallback.status || null,
+  };
+}
+
 function twitchUrl() {
   return Array.isArray(TwitchUrl) ? TwitchUrl[0] : TwitchUrl;
 }
@@ -193,8 +206,10 @@ async function applyProfileToClient(botClient, token, options = {}) {
   const result = { name: botName, username: false, avatar: false, banner: false, app: false, status: false };
 
   if (botClient?.user) {
-    await profileWithRetry(() => botClient.user.setUsername(botName))
-      .then(() => { result.username = true; }).catch(() => {});
+    if (options.updateName !== false) {
+      await profileWithRetry(() => botClient.user.setUsername(botName))
+        .then(() => { result.username = true; }).catch(() => {});
+    }
     if (assets.avatarData) {
       await profileWithRetry(() => botClient.user.setAvatar(assets.avatarData))
         .then(() => { result.avatar = true; }).catch(() => {});
@@ -218,7 +233,7 @@ async function applyProfileToClient(botClient, token, options = {}) {
 
   if (token) {
     await patchCurrentApplication(token, {
-      name: botName,
+      name: options.updateName === false ? null : botName,
       icon: assets.avatarData || null,
       cover_image: assets.bannerData || null,
     }).then(() => { result.app = true; }).catch(async () => {
@@ -257,6 +272,7 @@ module.exports = {
   resolveProfileAssets,
   buildSubBotName,
   buildSequentialSubBotNames,
+  profileFromClient,
   applyProfileToClient,
   applyProfileToToken,
 };

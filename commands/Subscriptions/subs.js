@@ -12,6 +12,7 @@ const {
   getSubBotProfile,
   resolveProfileAssets,
   buildSequentialSubBotNames,
+  profileFromClient,
 } = require('../../utils/subBotProfile');
 const {
   buildSubscriptionActivatedDm,
@@ -480,7 +481,9 @@ async function handleAddBots(interaction, client) {
       if (!freshEntry) return submitted.reply({ content: statusText('Subscription not found.', 'الاشتراك غير موجود.'), flags: MessageFlags.Ephemeral });
       const givenBots = currentBots.splice(0, count);
       const tokens = store.get('tokens') || [];
-      const profile = getSubBotProfile();
+      const { runningBots } = require('../../music');
+      const templateBot = runningBots.get(tokens.find(t => t.code === code)?.token);
+      const profile = profileFromClient(templateBot, getSubBotProfile());
       let assets = { avatarData: null, bannerData: null };
       try { assets = await resolveProfileAssets(profile); } catch {}
       const existingNames = tokens

@@ -28,6 +28,7 @@ const {
     getSubBotProfile,
     resolveProfileAssets,
     buildSequentialSubBotNames,
+    profileFromClient,
 } = require('../../utils/subBotProfile');
 
 const SETTINGS_PROCESS_CONCURRENCY = Math.max(1, Number(process.env.SETTINGS_PROCESS_CONCURRENCY || 16));
@@ -509,7 +510,8 @@ module.exports = {
                 if (stock.length < count) throw new Error(`المتاح في الستوك الآن: ${stock.length} بوت.`);
 
                 const assigned = stock.splice(0, count);
-                const profile = getSubBotProfile();
+                const templateBot = runningBots.get(subscriptionTokens[0]?.token);
+                const profile = profileFromClient(templateBot, getSubBotProfile());
                 let assets = { avatarData: null, bannerData: null };
                 try { assets = await resolveProfileAssets(profile); } catch {}
                 const existingNames = subscriptionTokens
@@ -734,8 +736,21 @@ module.exports = {
                     if (scope === 'grouped') return buckets.grouped.map(entry => entry.token);
                     if (scope === 'in_room') return buckets.inRoom.map(entry => entry.token);
                     if (scope === 'all') return buckets.available.map(entry => entry.token);
-                    return [];
-                }
+                            return [];
+                        }
+
+                        function orderedRenameTargets(code = selectedCode) {
+                            return getSelectedTokens({ code }).map((token, index) => {
+                                const info = getBotVoiceInfo(token);
+                                return { token, info, index };
+                            }).sort((a, b) => {
+                                if (a.info.inRoom !== b.info.inRoom) return a.info.inRoom ? -1 : 1;
+                                if (!a.info.inRoom) return a.index - b.index;
+                                const aChannel = a.info.bot?.guilds.cache.get(a.token.Server)?.channels.cache.get(a.info.channelId);
+                                const bChannel = b.info.bot?.guilds.cache.get(b.token.Server)?.channels.cache.get(b.info.channelId);
+                                return sortVoiceChannels(aChannel, bChannel) || a.index - b.index;
+                            });
+                        }
 
                 function buildDistributionEmbed(title, description, fields = []) {
                     const embed = new EmbedBuilder()
@@ -2664,25 +2679,21 @@ module.exports = {
 
                     // Appearance prompts
                                     if (i.customId === `stg_${mid}_set_name`) {
-                                        const text = await promptForUserMessage(i, 'اكتب اسم البوتات الجديد خلال دقيقتين.\nمثال: `Music Pro`');
-                                        if (!text) return;
-                                        const safeName = text.slice(0, 32);
-                                        await runBotProcess('Change Names', getSelectedTokens({ code: selectedCode }), async (t, bot) => {
-                                            if (!bot?.user) throw new Error('bot offline');
-                                            let lastErr = null;
-                                            for (let attempt = 1; attempt <= 4; attempt++) {
-                                                const r = await bot.user.setUsername(safeName).catch(e => ({ _err: e }));
-                                                if (!r?._err) break;
-                                                lastErr = r._err;
-                                                const ra = lastErr?.rawError?.retry_after ?? lastErr?.retryAfter;
-                                                const waitMs = ra ? Math.min(Math.ceil(ra * 1000) + 1500, 90_000) : Math.min(2000 * attempt, 10_000);
-                                                if (attempt < 4) await new Promise(res => setTimeout(res, waitMs));
-                                            }
-                                            if (lastErr && bot.user.username !== safeName) throw lastErr;
-                                            await patchCurrentApplication(t.token, { name: safeName }).catch(() => bot.application?.edit?.({ name: safeName }).catch(() => {}));
-                                        }, { concurrency: SETTINGS_NAME_CONCURRENCY, code: selectedCode });
-                                        setTimeout(() => updatePanel(), 3000);
-                                        return;
+                                        const modal = new ModalBuilder()
+                                            .setCustomId(createSettingsModalId('rename', { code: selectedCode }))
+                                            .setTitle('Rename Bots | تسمية البوتات');
+                                        modal.addComponents(
+                                            new ActionRowBuilder().addComponents(new TextInputBuilder()
+                                                .setCustomId('prefix').setLabel('الاسم الأساسي (مثال: m أو Music Pro)')
+                                                .setPlaceholder('اتركه فارغاً للأرقام فقط').setRequired(false).setStyle(TextInputStyle.Short)),
+                                            new ActionRowBuilder().addComponents(new TextInputBuilder()
+                                                .setCustomId('position').setLabel('مكان الرقم: before أو after')
+                                                .setPlaceholder('after').setRequired(false).setStyle(TextInputStyle.Short)),
+                                            new ActionRowBuilder().addComponents(new TextInputBuilder()
+                                                .setCustomId('start_from').setLabel('بداية الرقم أو none للاسم فقط')
+                                                .setPlaceholder('1').setRequired(false).setStyle(TextInputStyle.Short)),
+                                        );
+                                        return i.showModal(modal);
                                     }
 
                                     if (i.customId === `stg_${mid}_set_avatar`) {
@@ -2906,6 +2917,47 @@ module.exports = {
                                     const modalContext = consumeSettingsModalContext(interaction.customId);
                                     if (!modalContext) return;
                             const modalCode = modalContext.code || selectedCode;
+
+                            if (modalContext.type === 'rename') {
+                                const prefix = interaction.fields.getTextInputValue('prefix').trim();
+                                const positionRaw = interaction.fields.getTextInputValue('position').trim().toLowerCase();
+                                const startRaw = interaction.fields.getTextInputValue('start_from').trim().toLowerCase();
+                                const position = ['before', 'ب', 'قبل', 'b'].includes(positionRaw) ? 'before' : 'after';
+                                const nameOnly = ['none', 'no', 'بدون', 'اسم فقط'].includes(startRaw);
+                                const parsedStart = Number.parseInt(startRaw, 10);
+                                let nextNumber = Number.isInteger(parsedStart) && parsedStart > 0 ? parsedStart : 1;
+                                const ordered = orderedRenameTargets(modalCode);
+                                const usedNumbers = new Set();
+                                ordered.forEach(item => {
+                                    const match = String(item.info.bot?.user?.username || '').match(/(\d+)\s*$/);
+                                    if (match) usedNumbers.add(Number(match[1]));
+                                });
+                                const targets = ordered.filter(item => !/(\d+)\s*$/.test(String(item.info.bot?.user?.username || '')));
+                                await runBotProcess('Change Names', targets.map(item => item.token), async (t, bot) => {
+                                    if (!bot?.user) throw new Error('bot offline');
+                                    let safeName;
+                                    if (nameOnly) {
+                                        safeName = (prefix || bot.user.username).slice(0, 32);
+                                    } else {
+                                        while (usedNumbers.has(nextNumber)) nextNumber++;
+                                        usedNumbers.add(nextNumber);
+                                        safeName = prefix
+                                            ? (position === 'before' ? `${nextNumber}${prefix}` : `${prefix}${nextNumber}`)
+                                            : String(nextNumber);
+                                        safeName = safeName.slice(0, 32);
+                                        nextNumber++;
+                                    }
+                                    await bot.user.setUsername(safeName);
+                                    await patchCurrentApplication(t.token, { name: safeName })
+                                        .catch(() => bot.application?.edit?.({ name: safeName }).catch(() => {}));
+                                }, { concurrency: SETTINGS_NAME_CONCURRENCY, code: modalCode });
+                                await mainMsg.edit({ content: '', embeds: [new EmbedBuilder()
+                                    .setTitle('Names Updated | تم تحديث الأسماء')
+                                    .setDescription(`تم تحديث ${targets.length} بوت فقط، مع إبقاء الأسماء التي تحتوي أرقاماً كما هي.`)
+                                    .setColor(getEmbedColor(client))], components: [] });
+                                setTimeout(() => updatePanel(), 3000);
+                                return;
+                            }
 
                             if (modalContext.type === 'add_bots') {
                                 const count = Number(interaction.fields.getTextInputValue('count').trim());
