@@ -68,7 +68,7 @@ function buildSubscriptionTimeUpdatedDm(client, data = {}) {
 }
 
 function buildSubscriptionBotsAddedDm(client, data = {}) {
-    return baseEmbed(
+    const embed = baseEmbed(
         client,
         'Subscription Updated | تم تحديث الاشتراك',
         [
@@ -80,6 +80,34 @@ function buildSubscriptionBotsAddedDm(client, data = {}) {
         field('Added Bots', 'البوتات المضافة', `\`${data.addedBots || 0}\``),
         field('Total Bots', 'اجمالي البوتات', `\`${data.totalBots || 0}\``),
     );
+
+    // Keep every invite in the same notification while respecting Discord's
+    // 1024-character field limit. The settings flow limits a single addition
+    // to 50 bots, so this also remains within the embed's overall size limit.
+    const links = Array.isArray(data.botLinks) ? data.botLinks.filter(Boolean) : [];
+    if (!links.length) return embed;
+
+    const lines = links.map((link, index) => `• [Bot ${index + 1}](${link})`);
+    const chunks = [];
+    let chunk = '';
+    for (const line of lines) {
+        if (chunk && chunk.length + line.length + 1 > 1024) {
+            chunks.push(chunk);
+            chunk = '';
+        }
+        chunk += `${chunk ? '\n' : ''}${line}`;
+    }
+    if (chunk) chunks.push(chunk);
+
+    chunks.forEach((value, index) => {
+        embed.addFields(field(
+            index === 0 ? 'Bot Links' : 'Bot Links (continued)',
+            index === 0 ? 'روابط البوتات' : 'روابط البوتات (تكملة)',
+            value,
+            false,
+        ));
+    });
+    return embed;
 }
 
 function buildSubscriptionRemovedDm(client, data = {}) {
