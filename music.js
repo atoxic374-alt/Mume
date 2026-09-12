@@ -205,6 +205,8 @@ setInterval(() => {
 // يُشارك بين كل البوتات في نفس الغيلد — يمنع مئات الطلبات المتزامنة
 const _movedByBotCache = new Map(); // guildId:memberId → { ts: number, pending: Promise }
 const _onlyBotDisplacements = new Map(); // token → timestamp
+const _nicknameChangeChecks = new Map(); // guildId:memberId → pending Promise
+const _botNicknameSignals = new Map(); // token → { at, byBot }
 setInterval(() => {
     const cutoff = Date.now() - 30_000;
     for (const [k, v] of _movedByBotCache) if (v.ts < cutoff) _movedByBotCache.delete(k);
@@ -256,6 +258,47 @@ async function checkMovedByBot(guild, memberId, expectedChannelId = null) {
 
     _movedByBotCache.set(cacheKey, { ts: Date.now(), pending });
     return pending;
+}
+
+async function checkNicknameChangedByBot(guild, memberId) {
+    if (!guild || !memberId) return { changed: false, confirmed: false, byBot: false };
+    const cacheKey = `${guild.id}:${memberId}`;
+    const pending = _nicknameChangeChecks.get(cacheKey);
+    if (pending) return pending;
+
+    const task = (async () => {
+        // Discord may publish guildMemberUpdate before its audit entry.
+        const delays = [0, 350, 900, 1800, 3500, 6000];
+        try {
+            for (const delay of delays) {
+                if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+                const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberUpdate, limit: 15 });
+                const now = Date.now();
+                const entry = logs.entries.find(candidate => {
+                    const age = now - Number(candidate.createdTimestamp || 0);
+                    if (String(candidate.target?.id || candidate.targetId || '') !== String(memberId)) return false;
+                    if (age < -2000 || age > 15_000) return false;
+                    const changes = candidate.changes?.values
+                        ? [...candidate.changes.values()]
+                        : (Array.isArray(candidate.changes) ? candidate.changes : []);
+                    return changes.some(change => change.key === 'nick' || change.key === 'nickname');
+                });
+                if (entry) return {
+                    changed: true,
+                    confirmed: true,
+                    byBot: entry.executor?.bot === true,
+                    executorId: entry.executor?.id || null,
+                };
+            }
+            return { changed: false, confirmed: false, byBot: false };
+        } catch {
+            return { changed: false, confirmed: false, byBot: false };
+        } finally {
+            _nicknameChangeChecks.delete(cacheKey);
+        }
+    })();
+    _nicknameChangeChecks.set(cacheKey, task);
+    return task;
 }
 
 function isPlaybackIdle(player) {
@@ -3077,6 +3120,7 @@ module.exports = {
             },
             intents: [
                 GatewayIntentBits.Guilds,
+                GatewayIntentBits.GuildMembers,
                 GatewayIntentBits.MessageContent,
                 GatewayIntentBits.GuildMessages,
                 GatewayIntentBits.GuildVoiceStates,
@@ -4328,6 +4372,7 @@ module.exports = {
             if (newState.channelId === targetChannelId) {
                 clearTimeout(voiceRejoinRetryTimer);
                 voiceRejoinRetryTimer = null;
+                _botNicknameSignals.delete(token);
                 return;
             }
             if (!newState.channelId && tokenObj.onlyBot === 'on' && _onlyBotDisplacements.has(token)) {
@@ -4341,7 +4386,11 @@ module.exports = {
                     // onlyBot: لو بوت سحبه يبقى في الروم الجديد حتى يصبح خاملًا
                     // لو إنسان سحبه يرجع لرومه الأصلي فوراً
                     const guild = newState.guild || oldState.guild;
-                    const movedByBot = await checkMovedByBot(guild, TrueMusic.user.id, newState.channelId);
+                    const nicknameSignal = _botNicknameSignals.get(token);
+                    const signalFresh = nicknameSignal && Date.now() - nicknameSignal.at <= 15_000;
+                    const movedByBot = signalFresh
+                        ? nicknameSignal.byBot
+                        : await checkMovedByBot(guild, TrueMusic.user.id, newState.channelId);
                     if (movedByBot) {
                         _onlyBotDisplacements.set(token, Date.now());
                         return;
@@ -4367,6 +4416,38 @@ module.exports = {
                 await _attemptVoiceRejoin(guild, tokenObj, 1);
             } finally {
                 setTimeout(() => { voiceReturnLock = false; }, 800);
+            }
+        });
+
+        // A nickname change is an explicit signal used by Only Bot. Audit Log
+        // identifies whether the change was made by a bot or a human; the
+        // delayed matcher avoids deciding from the first incomplete snapshot.
+        TrueMusic.on('guildMemberUpdate', async (oldMember, newMember) => {
+            if (newMember?.id !== TrueMusic.user?.id) return;
+            if (oldMember?.nickname === newMember?.nickname) return;
+            // Internal cleanup sets nickname to null; it is not a move signal.
+            if (!newMember?.nickname) return;
+            const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
+            if (tokenObj?.onlyBot !== 'on' || !tokenObj.channel) return;
+            const guild = newMember.guild;
+            const decision = await checkNicknameChangedByBot(guild, newMember.id);
+            const currentChannelId = newMember.voice?.channelId || guild.members.me?.voice?.channelId;
+            if (!decision.confirmed) return;
+            if (decision.byBot) {
+                _botNicknameSignals.set(token, { at: Date.now(), byBot: true });
+                if (!currentChannelId || currentChannelId === tokenObj.channel) return;
+                _onlyBotDisplacements.set(token, Date.now());
+                return;
+            }
+
+            // Human nickname changes are treated as a manual intervention:
+            // remove the nickname, verify the removal, then return to target VC.
+            _botNicknameSignals.set(token, { at: Date.now(), byBot: false });
+            if (!currentChannelId || currentChannelId === tokenObj.channel) return;
+            await clearVoiceNickname(guild, TrueMusic.user.id);
+            const freshTokenObj = (store.get('tokens') || []).find(t => t.token === token);
+            if (freshTokenObj?.channel && !freshTokenObj.awaitingReplacement) {
+                await _attemptVoiceRejoin(guild, freshTokenObj, 1);
             }
         });
 
