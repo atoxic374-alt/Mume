@@ -207,15 +207,93 @@ const _movedByBotCache = new Map(); // guildId:memberId → { ts: number, pendin
 const _onlyBotDisplacements = new Map(); // token → timestamp
 const _nicknameChangeChecks = new Map(); // guildId:memberId → pending Promise
 const _botNicknameSignals = new Map(); // token → { at, byBot }
+
+function isMusicPullAuditReason(reason) {
+    const text = String(reason || '')
+        .toLowerCase()
+        .replace(/[|_:/\\-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!text) return false;
+
+    // Discord may put the internal reason inside a longer sentence. Require
+    // music/bot context plus a pull/move/temp marker; never trust "actor" alone.
+    const exactInternalPull = /\bset\s+music\s+bot\s+nickname\s+after\s+(?:temp(?:orary)?\s+)?music\s+pull\b/i.test(text);
+    const hasMusicContext = /\b(?:music|musıc|musicbot|music bot)\b/.test(text);
+    const hasPullAction = /\b(?:pull|pulled|move|moved|drag|dragged|سحب|نقل)\b/.test(text);
+    const hasTempMarker = /\btemp(?:orary)?\b/.test(text);
+    const hasNicknameContext = /\b(?:nickname|nick|لقب)\b/.test(text);
+    const knownInternalPattern = exactInternalPull || (hasMusicContext && (
+        hasPullAction
+        || (hasTempMarker && hasNicknameContext)
+        || (hasTempMarker && /\b(?:actor|system|internal|auto)\b/.test(text))
+    ));
+
+    return knownInternalPattern;
+}
+
+function promoteOnlyBotVoiceChannel(token, tokenObj, temporaryChannelId) {
+    if (!token || !tokenObj?.Server || !temporaryChannelId) return tokenObj;
+    const originalChannel = tokenObj._onlyBotOriginalChannel || tokenObj.channel;
+    if (!originalChannel || String(originalChannel) === String(temporaryChannelId)) return tokenObj;
+    const updated = (store.get('tokens') || []).map(entry => entry.token === token
+        ? {
+            ...entry,
+            channel: temporaryChannelId,
+            _onlyBotOriginalChannel: originalChannel,
+            _onlyBotTemporary: true,
+        }
+        : entry);
+    store.set('tokens', updated);
+    return updated.find(entry => entry.token === token) || tokenObj;
+}
+
+function restoreOnlyBotVoiceChannel(token, tokenObj) {
+    const originalChannel = tokenObj?._onlyBotOriginalChannel;
+    if (!token || !originalChannel) return tokenObj;
+    const updated = (store.get('tokens') || []).map(entry => {
+        if (entry.token !== token) return entry;
+        const restored = { ...entry, channel: originalChannel };
+        delete restored._onlyBotOriginalChannel;
+        delete restored._onlyBotTemporary;
+        return restored;
+    });
+    store.set('tokens', updated);
+    return updated.find(entry => entry.token === token) || tokenObj;
+}
+
 setInterval(() => {
     const cutoff = Date.now() - 30_000;
     for (const [k, v] of _movedByBotCache) if (v.ts < cutoff) _movedByBotCache.delete(k);
 }, 60_000).unref?.();
 
-async function checkMovedByBot(guild, memberId, expectedChannelId = null) {
+async function findRecentAuditEntry(guild, predicate, { maxAgeMs = 15_000, maxPages = 4 } = {}) {
+    let before;
+    const now = Date.now();
+    for (let page = 0; page < maxPages; page++) {
+        const options = { limit: 100 };
+        if (before) options.before = before;
+        const logs = await guild.fetchAuditLogs(options);
+        const entries = [...(logs.entries?.values?.() || logs.entries || [])];
+        if (!entries.length) return null;
+        for (const entry of entries) {
+            const age = now - Number(entry.createdTimestamp || 0);
+            if (age < -2_000) continue;
+            if (age > maxAgeMs) return null;
+            if (predicate(entry)) return entry;
+        }
+        const last = entries[entries.length - 1];
+        if (!last?.id || entries.length < 100) return null;
+        before = last.id;
+    }
+    return null;
+}
+
+async function checkMovedByBot(guild, memberId, expectedChannelId = null, eventAt = Date.now()) {
     if (!guild) return false;
     if (!memberId) return false;
-    const cacheKey = `${guild.id}:${memberId}:${expectedChannelId || '*'}`;
+    const eventKey = Number(eventAt || Date.now());
+    const cacheKey = `${guild.id}:${memberId}:${expectedChannelId || '*'}:${eventKey}`;
     const cached = _movedByBotCache.get(cacheKey);
 
     // طلب جارٍ بالفعل — أرجع نتيجته بدون طلب ثانٍ
@@ -223,17 +301,32 @@ async function checkMovedByBot(guild, memberId, expectedChannelId = null) {
 
     const pending = (async () => {
         // Discord can publish voiceStateUpdate before the corresponding audit
-        // entry. Retry with increasing delays instead of trusting one snapshot.
-        const delays = [0, 350, 900, 1800, 3500, 6000];
+        // entry. Retry quickly; each request already scans up to two pages.
+        const delays = [0, 300, 900, 1_800];
         try {
             for (const delay of delays) {
                 if (delay) await new Promise(resolve => setTimeout(resolve, delay));
-                const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberMove, limit: 10 });
-                const now = Date.now();
-                const entry = logs.entries.find(candidate => {
-                    const age = now - Number(candidate.createdTimestamp || 0);
-                    if (String(candidate.target?.id || candidate.targetId || '') !== String(memberId)) return false;
-                    if (age < -2000 || age > 10_000 || candidate.executor?.bot !== true) return false;
+                const entry = await findRecentAuditEntry(guild, candidate => {
+                    const candidateAt = Number(candidate.createdTimestamp || 0);
+                    if (Math.abs(candidateAt - eventAt) > 3_000) return false;
+                    const reason = String(candidate.reason || '').trim();
+                    const reasonConfirmsMusicPull = isMusicPullAuditReason(reason);
+                    const isMoveAction = candidate.action === AuditLogEvent.MemberMove
+                        || candidate.actionType === AuditLogEvent.MemberMove;
+                    // Discord can represent a multi-member move differently
+                    // between clients/API versions. The explicit Music pull
+                    // reason is authoritative, while generic entries still
+                    // require the normal MemberMove action.
+                    if (!isMoveAction && !reasonConfirmsMusicPull) return false;
+                    const targetMatches = String(candidate.target?.id || candidate.targetId || '') === String(memberId);
+                    // Discord may record a multi-member move as "moved N users"
+                    // with no individual target (or with only one of the users).
+                    // For the explicit internal Music pull reason, the current
+                    // voice event plus matching destination is the authoritative
+                    // membership evidence. Ordinary bot moves still require the
+                    // exact target ID.
+                    if (!targetMatches && !reasonConfirmsMusicPull) return false;
+                    if (candidate.executor?.bot !== true && !reasonConfirmsMusicPull) return false;
 
                     // Some Discord.js versions expose the destination in changes,
                     // others only expose the target. Enforce it when available.
@@ -243,7 +336,7 @@ async function checkMovedByBot(guild, memberId, expectedChannelId = null) {
                     if (expectedChannelId && channelChange?.new != null
                         && String(channelChange.new) !== String(expectedChannelId)) return false;
                     return true;
-                });
+                }, { maxAgeMs: 15_000, maxPages: 2 });
                 if (entry) return true;
             }
             return false;
@@ -268,27 +361,35 @@ async function checkNicknameChangedByBot(guild, memberId) {
 
     const task = (async () => {
         // Discord may publish guildMemberUpdate before its audit entry.
-        const delays = [0, 350, 900, 1800, 3500, 6000];
+        const delays = [0, 300, 900, 1_800];
         try {
             for (const delay of delays) {
                 if (delay) await new Promise(resolve => setTimeout(resolve, delay));
-                const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberUpdate, limit: 15 });
-                const now = Date.now();
-                const entry = logs.entries.find(candidate => {
-                    const age = now - Number(candidate.createdTimestamp || 0);
+                const entry = await findRecentAuditEntry(guild, candidate => {
+                    if (candidate.action !== AuditLogEvent.MemberUpdate
+                        && candidate.actionType !== AuditLogEvent.MemberUpdate) return false;
                     if (String(candidate.target?.id || candidate.targetId || '') !== String(memberId)) return false;
-                    if (age < -2000 || age > 15_000) return false;
                     const changes = candidate.changes?.values
                         ? [...candidate.changes.values()]
                         : (Array.isArray(candidate.changes) ? candidate.changes : []);
-                    return changes.some(change => change.key === 'nick' || change.key === 'nickname');
-                });
-                if (entry) return {
-                    changed: true,
-                    confirmed: true,
-                    byBot: entry.executor?.bot === true,
-                    executorId: entry.executor?.id || null,
-                };
+                    const nicknameChanged = changes.some(change => change.key === 'nick' || change.key === 'nickname');
+                    if (!nicknameChanged) return false;
+                    const reason = String(candidate.reason || '').trim();
+                    return {
+                        changed: true,
+                        confirmed: true,
+                        // For the internal Music pull reason, the reason text is
+                        // authoritative even when Discord reports Sys/executor
+                        // without bot=true.
+                        // A bot changing the nickname is not enough evidence of
+                        // a permitted pull; the move reason must identify the
+                        // internal Music pull explicitly.
+                        byBot: isMusicPullAuditReason(reason),
+                        executorId: candidate.executor?.id || null,
+                        reason,
+                    };
+                }, { maxAgeMs: 20_000, maxPages: 2 });
+                if (entry) return entry;
             }
             return { changed: false, confirmed: false, byBot: false };
         } catch {
@@ -1273,6 +1374,14 @@ function playbackStateKey(token, guildId) {
     return `${String(token || '')}:${String(guildId || '')}`;
 }
 
+// Playback snapshots are only for a short project restart, not a history
+// queue. Restoring a snapshot from hours ago can unexpectedly start an old
+// song when the project is redeployed.
+const PLAYBACK_RESTORE_MAX_AGE_MS = Math.max(
+    60_000,
+    Number(process.env.PLAYBACK_RESTORE_MAX_AGE_MS || 5 * 60_000),
+);
+
 function snapshotPlaybackTrack(track) {
     if (!track) return null;
     const info = track.info || {};
@@ -1299,6 +1408,11 @@ function savePlaybackState(token, player, track = player?.currentTrack) {
     all[playbackStateKey(token, player.guildId)] = {
         track: snapshot,
         position: Math.max(0, Number(player.position || player.data?.lastPosition || 0)),
+        paused: player.isPaused === true,
+        loop: player.loop === 'TRACK' ? 'TRACK' : 'NONE',
+        volume: clampPlayerVolume(player.volume),
+        autoPlay: player.data?.autoPlay === true,
+        filter: player.data?.activeFilter || 'clear',
         savedAt: Date.now(),
     };
     store.set('playback', all);
@@ -1317,7 +1431,7 @@ function getSavedPlaybackState(token, guildId) {
     if (!token || !guildId) return null;
     const saved = (store.get('playback') || {})[playbackStateKey(token, guildId)];
     if (!saved?.track?.info) return null;
-    if (Date.now() - Number(saved.savedAt || 0) > 7 * 86400000) return null;
+    if (Date.now() - Number(saved.savedAt || 0) > PLAYBACK_RESTORE_MAX_AGE_MS) return null;
     return saved;
 }
 
@@ -1431,6 +1545,15 @@ function canSendMusicPanel(channel) {
     if (!channel || typeof channel.send !== 'function') return false;
     if (typeof channel.isTextBased === 'function' && !channel.isTextBased()) return false;
     return true;
+}
+
+function hasHumanVoiceMember(channel, botUserId = null) {
+    if (!channel?.members?.values) return false;
+    for (const member of channel.members.values()) {
+        if (botUserId && String(member.id) === String(botUserId)) continue;
+        if (member.user?.bot !== true) return true;
+    }
+    return false;
 }
 
 async function resolveNowPlayingTextChannel(client, player, tokenObj = null) {
@@ -1810,6 +1933,26 @@ function runBackground(label, task) {
             .then(task)
             .catch(err => console.warn(`[${label}] ${err?.message || err}`));
     });
+}
+
+// Audio controls must be serialized per player. Sending pause/skip/seek/stop
+// concurrently can make Lavalink apply the requests in a different order than
+// the user's clicks, which leaves the panel stale and can briefly interrupt audio.
+function queuePlayerControl(player, label, task) {
+    if (!player) return Promise.resolve(false);
+    const data = ensurePlayerData(player);
+    const previous = data.controlQueue || Promise.resolve();
+    const current = previous
+        .catch(() => {})
+        .then(() => task())
+        .catch(err => {
+            console.warn(`[${label}] ${err?.message || err}`);
+            return false;
+        });
+    const queued = current.finally(() => {
+        if (data.controlQueue === queued) data.controlQueue = null;
+    });
+    return current;
 }
 
 function firePlayerAction(label, task) {
@@ -3002,36 +3145,61 @@ function compactTrackStatusTitle(title) {
 async function setVoiceChannelStatus(client, channelId, status) {
     if (!client?.rest || !channelId) return false;
     const body = { status: status ? String(status).slice(0, 500) : null };
-    await client.rest.put(`/channels/${channelId}/voice-status`, { body });
-    return true;
+    let lastError;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            await client.rest.put(`/channels/${channelId}/voice-status`, { body });
+            return true;
+        } catch (error) {
+            lastError = error;
+            if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+        }
+    }
+    throw lastError;
 }
 
 async function updatePlaybackVoiceStatus(client, tokenObj, player, track = null) {
     const settings = displaySettings(tokenObj);
-    if (!settings.voiceStatus) return;
-
     const channelId = player?.voiceChannel || client.guilds.cache.get(player?.guildId)?.members?.me?.voice?.channelId;
     if (!channelId) return;
 
-    const status = track
+    const status = settings.voiceStatus && track
         ? `${settings.voiceStatusEmoji || '🎵'} ${compactTrackStatusTitle(track.info?.title)}`
         : null;
 
     ensurePlayerData(player);
-    if (player.data.lastVoiceStatusChannelId === channelId && player.data.lastVoiceStatus === status) return;
+    const data = player.data;
+    if (data.lastVoiceStatusChannelId === channelId && data.lastVoiceStatus === status) return;
 
-    try {
-        await setVoiceChannelStatus(client, channelId, status);
-        player.data.lastVoiceStatusChannelId = channelId;
-        player.data.lastVoiceStatus = status;
-        player.data.voiceStatusWarned = false;
-    } catch (err) {
-        if (!player.data.voiceStatusWarned) {
-            const code = err?.code || err?.status || err?.rawError?.code || 'unknown';
-            console.warn(`[VoiceStatus] failed for ${channelId}: ${code} ${err?.message || ''}`.trim());
-            player.data.voiceStatusWarned = true;
+    const previous = data.voiceStatusUpdatePromise || Promise.resolve();
+    const update = previous.catch(() => {}).then(async () => {
+        if (data.lastVoiceStatusChannelId === channelId && data.lastVoiceStatus === status) return;
+        try {
+            const oldChannelId = data.lastVoiceStatusChannelId;
+            if (oldChannelId && oldChannelId !== channelId && data.lastVoiceStatus != null) {
+                await setVoiceChannelStatus(client, oldChannelId, null).catch(err => {
+                    if (process.env.DEBUG_VOICE_STATUS) {
+                        console.warn(`[VoiceStatus] old channel cleanup failed for ${oldChannelId}: ${err?.message || err}`);
+                    }
+                });
+            }
+            await setVoiceChannelStatus(client, channelId, status);
+            data.lastVoiceStatusChannelId = channelId;
+            data.lastVoiceStatus = status;
+            data.voiceStatusWarned = false;
+        } catch (err) {
+            if (!data.voiceStatusWarned) {
+                const code = err?.code || err?.status || err?.rawError?.code || 'unknown';
+                console.warn(`[VoiceStatus] failed for ${channelId}: ${code} ${err?.message || ''}`.trim());
+                data.voiceStatusWarned = true;
+            }
         }
-    }
+    });
+    const queued = update.finally(() => {
+        if (data.voiceStatusUpdatePromise === queued) data.voiceStatusUpdatePromise = null;
+    });
+    data.voiceStatusUpdatePromise = queued;
+    return update;
 }
 
 async function finalizePlayerUi(player, options = {}) {
@@ -3183,6 +3351,15 @@ module.exports = {
         // Poru registers its own raw listener during init(). Keep this listener
         // activity-only so voice packets are not processed twice.
         let lastMusicEventAt = Date.now();
+        // Lavalink can replay stale trackStart events while a new Poru client
+        // is attaching to an existing session. During startup, only the track
+        // recorded as current may publish a panel; old queue/history events are
+        // ignored so one restart cannot flood the command channel.
+        let startupTrackStartGate = true;
+        const startupTrackStartGateTimer = setTimeout(() => {
+            startupTrackStartGate = false;
+        }, 20_000);
+        startupTrackStartGateTimer.unref?.();
         TrueMusic.on('raw', () => {
             lastMusicEventAt = Date.now();
         });
@@ -3215,7 +3392,11 @@ module.exports = {
                 const currentVoiceId = guild.members.me?.voice?.channelId;
                 const backToVoice = tokenObj.backToVoice !== 'off';
 
-                if (currentVoiceId === targetChannel.id) return player || null;
+                // After a Node.js restart Discord may still show the bot in the
+                // voice channel while Poru's in-memory player is gone. Do not
+                // return null in that case: recreate the player so controls and
+                // REST commands can address the ongoing playback again.
+                if (currentVoiceId === targetChannel.id && player) return player;
                 if (currentVoiceId && !backToVoice) return player || null;
 
                 if (player) {
@@ -3361,7 +3542,12 @@ module.exports = {
             const currentTokens = store.get('tokens') || [];
             const updatedTokens = currentTokens.map((tokenBot) => {
                 if (tokenBot.token === targetToken) {
-                    return { ...tokenBot, channel: channel.id };
+                    const updated = { ...tokenBot, channel: channel.id };
+                    // A manual settings change becomes the new permanent room;
+                    // never let an old temporary-pull origin overwrite it later.
+                    delete updated._onlyBotOriginalChannel;
+                    delete updated._onlyBotTemporary;
+                    return updated;
                 }
                 return tokenBot;
             });
@@ -4116,6 +4302,13 @@ module.exports = {
                     if (player.node !== node) return;
                     if (player.isPaused) return;
 
+                    // Startup playback restoration has just attached a fresh
+                    // in-memory player to an already-playing voice session. Do
+                    // not let this node-recovery pass restart the same track a
+                    // second time a few seconds later.
+                    if (player.data?.startupRestoreAt
+                        && Date.now() - player.data.startupRestoreAt < 30_000) return;
+
                     if (!player.currentTrack) {
                         // Idle player: its Lavalink session no longer exists after
                         // a reconnect. Keep the Discord voice state in place and
@@ -4362,12 +4555,13 @@ module.exports = {
         TrueMusic.on('voiceStateUpdate', async (oldState, newState) => {
             if (newState.member?.id !== TrueMusic.user?.id) return;
             if (voiceReturnLock) return;
+            const moveEventAt = Date.now();
 
-            const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
+            let tokenObj = (store.get('tokens') || []).find(t => t.token === token);
             if (!tokenObj?.channel || tokenObj.awaitingReplacement) return;
             if (tokenObj.onlyBot !== 'on') _onlyBotDisplacements.delete(token);
 
-            const targetChannelId = tokenObj.channel;
+            let targetChannelId = tokenObj.channel;
             // البوت وصل للروم الصح — ألغِ أي retry معلق
             if (newState.channelId === targetChannelId) {
                 clearTimeout(voiceRejoinRetryTimer);
@@ -4375,10 +4569,17 @@ module.exports = {
                 _botNicknameSignals.delete(token);
                 return;
             }
-            if (!newState.channelId && tokenObj.onlyBot === 'on' && _onlyBotDisplacements.has(token)) {
-                // It was moved by another bot and has now left voice. Let the
-                // periodic guard return it only when it is idle outside voice.
-                return;
+            if (!newState.channelId && tokenObj.onlyBot === 'on'
+                && (_onlyBotDisplacements.has(token) || tokenObj._onlyBotTemporary)) {
+                const displacedPlayer = TrueMusic.poru?.players?.get(newState.guild?.id);
+                // A permitted pull is temporary. If the bot leaves voice while
+                // idle, restore the saved original room before reconnecting;
+                // while active, keep the temporary room so playback can resume.
+                if (tokenObj._onlyBotTemporary && isPlaybackIdle(displacedPlayer)) {
+                    tokenObj = restoreOnlyBotVoiceChannel(token, tokenObj);
+                    targetChannelId = tokenObj.channel;
+                }
+                _onlyBotDisplacements.delete(token);
             }
             // تم نقله لروم ثاني — تحقق من onlyBot و backToVoice
             if (newState.channelId) {
@@ -4387,11 +4588,22 @@ module.exports = {
                     // لو إنسان سحبه يرجع لرومه الأصلي فوراً
                     const guild = newState.guild || oldState.guild;
                     const nicknameSignal = _botNicknameSignals.get(token);
-                    const signalFresh = nicknameSignal && Date.now() - nicknameSignal.at <= 15_000;
-                    const movedByBot = signalFresh
+                    const signalFresh = nicknameSignal
+                        && Date.now() - nicknameSignal.at <= 8_000
+                        && (!nicknameSignal.channelId || nicknameSignal.channelId === newState.channelId);
+                    let movedByBot = signalFresh
                         ? nicknameSignal.byBot
-                        : await checkMovedByBot(guild, TrueMusic.user.id, newState.channelId);
+                        : await checkMovedByBot(guild, TrueMusic.user.id, newState.channelId, moveEventAt);
+                    // The internal Music pull first creates a MemberMove entry
+                    // and then a MemberUpdate nickname entry. If voiceStateUpdate
+                    // wins that race, inspect the nickname audit entry directly
+                    // before classifying the move as human.
+                    if (!movedByBot) {
+                        const nicknameDecision = await checkNicknameChangedByBot(guild, TrueMusic.user.id);
+                        movedByBot = nicknameDecision.confirmed && nicknameDecision.byBot;
+                    }
                     if (movedByBot) {
+                        promoteOnlyBotVoiceChannel(token, tokenObj, newState.channelId);
                         _onlyBotDisplacements.set(token, Date.now());
                         return;
                     }
@@ -4419,6 +4631,27 @@ module.exports = {
             }
         });
 
+        // A loop/autoplay must not keep producing audio after everyone leaves
+        // the configured voice channel. Observe all member voice changes (not
+        // only this bot's own state) and disable only the future-repeat modes;
+        // the currently playing track is allowed to finish naturally.
+        TrueMusic.on('voiceStateUpdate', async (oldState, newState) => {
+            const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
+            if (!tokenObj?.channel || oldState.guild?.id !== tokenObj.Server
+                || newState.guild?.id !== tokenObj.Server) return;
+            const targetChannelId = tokenObj.channel;
+            if (oldState.channelId !== targetChannelId && newState.channelId !== targetChannelId) return;
+            const channel = newState.guild.channels.cache.get(targetChannelId)
+                || await newState.guild.channels.fetch(targetChannelId).catch(() => null);
+            if (!channel) return;
+            const player = TrueMusic.poru?.players?.get(newState.guild.id);
+            if (!player) return;
+            if (disableIdlePlaybackModesIfAlone(TrueMusic, player, 'voice_state_empty')) {
+                ensurePlayerData(player).loopDisabledBecauseEmpty = true;
+                savePlaybackState(token, player);
+            }
+        });
+
         // A nickname change is an explicit signal used by Only Bot. Audit Log
         // identifies whether the change was made by a bot or a human; the
         // delayed matcher avoids deciding from the first incomplete snapshot.
@@ -4430,19 +4663,57 @@ module.exports = {
             const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
             if (tokenObj?.onlyBot !== 'on' || !tokenObj.channel) return;
             const guild = newMember.guild;
+            const nicknameEventAt = Date.now();
             const decision = await checkNicknameChangedByBot(guild, newMember.id);
             const currentChannelId = newMember.voice?.channelId || guild.members.me?.voice?.channelId;
             if (!decision.confirmed) return;
+            // This is our own cleanup after assigning/restoring the configured
+            // voice channel, not a human move. Processing it as a manual
+            // intervention would recursively trigger another rejoin and make
+            // the bot appear to jump back repeatedly.
+            if (/restore\s+music\s+bot\s+voice\s+assignment|clear\s+music\s+bot\s+nickname/i.test(String(decision.reason || ''))) {
+                _botNicknameSignals.delete(token);
+                return;
+            }
             if (decision.byBot) {
-                _botNicknameSignals.set(token, { at: Date.now(), byBot: true });
+                if (currentChannelId && currentChannelId !== tokenObj.channel) {
+                    promoteOnlyBotVoiceChannel(token, tokenObj, currentChannelId);
+                }
+                _botNicknameSignals.set(token, { at: Date.now(), byBot: true, channelId: currentChannelId });
                 if (!currentChannelId || currentChannelId === tokenObj.channel) return;
                 _onlyBotDisplacements.set(token, Date.now());
                 return;
             }
 
+            // The nickname update can arrive before the MemberMove audit entry
+            // for the same internal pull. Check the move audit log here before
+            // treating the nickname change as a human intervention.
+            if (currentChannelId && currentChannelId !== tokenObj.channel) {
+                        const movedByBot = await checkMovedByBot(guild, newMember.id, currentChannelId, nicknameEventAt);
+                if (movedByBot) {
+                    promoteOnlyBotVoiceChannel(token, tokenObj, currentChannelId);
+                    _botNicknameSignals.set(token, { at: Date.now(), byBot: true, channelId: currentChannelId });
+                    _onlyBotDisplacements.set(token, Date.now());
+                    return;
+                }
+
+                // Do not rush the human-move decision. Discord can emit the
+                // nickname update before the matching move audit entry. Give
+                // Audit Log a short window, then perform a second independent
+                // move check before removing the nickname and returning home.
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                const movedByBotRetry = await checkMovedByBot(guild, newMember.id, currentChannelId, nicknameEventAt);
+                if (movedByBotRetry) {
+                    promoteOnlyBotVoiceChannel(token, tokenObj, currentChannelId);
+                    _botNicknameSignals.set(token, { at: Date.now(), byBot: true, channelId: currentChannelId });
+                    _onlyBotDisplacements.set(token, Date.now());
+                    return;
+                }
+            }
+
             // Human nickname changes are treated as a manual intervention:
             // remove the nickname, verify the removal, then return to target VC.
-            _botNicknameSignals.set(token, { at: Date.now(), byBot: false });
+            _botNicknameSignals.set(token, { at: Date.now(), byBot: false, channelId: currentChannelId });
             if (!currentChannelId || currentChannelId === tokenObj.channel) return;
             await clearVoiceNickname(guild, TrueMusic.user.id);
             const freshTokenObj = (store.get('tokens') || []).find(t => t.token === token);
@@ -4546,14 +4817,34 @@ module.exports = {
                 try {
                     const playback = store.get('playback') || {};
                     const prefix = `${token}:`;
-                    const savedEntry = Object.entries(playback)
-                        .find(([key, value]) => key.startsWith(prefix) && value?.track?.info);
-                    if (!savedEntry || Date.now() - Number(savedEntry[1].savedAt || 0) > 7 * 86400000) return;
+                    const tokenObj = (store.get('tokens') || []).find(entry => entry.token === token);
+                    const savedCandidates = Object.entries(playback)
+                        .filter(([key, value]) => key.startsWith(prefix)
+                            && value?.track?.info
+                            && (!tokenObj?.Server || key.slice(prefix.length) === String(tokenObj.Server)))
+                        .sort(([, a], [, b]) => Number(b.savedAt || 0) - Number(a.savedAt || 0));
+                    const savedEntry = savedCandidates[0];
+                    if (!savedEntry) return;
+                    if (Date.now() - Number(savedEntry[1].savedAt || 0) > PLAYBACK_RESTORE_MAX_AGE_MS) {
+                        const [, staleSaved] = savedEntry;
+                        const staleGuildId = staleSaved.guildId || savedEntry[0].slice(prefix.length);
+                        clearPlaybackState(token, staleGuildId);
+                        return;
+                    }
                     const [, saved] = savedEntry;
                     const guildId = saved.guildId || savedEntry[0].slice(prefix.length);
-                    const tokenObj = (store.get('tokens') || []).find(entry => entry.token === token);
                     const guild = TrueMusic.guilds.cache.get(guildId);
                     if (!tokenObj?.channel || !guild) return;
+                    const restoreChannel = guild.channels.cache.get(tokenObj.channel)
+                        || await guild.channels.fetch(tokenObj.channel).catch(() => null);
+                    const hasHumanListener = hasHumanVoiceMember(restoreChannel, TrueMusic.user.id);
+                    if (!hasHumanListener) {
+                        // Do not resurrect music into an empty 24/7 channel after
+                        // a project restart. The saved snapshot is no longer a
+                        // user-intended playback request in this situation.
+                        clearPlaybackState(token, guildId);
+                        return;
+                    }
                     if (!await waitForPoruReady(12_000)) return;
                     const player = await ensureConfiguredVoice(guild, tokenObj, 'startup_playback_restore');
                     if (!player || player.currentTrack || player.isPlaying || player.isPaused || player.queue?.length) return;
@@ -4563,12 +4854,41 @@ module.exports = {
                         identity: trackIdentity(saved.track),
                         position: restorePosition,
                     };
+                    player.data.restorePlaybackSettings = {
+                        paused: saved.paused === true,
+                        loop: saved.loop === 'TRACK' ? 'TRACK' : 'NONE',
+                        volume: clampPlayerVolume(saved.volume),
+                        autoPlay: saved.autoPlay === true,
+                        filter: FILTER_PRESETS[saved.filter] ? saved.filter : 'clear',
+                    };
+                    player.data.startupRestoreAt = Date.now();
+                    player.data.activeFilter = player.data.restorePlaybackSettings.filter;
+                    player.setLoop(player.data.restorePlaybackSettings.loop);
+                    setAutoPlayState(player, player.data.restorePlaybackSettings.autoPlay);
+                    player.volume = player.data.restorePlaybackSettings.volume;
                     player.queue.add(saved.track);
                     await safePlay(player);
+                    if (await waitForRestoredPlayback(player, 15_000)) {
+                        const restored = player.data.restorePlaybackSettings;
+                        await updateLavalinkPlayer(player, {
+                            volume: restored.volume,
+                        }, 'startup restore volume').catch(() => {});
+                        if (restored.filter !== 'clear') {
+                            await applyFilter(player, restored.filter).catch(() => {});
+                        }
+                        if (restored.paused) {
+                            await pausePlayerSynced(player, true).catch(() => {});
+                        }
+                    }
+                    delete player.data.restorePlaybackSettings;
                 } catch (error) {
                     console.warn(`[PlaybackRestore] skipped: ${error?.message || error}`);
                 }
-            })(), 2500).unref?.();
+            })()
+                .catch(() => {})
+                .finally(() => {
+                    startupTrackStartGate = false;
+                }), 2500).unref?.();
 
             // ── Startup Guarantee (Layer 1) ────────────────────────────────────────
             // poru.init() fires the WS connection but doesn't wait for it.
@@ -5380,6 +5700,9 @@ module.exports = {
       const reason = data?.reason || 'unknown';
       const naturalEnd = isNaturalTrackEnd(reason);
       const transientEnd = /disconnect|shutdown|destroy|reconnect|node|voice|session|connection|cleanup/i.test(String(reason));
+      if (naturalEnd && player.loop === 'TRACK') {
+          player.data._loopRestartPending = true;
+      }
       if (!transientEnd && (reason !== 'replaced' || !player.data._recovering)) {
           clearPlaybackState(token, player.guildId);
       }
@@ -5530,6 +5853,19 @@ module.exports = {
                     TrueMusic.poru.on('trackStart', async (player, track) => {
                 ensurePlayerData(player);
                 const identity = trackIdentity(track);
+                if (startupTrackStartGate) {
+                    const playback = store.get('playback') || {};
+                    const saved = Object.entries(playback).find(([key, value]) =>
+                        key.startsWith(`${token}:`) && value?.track?.info
+                    )?.[1];
+                    const savedIdentity = saved ? trackIdentity(saved.track) : null;
+                    if (savedIdentity && (!identity || identity !== savedIdentity)) {
+                        if (process.env.DEBUG_NP) {
+                            console.warn(`[NowPlaying] suppressed startup stale trackStart: ${identity || 'unknown'}`);
+                        }
+                        return;
+                    }
+                }
                 const startLock = player.data.nowPlayingSendLock;
                 if (identity && startLock?.identity === identity && Date.now() - Number(startLock.at || 0) < 15_000) {
                     if (process.env.DEBUG_NP) console.warn(`[NowPlaying] early duplicate trackStart suppressed for ${identity}`);
@@ -5568,8 +5904,10 @@ module.exports = {
                 };
                 const previousContext = player.data.nowPlayingContext;
                 const previousIdentity = player.data.nowPlayingTrackIdentity || trackIdentity(previousContext?.track);
+                const isLoopRestart = player.data._loopRestartPending === true;
+                player.data._loopRestartPending = false;
                 if (player.data.nowPlayingMessage && previousIdentity) {
-                    if (identity && previousIdentity === identity) {
+                    if (identity && previousIdentity === identity && !isLoopRestart) {
                         if (wasRecovering || shouldResumeStuckTrack) {
                             if (process.env.DEBUG_NP) console.warn(`[NowPlaying] recovered duplicate trackStart for ${identity}`);
                         } else {
@@ -5776,13 +6114,22 @@ module.exports = {
                         const _now3 = Date.now();
                         const _pc = player.data._progressCache || {};
                         let tokenObj3 = _pc.tokenObj;
-                        let alreadyLiked3 = typeof _pc.liked === 'boolean' ? _pc.liked : false;
+                        const uiForProgress = player.data.ui || {};
+                        let alreadyLiked3 = typeof uiForProgress.liked === 'boolean'
+                            ? uiForProgress.liked
+                            : (typeof _pc.liked === 'boolean' ? _pc.liked : false);
                         if (!tokenObj3 || _now3 - (_pc.refreshedAt || 0) >= 30_000) {
                             tokenObj3 = (store.get('tokens') || []).find(t => t.token === token);
-                            alreadyLiked3 = await likes.isLiked(
+                            const refreshedLiked = await likes.isLiked(
                                 player.currentTrack?.info?.requester?.id || '',
                                 player.currentTrack || track,
                             ).catch(() => alreadyLiked3);
+                            // A button toggle may have changed ui.liked while the
+                            // database refresh was in flight; never overwrite that
+                            // newer UI state with the old refresh result.
+                            alreadyLiked3 = typeof player.data.ui?.liked === 'boolean'
+                                ? player.data.ui.liked
+                                : refreshedLiked;
                             player.data._progressCache = { tokenObj: tokenObj3, liked: alreadyLiked3, refreshedAt: _now3 };
                         }
                         // ─────────────────────────────────────────────────────────────
@@ -5792,13 +6139,13 @@ module.exports = {
                     return;
                 }
                         const ui3 = player.data.ui || {};
-                        ui3.liked = alreadyLiked3;
+                        ui3.liked = typeof ui3.liked === 'boolean' ? ui3.liked : alreadyLiked3;
                         player.data.ui = ui3;
                         const payload3 = buildNowPlayingV2Payload(TrueMusic, tokenObj3, player, { author: player.currentTrack?.info?.requester }, {
                             track: player.currentTrack || track,
                             requester: player.currentTrack?.info?.requester || requester,
                             includeControls: true,
-                            liked: alreadyLiked3,
+                            liked: ui3.liked,
                             artistTracks: ui3.artistTracks || [],
                             selectedFilter: ui3.selectedFilter || player.data.activeFilter || 'clear',
                             selectedArtistIndex: ui3.selectedArtistIndex ?? null,
@@ -5836,7 +6183,7 @@ module.exports = {
                     track,
                     requester,
                     includeControls: true,
-                            liked: alreadyLiked,
+                            liked: player.data.ui?.liked ?? alreadyLiked,
                             artistTracks,
                             selectedFilter: player.data.ui.selectedFilter,
                             selectedArtistIndex: player.data.ui.selectedArtistIndex,
@@ -6989,6 +7336,9 @@ module.exports = {
 
                     const replyEphemeral = async (content) => {
                         if (interaction.deferred || interaction.replied) {
+                            if (interaction.deferred && !interaction.replied) {
+                                return interaction.editReply({ content }).catch(() => {});
+                            }
                             return interaction.followUp({ content, flags: MessageFlags.Ephemeral }).catch(() => {});
                         }
                         return interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => {});
@@ -7104,8 +7454,13 @@ module.exports = {
                         }
                     }
 
-                    // Acknowledge immediately; never block the audio-control path on Discord REST.
-                    interaction.deferUpdate().catch(() => {});
+                    // Use a private interaction reply rather than deferUpdate. The
+                    // person pressing the button may not be the track requester, and
+                    // deferUpdate targets the requester's panel instead of acknowledging
+                    // the clicker reliably.
+                    if (isMusicButton) {
+                        await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+                    }
 
                     if (interaction.customId === 'loop') {
                         const newLoopMode = player.loop === 'NONE' ? 'TRACK' : 'NONE';
@@ -7121,13 +7476,13 @@ module.exports = {
                             // Update local state immediately, fire both tasks in background
                             player.isPaused = false;
                             player.isPlaying = true;
-                            runBackground('button resume audio', () => pausePlayerSynced(player, false));
+                            queuePlayerControl(player, 'button resume audio', () => pausePlayerSynced(player, false));
                             runBackground('button resume panel edit', () => editPanel(!!ui.liked));
                         } else {
                             responseMessage = '**Done pause the music.**';
                             player.isPaused = true;
                             player.isPlaying = false;
-                            runBackground('button pause audio', () => pausePlayerSynced(player, true));
+                            queuePlayerControl(player, 'button pause audio', () => pausePlayerSynced(player, true));
                             runBackground('button pause panel edit', () => editPanel(!!ui.liked));
                         }
                     }
@@ -7136,14 +7491,14 @@ module.exports = {
                         const newVolume = clampPlayerVolume(playerVolumeValue(player) - 10);
                         responseMessage = `**Volume is now __${newVolume}%__.**`;
                         // setPlayerVolumeSynced already updates local state + fires lavalink fire-and-forget
-                        runBackground('button volume down audio', () => setPlayerVolumeSynced(player, newVolume));
+                        queuePlayerControl(player, 'button volume down audio', () => setPlayerVolumeSynced(player, newVolume));
                         runBackground('button volume down panel edit', () => editPanel(!!ui.liked));
                     }
 
                     if (interaction.customId === 'volume_up') {
                         const newVolume = clampPlayerVolume(playerVolumeValue(player) + 10);
                         responseMessage = `**Volume is now __${newVolume}%__.**`;
-                        runBackground('button volume up audio', () => setPlayerVolumeSynced(player, newVolume));
+                        queuePlayerControl(player, 'button volume up audio', () => setPlayerVolumeSynced(player, newVolume));
                         runBackground('button volume up panel edit', () => editPanel(!!ui.liked));
                     }
 
@@ -7154,7 +7509,7 @@ module.exports = {
                                 } else if (player.queue.length === 0 && player.data?.autoPlay) {
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                     // Fire both in background — instant response
-                                    skipPlayerSynced(TrueMusic.poru, player, currentTrack).catch(() => {});
+                                    queuePlayerControl(player, 'button skip audio', () => skipPlayerSynced(TrueMusic.poru, player, currentTrack));
                                     editPanel(!!ui.liked).catch(() => {});
                                 } else if (player.queue.length === 0) {
                                     const finalOptions = finalUiOptionsFor(player, currentTrack);
@@ -7164,7 +7519,7 @@ module.exports = {
                                     clearProgressInterval(player, 'button skip end');
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                     // Fire both in background — instant response
-                                    stopPlayerAudio(player, { wait: false }).catch(() => {});
+                                    queuePlayerControl(player, 'button stop audio', () => stopPlayerAudio(player, { wait: true }));
                                     editPanel(!!ui.liked).catch(() => {});
                                     runBackground('button skip end cleanup', async () => {
                                         await finalizePlayerUi(player, finalOptions);
@@ -7174,7 +7529,7 @@ module.exports = {
                                 } else {
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                     // Fire both in background — instant response
-                                    skipPlayerSynced(TrueMusic.poru, player, currentTrack).catch(() => {});
+                                    queuePlayerControl(player, 'button skip audio', () => skipPlayerSynced(TrueMusic.poru, player, currentTrack));
                                     editPanel(!!ui.liked).catch(() => {});
                                     runBackground('button skip cleanup', () => bumpQueueVersion(player, 'button_skip'));
                                 }
@@ -7191,13 +7546,13 @@ module.exports = {
                             player.queue.unshift(prevTrack);
                             responseMessage = `⏮ رجعنا للأغنية السابقة.`;
                             // Lavalink + panel in parallel — same instant
-                            runBackground('button prev audio', () => skipPlayerSynced(TrueMusic.poru, player, currentBeforePrev));
+                            queuePlayerControl(player, 'button prev audio', () => skipPlayerSynced(TrueMusic.poru, player, currentBeforePrev));
                             runBackground('button prev panel edit', () => editPanel(!!ui.liked));
                             runBackground('button prev cleanup', () => bumpQueueVersion(player, 'button_prev'));
                         } else {
                             responseMessage = `⏮ تم إعادة الأغنية من البداية.`;
                             // Seek + panel in parallel — same instant
-                            runBackground('button replay audio', () => player.seekTo(0));
+                            queuePlayerControl(player, 'button replay audio', () => player.seekTo(0));
                             runBackground('button replay panel edit', () => editPanel(!!ui.liked));
                         }
                     }
@@ -7215,7 +7570,7 @@ module.exports = {
                         clearProgressInterval(player, 'button stop');
                         responseMessage = '**Done stopped the song.**';
                         // Fire both in background — instant response
-                        stopPlayerAudio(player, { wait: false }).catch(() => {});
+                        queuePlayerControl(player, 'button stop audio', () => stopPlayerAudio(player, { wait: true }));
                         editPanel(!!ui.liked).catch(() => {});
                         runBackground('button stop cleanup', async () => {
                             await finalizePlayerUi(player, finalOptions);
@@ -7300,21 +7655,24 @@ module.exports = {
                                 if (!currentTrack) {
                                     responseMessage = '*لا يوجد شيء يعمل الآن.*';
                                 } else {
-                                    responseMessage = '**Like request received.**';
-                                    runBackground('like toggle', async () => {
-                                        try {
-                                            const { liked } = await likes.toggle(interaction.user.id, currentTrack);
-                                            if (!requesterId || interaction.user.id === requesterId) {
-                                                runBackground('like panel edit', () => editPanel(liked));
-                                            }
-                                        } catch (err) {
-                                            console.error('[Likes] toggle failed:', err?.message || err);
+                                    try {
+                                        const { liked } = await likes.toggle(interaction.user.id, currentTrack);
+                                        responseMessage = liked
+                                            ? '**تمت إضافة الأغنية إلى اللايكات.**'
+                                            : '**تمت إزالة الأغنية من اللايكات.**';
+                                        if (interaction.user.id === requesterId) {
+                                            ui.liked = liked;
+                                            player.data.ui = ui;
+                                            runBackground('like panel edit', () => editPanel(liked));
                                         }
-                                    });
+                                    } catch (err) {
+                                        console.error('[Likes] toggle failed:', err?.message || err);
+                                        responseMessage = '**تعذر تحديث اللايك، حاول مرة أخرى.**';
+                                    }
                                 }
                             }
 
-                    replyEphemeral(responseMessage || '*Done*.');
+                    await replyEphemeral(responseMessage || '*Done*.');
                 });
 
 
