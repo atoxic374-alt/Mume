@@ -256,14 +256,19 @@ function refreshRoomLimitState(channel, state) {
     if (!isOverLimit) {
         state.incidentActive = false;
         state.eligibleUserIds = new Set();
+        state.allowedUserIds = new Set(ordered.map(([id]) => id));
+        state.overflowUserIds = new Set();
     } else if (!state.incidentActive) {
         // Freeze eligibility at the first over-limit event. Later entrants must
         // not become authorized just because an older member leaves.
         state.incidentActive = true;
         state.eligibleUserIds = new Set(ordered.slice(0, allowedHumanCount).map(([id]) => id));
+        state.allowedUserIds = new Set([...state.eligibleUserIds].filter(id => channel.members.has(id)));
+        state.overflowUserIds = new Set(ordered.map(([id]) => id).filter(id => !state.allowedUserIds.has(id)));
+    } else {
+        state.allowedUserIds = new Set([...state.eligibleUserIds || []].filter(id => channel.members.has(id)));
+        state.overflowUserIds = new Set(ordered.map(([id]) => id).filter(id => !state.allowedUserIds.has(id)));
     }
-    state.allowedUserIds = new Set([...state.eligibleUserIds || []].filter(id => channel.members.has(id)));
-    state.overflowUserIds = new Set(ordered.map(([id]) => id).filter(id => !state.allowedUserIds.has(id)));
     state.version = (state.version || 0) + 1;
     return state;
 }
@@ -272,6 +277,7 @@ async function updateRoomLimitMessage(channel, state, note = '') {
     state.messageUpdate = (state.messageUpdate || Promise.resolve()).then(async () => {
         const targets = [...state.overflowUserIds].filter(id => channel.members.has(id));
         state.overflowUserIds = new Set(targets);
+        if (!targets.length && !state.controlMessage) return;
         const rows = [];
         for (let offset = 0; offset < targets.length && rows.length < 5; offset += 5) {
             const row = new ActionRowBuilder();
