@@ -246,13 +246,24 @@ function refreshRoomLimitState(channel, state) {
     for (const id of state.joinedAt.keys()) {
         if (!channel.members.has(id)) state.joinedAt.delete(id);
     }
-    const currentMembers = [...channel.members.values()];
+    const voiceStateMembers = channel.guild?.voiceStates?.cache
+        ? [...channel.guild.voiceStates.cache.values()].filter(voiceState => voiceState.channelId === channel.id)
+        : [];
+    // channel.members can lag one gateway event behind voiceStateUpdate. Prefer
+    // the voice-state cache for the count, while retaining channel.members for
+    // member objects/buttons.
+    const currentMembersById = new Map([...channel.members.values()].map(member => [member.id, member]));
+    for (const voiceState of voiceStateMembers) {
+        if (voiceState.member) currentMembersById.set(voiceState.member.id, voiceState.member);
+    }
+    const currentMembers = [...currentMembersById.values()];
+    const currentMemberCount = voiceStateMembers.length || currentMembers.length;
     const ordered = [...state.joinedAt.entries()]
-        .filter(([id]) => channel.members.has(id) && !channel.members.get(id)?.user?.bot)
+        .filter(([id]) => currentMembersById.has(id) && !currentMembersById.get(id)?.user?.bot)
         .sort((a, b) => a[1] - b[1]);
     const botCount = currentMembers.filter(member => member.user.bot).length;
     const allowedHumanCount = Math.max(0, channel.userLimit - botCount);
-    const isOverLimit = currentMembers.length > channel.userLimit;
+    const isOverLimit = currentMemberCount > channel.userLimit;
     if (!isOverLimit) {
         state.incidentActive = false;
         state.eligibleUserIds = new Set();
@@ -263,10 +274,10 @@ function refreshRoomLimitState(channel, state) {
         // not become authorized just because an older member leaves.
         state.incidentActive = true;
         state.eligibleUserIds = new Set(ordered.slice(0, allowedHumanCount).map(([id]) => id));
-        state.allowedUserIds = new Set([...state.eligibleUserIds].filter(id => channel.members.has(id)));
+        state.allowedUserIds = new Set([...state.eligibleUserIds].filter(id => currentMembersById.has(id)));
         state.overflowUserIds = new Set(ordered.map(([id]) => id).filter(id => !state.allowedUserIds.has(id)));
     } else {
-        state.allowedUserIds = new Set([...state.eligibleUserIds || []].filter(id => channel.members.has(id)));
+        state.allowedUserIds = new Set([...state.eligibleUserIds || []].filter(id => currentMembersById.has(id)));
         state.overflowUserIds = new Set(ordered.map(([id]) => id).filter(id => !state.allowedUserIds.has(id)));
     }
     state.version = (state.version || 0) + 1;
