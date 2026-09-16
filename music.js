@@ -295,7 +295,7 @@ async function updateRoomLimitMessage(channel, state, note = '') {
         }
         const payload = targets.length ? {
             content: `${targets.map(id => `<@${id}>`).join(' ')}${note ? `\n${note}` : ''}`,
-            embeds: [new EmbedBuilder().setDescription('**يرجى مغادرة الروم وعدم تجاوز اللمت الخاص بالروم.**\nاضغط Kick لطرد أي عضو زائد وقفل دخوله 5 دقائق.')],
+            embeds: [new EmbedBuilder().setDescription('**يرجى مغادرة الروم وعدم تجاوز اللمت الخاص بالروم.**')],
             components: rows,
         } : { content: note || '**تمت معالجة كل الأعضاء الزائدين.**', embeds: [], components: [] };
         if (state.controlMessage?.edit) {
