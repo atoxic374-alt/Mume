@@ -207,6 +207,99 @@ const _movedByBotCache = new Map(); // guildId:memberId → { ts: number, pendin
 const _onlyBotDisplacements = new Map(); // token → timestamp
 const _nicknameChangeChecks = new Map(); // guildId:memberId → pending Promise
 const _botNicknameSignals = new Map(); // token → { at, byBot }
+// Voice-room limit guard state. It is intentionally shared by all music-bot
+// clients in this process so a kick lock cannot be bypassed by another bot.
+const _roomLimitState = new Map(); // channelId → live room state
+const _roomKickLocks = new Map(); // `${guildId}:${channelId}:${userId}` → expiresAt
+const ROOM_KICK_LOCK_MS = 5 * 60 * 1000;
+const ROOM_KICK_LOCK_FILE = './settings/room-kick-locks.json';
+try {
+    const savedLocks = JSON.parse(fs.readFileSync(ROOM_KICK_LOCK_FILE, 'utf8'));
+    for (const [key, expiresAt] of Object.entries(savedLocks || {})) {
+        if (Number.isFinite(expiresAt) && expiresAt > Date.now()) _roomKickLocks.set(key, expiresAt);
+    }
+} catch {}
+function persistRoomKickLocks() {
+    try {
+        const data = Object.fromEntries([..._roomKickLocks.entries()].filter(([, expiry]) => expiry > Date.now()));
+        fs.mkdirSync('./settings', { recursive: true });
+        fs.writeFileSync(`${ROOM_KICK_LOCK_FILE}.tmp`, JSON.stringify(data, null, 2));
+        fs.renameSync(`${ROOM_KICK_LOCK_FILE}.tmp`, ROOM_KICK_LOCK_FILE);
+    } catch (error) {
+        console.warn('[RoomGuard] Could not persist kick locks:', error?.message || error);
+    }
+}
+function roomKickLockKey(guildId, channelId, userId) {
+    return `${guildId}:${channelId}:${userId}`;
+}
+function pruneRoomKickLocks() {
+    const now = Date.now();
+    let changed = false;
+    for (const [key, expiry] of _roomKickLocks) {
+        if (expiry <= now) { _roomKickLocks.delete(key); changed = true; }
+    }
+    if (changed) persistRoomKickLocks();
+}
+setInterval(pruneRoomKickLocks, 30_000).unref?.();
+
+function refreshRoomLimitState(channel, state) {
+    for (const id of state.joinedAt.keys()) {
+        if (!channel.members.has(id)) state.joinedAt.delete(id);
+    }
+    const currentMembers = [...channel.members.values()];
+    const ordered = [...state.joinedAt.entries()]
+        .filter(([id]) => channel.members.has(id) && !channel.members.get(id)?.user?.bot)
+        .sort((a, b) => a[1] - b[1]);
+    const botCount = currentMembers.filter(member => member.user.bot).length;
+    const allowedHumanCount = Math.max(0, channel.userLimit - botCount);
+    const isOverLimit = currentMembers.length > channel.userLimit;
+    if (!isOverLimit) {
+        state.incidentActive = false;
+        state.eligibleUserIds = new Set();
+    } else if (!state.incidentActive) {
+        // Freeze eligibility at the first over-limit event. Later entrants must
+        // not become authorized just because an older member leaves.
+        state.incidentActive = true;
+        state.eligibleUserIds = new Set(ordered.slice(0, allowedHumanCount).map(([id]) => id));
+    }
+    state.allowedUserIds = new Set([...state.eligibleUserIds || []].filter(id => channel.members.has(id)));
+    state.overflowUserIds = new Set(ordered.map(([id]) => id).filter(id => !state.allowedUserIds.has(id)));
+    state.version = (state.version || 0) + 1;
+    return state;
+}
+
+async function updateRoomLimitMessage(channel, state, note = '') {
+    state.messageUpdate = (state.messageUpdate || Promise.resolve()).then(async () => {
+        const targets = [...state.overflowUserIds].filter(id => channel.members.has(id));
+        state.overflowUserIds = new Set(targets);
+        const rows = [];
+        for (let offset = 0; offset < targets.length && rows.length < 5; offset += 5) {
+            const row = new ActionRowBuilder();
+            for (const targetId of targets.slice(offset, offset + 5)) {
+                const targetMember = channel.members.get(targetId);
+                const targetName = String(targetMember?.displayName || targetMember?.user?.username || targetId)
+                    .replace(/[\r\n]/g, ' ')
+                    .slice(0, 60);
+                row.addComponents(new ButtonBuilder()
+                    .setCustomId(`room_limit_kick:${channel.id}:${targetId}:${state.version}`)
+                    .setLabel(`Kick: ${targetName}`)
+                    .setStyle(ButtonStyle.Danger));
+            }
+            rows.push(row);
+        }
+        const payload = targets.length ? {
+            content: `${targets.map(id => `<@${id}>`).join(' ')}${note ? `\n${note}` : ''}`,
+            embeds: [new EmbedBuilder().setDescription('**يرجى مغادرة الروم وعدم تجاوز اللمت الخاص بالروم.**\nاضغط Kick لطرد أي عضو زائد وقفل دخوله 5 دقائق.')],
+            components: rows,
+        } : { content: note || '**تمت معالجة كل الأعضاء الزائدين.**', embeds: [], components: [] };
+        if (state.controlMessage?.edit) {
+            await state.controlMessage.edit(payload).catch(() => {});
+        } else {
+            state.controlMessage = await channel.send(payload).catch(() => null);
+        }
+    }).catch(() => {});
+    return state.messageUpdate;
+}
 
 function isMusicPullAuditReason(reason) {
     const text = String(reason || '')
@@ -4722,11 +4815,20 @@ module.exports = {
             }
         });
 
-        // ── limitGuard: أبلغ المستخدم عند تجاوز لمت الروم ──────────────────────
+        // ── limitGuard: زر Kick للعضو الزائد مع قفل 5 دقائق ────────────────────
         TrueMusic.on('voiceStateUpdate', (oldState, newState) => {
-            // فقط عند الدخول لروم جديد (ليس البوت نفسه)
-            if (!newState.channelId) return;
-            if (newState.channelId === oldState.channelId) return;
+            if (oldState.channelId && oldState.channelId !== newState.channelId) {
+                const oldRoomState = _roomLimitState.get(oldState.channelId);
+                if (oldRoomState) {
+                    oldRoomState.joinedAt.delete(newState.id);
+                    const oldRoom = oldState.guild?.channels.cache.get(oldState.channelId);
+                    if (oldRoom?.userLimit) {
+                        refreshRoomLimitState(oldRoom, oldRoomState);
+                        updateRoomLimitMessage(oldRoom, oldRoomState, oldRoomState.overflowUserIds.size ? '' : '**عاد الروم إلى الحد المسموح.**');
+                    }
+                }
+            }
+            if (!newState.channelId || newState.channelId === oldState.channelId) return;
             if (newState.member?.user?.bot) return;
 
             // فقط الروم المخصص لهذا البوت
@@ -4737,21 +4839,42 @@ module.exports = {
             const channel = newState.guild?.channels.cache.get(newState.channelId) ?? newState.channel;
             if (!channel?.userLimit) return; // 0 أو غير محدد = لا يوجد لمت
 
-            // عدّ كل الأعضاء (بوتات + بشر) — نفس طريقة حساب ديسكورد
-            const humanCount = channel.members.size;
-            // humanCount > userLimit (تجاوز فعلي، مو مساواة)
-            if (humanCount <= channel.userLimit) return;
+            pruneRoomKickLocks();
+            const lockKey = roomKickLockKey(newState.guild.id, newState.channelId, newState.member.id);
+            const lockExpiresAt = _roomKickLocks.get(lockKey);
+            if (lockExpiresAt) {
+                if (lockExpiresAt > Date.now()) {
+                    newState.disconnect('Room limit kick lock is still active').catch(() => {});
+                    return;
+                }
+                _roomKickLocks.delete(lockKey);
+            }
 
-            // cooldown لمنع الإزعاج (30 ثانية لكل شخص في نفس الروم)
-            const ck = `${newState.channelId}:${newState.member.id}`;
-            const now = Date.now();
-            if (_limitGuardCooldown.has(ck) && now - _limitGuardCooldown.get(ck) < _LIMIT_GUARD_COOLDOWN_MS) return;
-            _limitGuardCooldown.set(ck, now);
+            let roomState = _roomLimitState.get(newState.channelId);
+            if (!roomState) {
+                roomState = { joinedAt: new Map(), overflowUserIds: new Set(), allowedUserIds: new Set(), eligibleUserIds: new Set(), pendingKicks: new Set(), incidentActive: false, controlMessage: null, version: 0 };
+                _roomLimitState.set(newState.channelId, roomState);
+                // Members already present are older than the member in this event.
+                for (const member of channel.members.values()) {
+                    if (!member.user.bot && member.id !== newState.member.id) {
+                        roomState.joinedAt.set(member.id, Date.now() - 1);
+                    }
+                }
+            }
+            roomState.joinedAt.set(newState.member.id, Date.now());
+            refreshRoomLimitState(channel, roomState);
+            if (!roomState.overflowUserIds.size) return;
+            updateRoomLimitMessage(channel, roomState);
+        });
 
-            // إرسال فوري — fire and forget بدون await
-            const _limitEmbed = new EmbedBuilder()
-                .setDescription(`**يرجى مغادرة الروم وعدم تجاوز اللمت الخاص بالروم.**`);
-            channel.send({ content: `<@${newState.member.id}>`, embeds: [_limitEmbed] }).catch(() => {});
+        TrueMusic.on('channelUpdate', (oldChannel, newChannel) => {
+            if (!newChannel?.id || oldChannel?.userLimit === newChannel.userLimit) return;
+            const tkObj = (store.get('tokens') || []).find(t => t.token === token);
+            if (!tkObj?.channel || tkObj.channel !== newChannel.id || !newChannel.userLimit) return;
+            const state = _roomLimitState.get(newChannel.id);
+            if (!state) return;
+            refreshRoomLimitState(newChannel, state);
+            updateRoomLimitMessage(newChannel, state, state.overflowUserIds.size ? '**تم تحديث حد الروم.**' : '**عاد الروم إلى الحد المسموح.**');
         });
 
         // ── Fix: Re-init Lavalink after Discord WebSocket shard resumes ──────────
@@ -7329,6 +7452,49 @@ module.exports = {
                     // Update activity timestamp on every interaction so idle-killer doesn't fire
                     botLastActivity.set(token, Date.now());
 
+                    if (interaction.isButton() && interaction.customId.startsWith('room_limit_kick:')) {
+                        const [, channelId, targetId, buttonVersion] = interaction.customId.split(':');
+                        const tokenObjForRoom = (store.get('tokens') || []).find(t => t.token === token);
+                        const room = interaction.guild?.channels.cache.get(channelId);
+                        const state = _roomLimitState.get(channelId);
+                        if (tokenObjForRoom?.channel !== channelId || !room || !state) return;
+                        state.controlMessage = interaction.message;
+                        const canKick = state.allowedUserIds.has(interaction.user.id) && room.members.has(interaction.user.id);
+                        if (!canKick) return interaction.reply({
+                            content: '**فقط الأعضاء الموجودون قبل العضو الزائد يمكنهم استخدام زر Kick.**',
+                            flags: MessageFlags.Ephemeral,
+                        }).catch(() => {});
+                        if (String(state.version) !== String(buttonVersion) || !state.overflowUserIds.has(targetId)) {
+                            return interaction.reply({ content: '**هذا الزر قديم أو تمت معالجة العضو. استخدم زر Kick الحالي.**', flags: MessageFlags.Ephemeral }).catch(() => {});
+                        }
+                        state.pendingKicks ||= new Set();
+                        if (state.pendingKicks.has(targetId)) return interaction.reply({ content: '**تجري معالجة هذا العضو بالفعل.**', flags: MessageFlags.Ephemeral }).catch(() => {});
+                        const target = room.members.get(targetId);
+                        if (!target || target.user?.bot) {
+                            state.overflowUserIds.delete(targetId);
+                            await updateRoomLimitMessage(room, state, '**غادر العضو الزائد أو لم يعد موجودًا.**');
+                            return interaction.update({ content: '**العضو الزائد غادر الروم بالفعل أو لم يعد موجودًا.**', embeds: [], components: [] }).catch(() => {});
+                        }
+                        state.pendingKicks.add(targetId);
+                        const lockKey = roomKickLockKey(interaction.guild.id, channelId, targetId);
+                        try {
+                            _roomKickLocks.set(lockKey, Date.now() + ROOM_KICK_LOCK_MS);
+                            persistRoomKickLocks();
+                            await target.voice.disconnect('Room limit exceeded; kicked by an existing room member');
+                            state.joinedAt.delete(targetId);
+                            state.overflowUserIds.delete(targetId);
+                            refreshRoomLimitState(room, state);
+                            await interaction.deferUpdate().catch(() => {});
+                            await updateRoomLimitMessage(room, state, `**Done kicked** <@${targetId}> — تم قفل دخوله لهذا الروم لمدة 5 دقائق.`);
+                            return;
+                        } catch (error) {
+                            _roomKickLocks.delete(lockKey);
+                            persistRoomKickLocks();
+                            return interaction.reply({ content: '**تعذر طرد العضو. تحقق من صلاحية Move Members وحاول مجددًا.**', flags: MessageFlags.Ephemeral }).catch(() => {});
+                        } finally {
+                            state.pendingKicks.delete(targetId);
+                        }
+                    }
                     const musicButtons = new Set(['loop', 'pause', 'volume_down', 'volume_up', 'skip', 'like', 'prev', 'stop', 'queue_btn']);
                     const isMusicButton = interaction.isButton() && musicButtons.has(interaction.customId);
                     const isMusicMenu = interaction.isStringSelectMenu() && ['np_artist', 'np_filter'].includes(interaction.customId);
