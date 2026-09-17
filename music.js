@@ -4362,17 +4362,27 @@ module.exports = {
             if (!player?.currentTrack?.track || !player?.node?.rest) return false;
             ensurePlayerData(player);
             if (player.data.needsVoiceRefresh || !hasPlayerVoiceSession(player)) {
-                await refreshPlayerVoiceSession(player, `restart:${reason}`);
+                const refreshed = await refreshPlayerVoiceSession(player, `restart:${reason}`);
+                if (!refreshed) return false;
             }
             // Mark recovery so trackEnd(replaced) is suppressed and doesn't break UI
             player.data._recovering = true;
             player.data._recoveryTrackId = trackIdentity(player.currentTrack);
             player.data._recoveryAt = Date.now();
-            await updateLavalinkPlayer(player, {
-                track: { encoded: player.currentTrack.track },
-                position: Math.max(0, Number(player.position || 0)),
-                paused: false,
-            }, 'recovery restart');
+            try {
+                await updateLavalinkPlayer(player, {
+                    track: { encoded: player.currentTrack.track },
+                    position: Math.max(0, Number(player.position || 0)),
+                    paused: false,
+                }, 'recovery restart');
+            } catch (error) {
+                // Do not leave the next genuine trackEnd looking like a
+                // recovery replacement after a failed REST request.
+                player.data._recovering = false;
+                player.data._recoveryTrackId = null;
+                player.data._recoveryAt = null;
+                throw error;
+            }
             player.isPlaying = true;
             player.isPaused = false;
             player.data.lastProgressAt = Date.now();
@@ -4399,7 +4409,8 @@ module.exports = {
 
             player.data.recoveryAttempts = (player.data.recoveryAttempts || 0) + 1;
             if (player.data.recoveryAttempts <= 2) {
-                await restartCurrentTrack(player, reason).catch(() => {});
+                const restarted = await restartCurrentTrack(player, reason).catch(() => false);
+                if (!restarted) player.data.recoveryAttempts--;
                 return;
             }
 
@@ -4585,6 +4596,9 @@ module.exports = {
                 ensurePlayerData(player);
                 if (player.isPlaying || player.isPaused) {
                     // Preserve currentTrack so scheduleNodeRecovery can restart it.
+                    // Persist the last known position before freezing local state;
+                    // this also protects a full process restart during the outage.
+                    savePlaybackState(token, player);
                     // Only clear isPlaying — intentionally keep isPaused as-is so
                     // scheduleNodeRecovery skips paused players (its `if (player.isPaused) return`
                     // guard) and the user's pause state survives the node reconnect.
