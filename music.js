@@ -1961,6 +1961,7 @@ async function refreshPlayerVoiceSession(player, reason = 'play') {
         await updateLavalinkPlayer(player, {
             voice: player.connection.voice,
             paused: false,
+            volume: clampPlayerVolume(player.volume),
         }, 'voice session refresh');
     };
 
@@ -1976,8 +1977,9 @@ async function refreshPlayerVoiceSession(player, reason = 'play') {
     data.lastVoiceRefreshAt = Date.now();
     data.lastVoiceRefreshReason = reason;
 
-    // Fix #6: أعد إرسال الفلاتر — session جديد = Lavalink ينسى كل شيء
-    lavalinkKeepAlive.reapplyPlayerFilters(player).catch(() => {});
+    // Fix #6: أعد إرسال الفلاتر — session جديد = Lavalink ينسى كل شيء.
+    // Await it so a recovery restart cannot briefly play with default filters.
+    await lavalinkKeepAlive.reapplyPlayerFilters(player).catch(() => {});
 
     return true;
 }
@@ -4408,8 +4410,14 @@ module.exports = {
         }
 
         async function recoverPlayerPlayback(player, reason = 'watchdog') {
-            if (!player || player.isPaused) return;
+            if (!player) return;
             ensurePlayerData(player);
+            if (player.isPaused) {
+                if (player.currentTrack && player.data.needsVoiceRefresh) {
+                    await restorePausedTrackSession(player, reason).catch(() => {});
+                }
+                return;
+            }
 
             const tokenObj = (store.get('tokens') || []).find(t => t.token === token);
             const guild = TrueMusic.guilds.cache.get(player.guildId);
