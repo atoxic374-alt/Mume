@@ -3312,6 +3312,16 @@ async function updatePlaybackVoiceStatus(client, tokenObj, player, track = null)
     return update;
 }
 
+// Lavalink/Poru is the source of truth; read the player's current state
+// instead of trusting possibly stale event arguments.
+function syncPlaybackVoiceStatus(client, tokenObj, player) {
+    if (!player) return Promise.resolve(false);
+    const track = player.currentTrack && (player.isPlaying || player.isPaused)
+        ? player.currentTrack
+        : null;
+    return updatePlaybackVoiceStatus(client, tokenObj, player, track);
+}
+
 async function finalizePlayerUi(player, options = {}) {
     clearProgressInterval(player);
     const msg = player?.data?.nowPlayingMessage;
@@ -5144,6 +5154,7 @@ module.exports = {
             }
             // ─────────────────────────────────────────────────────────────────────
 
+            let lastVoiceStatusReconcileAt = 0;
             let int = setInterval(async () => {
                 if (!TrueMusic.readyAt) return;
 
@@ -5177,6 +5188,20 @@ module.exports = {
                     await TrueMusic.destroy().catch(() => 0);
                     runningBots.delete(token);
                     return clearInterval(int);
+                }
+
+                // Event handlers update immediately; this repairs missed or
+                // reordered Poru events once per minute for active players.
+                const reconcileNow = Date.now();
+                if (reconcileNow - lastVoiceStatusReconcileAt >= 60_000) {
+                    lastVoiceStatusReconcileAt = reconcileNow;
+                    const player = TrueMusic.poru.players.get(tokenObj.Server);
+                    if (player) {
+                        ensurePlayerData(player);
+                        if (player.currentTrack || player.data.lastVoiceStatus != null) {
+                            syncPlaybackVoiceStatus(TrueMusic, tokenObj, player).catch(() => {});
+                        }
+                    }
                 }
 
                 // ── Lavalink Node Guardian (Layers 2 + 3) ────────────────────────────
