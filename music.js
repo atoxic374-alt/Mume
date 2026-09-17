@@ -5820,6 +5820,8 @@ module.exports = {
             player.isPlaying = false;
             player.isPaused = false;
             clearStoppedPlaybackCaches(player);
+            const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
+            await updatePlaybackVoiceStatus(TrueMusic, tokenObj2, player, null);
             markStopped();
         }
     });
@@ -5886,6 +5888,14 @@ module.exports = {
           await finalizePlayerUi(player, { complete: naturalEnd, track });
       }
       await bumpQueueVersion(player, `track_end:${reason}`);
+      // Poru does not always emit queueEnd for a final natural/stopped track.
+      // Clear the channel status here as well when there is no next queued item.
+      // If a next track starts immediately, trackStart queues the new status
+      // after this clear, so transitions do not leave a stale title behind.
+      if (!player.queue?.length) {
+          const tokenObj2 = (store.get('tokens') || []).find(t => t.token === token);
+          await updatePlaybackVoiceStatus(TrueMusic, tokenObj2, player, null);
+      }
             });
 
                     TrueMusic.poru.on("queueEnd", async (player) => {
