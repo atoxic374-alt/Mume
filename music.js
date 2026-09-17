@@ -4390,6 +4390,23 @@ module.exports = {
             return true;
         }
 
+        async function restorePausedTrackSession(player, reason = 'paused_recover') {
+            if (!player?.currentTrack?.track || !player?.node?.rest) return false;
+            ensurePlayerData(player);
+            const refreshed = await refreshPlayerVoiceSession(player, reason);
+            if (!refreshed) return false;
+            await updateLavalinkPlayer(player, {
+                track: { encoded: player.currentTrack.track },
+                position: Math.max(0, Number(player.position || player.data.lastPosition || 0)),
+                paused: true,
+            }, 'paused session restore');
+            player.isPlaying = false;
+            player.isPaused = true;
+            player.data.lastProgressAt = Date.now();
+            player.data.lastRecoveryReason = reason;
+            return true;
+        }
+
         async function recoverPlayerPlayback(player, reason = 'watchdog') {
             if (!player || player.isPaused) return;
             ensurePlayerData(player);
@@ -4431,14 +4448,17 @@ module.exports = {
                 if (!node.isConnected) return; // node went offline again — skip
                 TrueMusic.poru.players.forEach(player => {
                     if (player.node !== node) return;
-                    if (player.isPaused) return;
-
                     // Startup playback restoration has just attached a fresh
                     // in-memory player to an already-playing voice session. Do
                     // not let this node-recovery pass restart the same track a
                     // second time a few seconds later.
                     if (player.data?.startupRestoreAt
                         && Date.now() - player.data.startupRestoreAt < 30_000) return;
+
+                    if (player.isPaused) {
+                        restorePausedTrackSession(player, reason).catch(() => {});
+                        return;
+                    }
 
                     if (!player.currentTrack) {
                         // Idle player: its Lavalink session no longer exists after
