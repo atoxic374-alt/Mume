@@ -243,9 +243,6 @@ function pruneRoomKickLocks() {
 setInterval(pruneRoomKickLocks, 30_000).unref?.();
 
 function refreshRoomLimitState(channel, state) {
-    for (const id of state.joinedAt.keys()) {
-        if (!channel.members.has(id)) state.joinedAt.delete(id);
-    }
     const voiceStateMembers = channel.guild?.voiceStates?.cache
         ? [...channel.guild.voiceStates.cache.values()].filter(voiceState => voiceState.channelId === channel.id)
         : [];
@@ -253,8 +250,17 @@ function refreshRoomLimitState(channel, state) {
     // the voice-state cache for the count, while retaining channel.members for
     // member objects/buttons.
     const currentMembersById = new Map([...channel.members.values()].map(member => [member.id, member]));
+    const currentVoiceIds = new Set(voiceStateMembers.map(voiceState => voiceState.id));
+    if (currentVoiceIds.size) {
+        for (const id of currentMembersById.keys()) {
+            if (!currentVoiceIds.has(id)) currentMembersById.delete(id);
+        }
+    }
     for (const voiceState of voiceStateMembers) {
         if (voiceState.member) currentMembersById.set(voiceState.member.id, voiceState.member);
+    }
+    for (const id of state.joinedAt.keys()) {
+        if (!currentMembersById.has(id)) state.joinedAt.delete(id);
     }
     const currentMembers = [...currentMembersById.values()];
     const currentMemberCount = voiceStateMembers.length || currentMembers.length;
@@ -286,14 +292,27 @@ function refreshRoomLimitState(channel, state) {
 
 async function updateRoomLimitMessage(channel, state, note = '') {
     state.messageUpdate = (state.messageUpdate || Promise.resolve()).then(async () => {
-        const targets = [...state.overflowUserIds].filter(id => channel.members.has(id));
+        // Send the warning to the chat attached to the bot's own voice room.
+        // Resolve targets from voice states because channel.members can lag one
+        // gateway event.
+        const botMember = channel.guild?.members.me;
+        const roomPermissions = botMember ? channel.permissionsFor(botMember) : null;
+        const canSendWarning = roomPermissions?.has(PermissionFlagsBits.SendMessages)
+            && roomPermissions?.has(PermissionFlagsBits.EmbedLinks);
+        const voiceMemberIds = new Set(
+            [...(channel.guild?.voiceStates?.cache?.values?.() || [])]
+                .filter(voiceState => voiceState.channelId === channel.id)
+                .map(voiceState => voiceState.id),
+        );
+        const targets = [...state.overflowUserIds].filter(id => voiceMemberIds.has(id) || channel.members.has(id));
         state.overflowUserIds = new Set(targets);
-        if (!targets.length && !state.controlMessage) return;
+        if (!canSendWarning && !state.controlMessage) return;
         const rows = [];
         for (let offset = 0; offset < targets.length && rows.length < 5; offset += 5) {
             const row = new ActionRowBuilder();
             for (const targetId of targets.slice(offset, offset + 5)) {
-                const targetMember = channel.members.get(targetId);
+                const targetMember = channel.members.get(targetId)
+                    || channel.guild?.members.cache.get(targetId);
                 const targetName = String(targetMember?.displayName || targetMember?.user?.username || targetId)
                     .replace(/[\r\n]/g, ' ')
                     .slice(0, 60);
@@ -312,7 +331,7 @@ async function updateRoomLimitMessage(channel, state, note = '') {
         if (state.controlMessage?.edit) {
             await state.controlMessage.edit(payload).catch(() => {});
         } else {
-            state.controlMessage = await channel.send(payload).catch(() => null);
+            state.controlMessage = canSendWarning ? await channel.send(payload).catch(() => null) : null;
         }
     }).catch(() => {});
     return state.messageUpdate;
@@ -7551,11 +7570,17 @@ module.exports = {
                         const tokenObjForRoom = (store.get('tokens') || []).find(t => t.token === token);
                         const room = interaction.guild?.channels.cache.get(channelId);
                         const state = _roomLimitState.get(channelId);
-                        if (tokenObjForRoom?.channel !== channelId || !room || !state) return;
+                        if (tokenObjForRoom?.channel !== channelId || !room?.isVoiceBased?.() || !state
+                            || interaction.message.id !== state.controlMessage?.id) return;
                         state.controlMessage = interaction.message;
-                        const canKick = state.allowedUserIds.has(interaction.user.id) && room.members.has(interaction.user.id);
+                        const actorVoiceState = interaction.guild.voiceStates.cache.get(interaction.user.id);
+                        const botMember = interaction.guild.members.me;
+                        const canMoveMembers = room.permissionsFor(botMember)?.has(PermissionFlagsBits.MoveMembers);
+                        const canKick = state.allowedUserIds.has(interaction.user.id)
+                            && actorVoiceState?.channelId === channelId
+                            && canMoveMembers;
                         if (!canKick) return interaction.reply({
-                            content: '**فقط الأعضاء الموجودون قبل العضو الزائد يمكنهم استخدام زر Kick.**',
+                            content: '**فقط الأعضاء المسموح لهم داخل الروم، مع توفر صلاحية Move Members للبوت، يمكنهم استخدام زر Kick.**',
                             flags: MessageFlags.Ephemeral,
                         }).catch(() => {});
                         if (String(state.version) !== String(buttonVersion) || !state.overflowUserIds.has(targetId)) {
@@ -7563,8 +7588,10 @@ module.exports = {
                         }
                         state.pendingKicks ||= new Set();
                         if (state.pendingKicks.has(targetId)) return interaction.reply({ content: '**تجري معالجة هذا العضو بالفعل.**', flags: MessageFlags.Ephemeral }).catch(() => {});
-                        const target = room.members.get(targetId);
-                        if (!target || target.user?.bot) {
+                        const target = room.members.get(targetId)
+                            || interaction.guild.members.cache.get(targetId);
+                        const targetVoiceState = interaction.guild.voiceStates.cache.get(targetId);
+                        if (!target || target.user?.bot || targetVoiceState?.channelId !== channelId) {
                             state.overflowUserIds.delete(targetId);
                             await updateRoomLimitMessage(room, state, '**غادر العضو الزائد أو لم يعد موجودًا.**');
                             return interaction.update({ content: '**العضو الزائد غادر الروم بالفعل أو لم يعد موجودًا.**', embeds: [], components: [] }).catch(() => {});
