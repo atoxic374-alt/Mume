@@ -275,18 +275,30 @@ function refreshRoomLimitState(channel, state) {
     }
     const currentMembers = [...currentMembersById.values()];
     const currentMemberCount = currentMembers.length;
+    // Use the same snapshot for counting and for the overflow buttons. If a
+    // member is visible in a voice state but was not recorded in joinedAt
+    // (for example after startup or a missed event), add it now instead of
+    // declaring the room handled with no targets.
+    const snapshotAt = Date.now();
+    for (const member of currentMembers) {
+        if (!member.user?.bot && !state.joinedAt.has(member.id)) {
+            state.joinedAt.set(member.id, snapshotAt);
+        }
+    }
     const ordered = [...state.joinedAt.entries()]
         .filter(([id]) => currentMembersById.has(id) && !currentMembersById.get(id)?.user?.bot)
         .sort((a, b) => a[1] - b[1]);
     const botCount = currentMembers.filter(member => member.user.bot).length;
     const allowedHumanCount = Math.max(0, channel.userLimit - botCount);
     const isOverLimit = currentMemberCount > channel.userLimit;
+    state.currentMemberIds = new Set(currentMembersById.keys());
+    state.isOverLimit = isOverLimit;
     if (!isOverLimit) {
         state.incidentActive = false;
         state.eligibleUserIds = new Set();
         state.allowedUserIds = new Set(ordered.map(([id]) => id));
         state.overflowUserIds = new Set();
-    } else if (!state.incidentActive) {
+    } else if (!state.incidentActive || (!state.eligibleUserIds?.size && ordered.length)) {
         // Freeze eligibility at the first over-limit event. Later entrants must
         // not become authorized just because an older member leaves.
         state.incidentActive = true;
@@ -308,22 +320,11 @@ async function updateRoomLimitMessage(channel, state, note = '') {
         // gateway event.
         const botMember = channel.guild?.members.me;
         const roomPermissions = botMember ? channel.permissionsFor(botMember) : null;
-        const canSendWarning = roomPermissions?.has(PermissionFlagsBits.SendMessages)
-            && roomPermissions?.has(PermissionFlagsBits.EmbedLinks);
-        const voiceMemberIds = new Set(
-            [...(channel.guild?.voiceStates?.cache?.values?.() || [])]
-                .filter(voiceState => voiceState.channelId === channel.id)
-                .map(voiceState => voiceState.id),
-        );
-        const pendingMemberIds = new Set(
-            [...(state.pendingMembers?.entries?.() || [])]
-                .filter(([, pending]) => Number(pending?.expiresAt || 0) > Date.now())
-                .map(([id]) => id),
-        );
-        // Keep an overflow target that was just reported by voiceStateUpdate
-        // even if both Discord member caches are still one event behind.
-        const targets = [...state.overflowUserIds].filter(id =>
-            pendingMemberIds.has(id) || voiceMemberIds.has(id) || channel.members.has(id));
+        const canSendWarning = !!channel.isSendable?.()
+            && roomPermissions?.has(PermissionFlagsBits.SendMessages);
+        // This is deliberately the same snapshot used by refreshRoomLimitState.
+        const targets = [...state.overflowUserIds].filter(id => state.currentMemberIds?.has(id));
+        if (!targets.length && state.isOverLimit) return;
         state.overflowUserIds = new Set(targets);
         if (!canSendWarning && !state.controlMessage) return;
         const rows = [];
@@ -342,11 +343,12 @@ async function updateRoomLimitMessage(channel, state, note = '') {
             }
             rows.push(row);
         }
+        const canEmbed = roomPermissions?.has(PermissionFlagsBits.EmbedLinks);
         const payload = targets.length ? {
             // Never append a stale "room is within limit" note while targets
             // are still present. Voice events can arrive out of order.
             content: `${targets.map(id => `<@${id}>`).join(' ')}${note && !/عاد الروم إلى الحد المسموح/.test(note) ? `\n${note}` : ''}`,
-            embeds: [new EmbedBuilder().setDescription('**يرجى مغادرة الروم وعدم تجاوز اللمت الخاص بالروم.**')],
+            ...(canEmbed ? { embeds: [new EmbedBuilder().setDescription('**يرجى مغادرة الروم وعدم تجاوز اللمت الخاص بالروم.**')] } : {}),
             components: rows,
         } : { content: note || '**تمت معالجة كل الأعضاء الزائدين.**', embeds: [], components: [] };
         if (state.controlMessage?.edit) {
