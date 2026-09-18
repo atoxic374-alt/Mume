@@ -324,7 +324,9 @@ async function updateRoomLimitMessage(channel, state, note = '') {
             rows.push(row);
         }
         const payload = targets.length ? {
-            content: `${targets.map(id => `<@${id}>`).join(' ')}${note ? `\n${note}` : ''}`,
+            // Never append a stale "room is within limit" note while targets
+            // are still present. Voice events can arrive out of order.
+            content: `${targets.map(id => `<@${id}>`).join(' ')}${note && !/عاد الروم إلى الحد المسموح/.test(note) ? `\n${note}` : ''}`,
             embeds: [new EmbedBuilder().setDescription('**يرجى مغادرة الروم وعدم تجاوز اللمت الخاص بالروم.**')],
             components: rows,
         } : { content: note || '**تمت معالجة كل الأعضاء الزائدين.**', embeds: [], components: [] };
@@ -335,6 +337,22 @@ async function updateRoomLimitMessage(channel, state, note = '') {
         }
     }).catch(() => {});
     return state.messageUpdate;
+}
+
+function scheduleRoomLimitReconcile(channel, state, { allowRecoveryNote = false } = {}) {
+    if (!channel || !state) return;
+    for (const timer of state.reconcileTimers || []) clearTimeout(timer);
+    state.reconcileTimers = [0, 250, 750].map(delay => {
+        const timer = setTimeout(() => {
+            refreshRoomLimitState(channel, state);
+            const note = state.overflowUserIds.size || !allowRecoveryNote
+                ? ''
+                : '**عاد الروم إلى الحد المسموح.**';
+            updateRoomLimitMessage(channel, state, note);
+        }, delay);
+        timer.unref?.();
+        return timer;
+    });
 }
 
 function isMusicPullAuditReason(reason) {
@@ -4909,11 +4927,11 @@ module.exports = {
                 const oldRoomState = _roomLimitState.get(oldState.channelId);
                 if (oldRoomState) {
                     oldRoomState.joinedAt.delete(newState.id);
-                    const oldRoom = oldState.guild?.channels.cache.get(oldState.channelId);
-                    if (oldRoom?.userLimit) {
-                        refreshRoomLimitState(oldRoom, oldRoomState);
-                        updateRoomLimitMessage(oldRoom, oldRoomState, oldRoomState.overflowUserIds.size ? '' : '**عاد الروم إلى الحد المسموح.**');
-                    }
+                        const oldRoom = oldState.guild?.channels.cache.get(oldState.channelId);
+                        if (oldRoom?.userLimit) {
+                            refreshRoomLimitState(oldRoom, oldRoomState);
+                            scheduleRoomLimitReconcile(oldRoom, oldRoomState, { allowRecoveryNote: true });
+                        }
                 }
             }
             if (!newState.channelId || newState.channelId === oldState.channelId) return;
@@ -4940,7 +4958,7 @@ module.exports = {
 
             let roomState = _roomLimitState.get(newState.channelId);
             if (!roomState) {
-                roomState = { joinedAt: new Map(), overflowUserIds: new Set(), allowedUserIds: new Set(), eligibleUserIds: new Set(), pendingKicks: new Set(), incidentActive: false, controlMessage: null, version: 0 };
+                roomState = { joinedAt: new Map(), overflowUserIds: new Set(), allowedUserIds: new Set(), eligibleUserIds: new Set(), pendingKicks: new Set(), incidentActive: false, controlMessage: null, reconcileTimers: [], version: 0 };
                 _roomLimitState.set(newState.channelId, roomState);
                 // Members already present are older than the member in this event.
                 for (const member of channel.members.values()) {
@@ -4951,8 +4969,7 @@ module.exports = {
             }
             roomState.joinedAt.set(newState.member.id, Date.now());
             refreshRoomLimitState(channel, roomState);
-            if (!roomState.overflowUserIds.size) return;
-            updateRoomLimitMessage(channel, roomState);
+            scheduleRoomLimitReconcile(channel, roomState);
         });
 
         TrueMusic.on('channelUpdate', (oldChannel, newChannel) => {
@@ -4962,7 +4979,7 @@ module.exports = {
             const state = _roomLimitState.get(newChannel.id);
             if (!state) return;
             refreshRoomLimitState(newChannel, state);
-            updateRoomLimitMessage(newChannel, state, state.overflowUserIds.size ? '**تم تحديث حد الروم.**' : '**عاد الروم إلى الحد المسموح.**');
+            scheduleRoomLimitReconcile(newChannel, state, { allowRecoveryNote: true });
         });
 
         // ── Fix: Re-init Lavalink after Discord WebSocket shard resumes ──────────
