@@ -315,7 +315,15 @@ async function updateRoomLimitMessage(channel, state, note = '') {
                 .filter(voiceState => voiceState.channelId === channel.id)
                 .map(voiceState => voiceState.id),
         );
-        const targets = [...state.overflowUserIds].filter(id => voiceMemberIds.has(id) || channel.members.has(id));
+        const pendingMemberIds = new Set(
+            [...(state.pendingMembers?.entries?.() || [])]
+                .filter(([, pending]) => Number(pending?.expiresAt || 0) > Date.now())
+                .map(([id]) => id),
+        );
+        // Keep an overflow target that was just reported by voiceStateUpdate
+        // even if both Discord member caches are still one event behind.
+        const targets = [...state.overflowUserIds].filter(id =>
+            pendingMemberIds.has(id) || voiceMemberIds.has(id) || channel.members.has(id));
         state.overflowUserIds = new Set(targets);
         if (!canSendWarning && !state.controlMessage) return;
         const rows = [];
@@ -353,7 +361,7 @@ async function updateRoomLimitMessage(channel, state, note = '') {
 function scheduleRoomLimitReconcile(channel, state, { allowRecoveryNote = false } = {}) {
     if (!channel || !state) return;
     for (const timer of state.reconcileTimers || []) clearTimeout(timer);
-    state.reconcileTimers = [0, 250, 750].map(delay => {
+    state.reconcileTimers = [0, 250, 750, 1500, 3000, 7500].map(delay => {
         const timer = setTimeout(async () => {
             // Third source: refresh the channel object from Discord in case the
             // local member cache missed the gateway update.
@@ -4984,7 +4992,7 @@ module.exports = {
             }
             roomState.pendingMembers.set(newState.member.id, {
                 member: newState.member,
-                expiresAt: Date.now() + 2_000,
+                expiresAt: Date.now() + 10_000,
             });
             roomState.joinedAt.set(newState.member.id, Date.now());
             refreshRoomLimitState(channel, roomState);
