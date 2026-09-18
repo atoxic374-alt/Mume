@@ -242,6 +242,25 @@ function pruneRoomKickLocks() {
 }
 setInterval(pruneRoomKickLocks, 30_000).unref?.();
 
+function createRoomLimitState(channel) {
+    const state = {
+        joinedAt: new Map(),
+        overflowUserIds: new Set(),
+        allowedUserIds: new Set(),
+        eligibleUserIds: new Set(),
+        pendingKicks: new Set(),
+        incidentActive: false,
+        controlMessage: null,
+        reconcileTimers: [],
+        version: 0,
+    };
+    const seedAt = Date.now() - 1;
+    for (const member of channel?.members?.values?.() || []) {
+        if (!member.user?.bot) state.joinedAt.set(member.id, seedAt);
+    }
+    return state;
+}
+
 function refreshRoomLimitState(channel, state, { addedMember = null, removedId = null } = {}) {
     // Keep the enforcement path deliberately simple: one snapshot from the
     // voice channel, just like the original working implementation.
@@ -4934,7 +4953,7 @@ module.exports = {
                 }
             }
             if (!newState.channelId || newState.channelId === oldState.channelId) return;
-            if (newState.member?.user?.bot) return;
+            if (!newState.member?.id) return;
 
             // فقط الروم المخصص لهذا البوت
             const tkObj = (store.get('tokens') || []).find(t => t.token === token);
@@ -4957,14 +4976,8 @@ module.exports = {
 
             let roomState = _roomLimitState.get(newState.channelId);
             if (!roomState) {
-                roomState = { joinedAt: new Map(), overflowUserIds: new Set(), allowedUserIds: new Set(), eligibleUserIds: new Set(), pendingKicks: new Set(), incidentActive: false, controlMessage: null, reconcileTimers: [], version: 0 };
+                roomState = createRoomLimitState(channel);
                 _roomLimitState.set(newState.channelId, roomState);
-                // Members already present are older than the member in this event.
-                for (const member of channel.members.values()) {
-                    if (!member.user.bot && member.id !== newState.member.id) {
-                        roomState.joinedAt.set(member.id, Date.now() - 1);
-                    }
-                }
             }
             roomState.joinedAt.set(newState.member.id, Date.now());
             refreshRoomLimitState(channel, roomState, { addedMember: newState.member });
@@ -4974,9 +4987,22 @@ module.exports = {
         TrueMusic.on('channelUpdate', (oldChannel, newChannel) => {
             if (!newChannel?.id || oldChannel?.userLimit === newChannel.userLimit) return;
             const tkObj = (store.get('tokens') || []).find(t => t.token === token);
-            if (!tkObj?.channel || tkObj.channel !== newChannel.id || !newChannel.userLimit) return;
-            const state = _roomLimitState.get(newChannel.id);
-            if (!state) return;
+            if (!tkObj?.channel || tkObj.channel !== newChannel.id) return;
+            let state = _roomLimitState.get(newChannel.id);
+            if (!state) {
+                state = createRoomLimitState(newChannel);
+                _roomLimitState.set(newChannel.id, state);
+            }
+            if (!newChannel.userLimit) {
+                state.incidentActive = false;
+                state.overflowUserIds.clear();
+                state.allowedUserIds.clear();
+                state.eligibleUserIds.clear();
+                if (state.controlMessage?.edit) {
+                    state.controlMessage.edit({ content: '**تم إلغاء لمت الروم.**', embeds: [], components: [] }).catch(() => {});
+                }
+                return;
+            }
             refreshRoomLimitState(newChannel, state);
             scheduleRoomLimitReconcile(newChannel, state, { allowRecoveryNote: true });
         });
@@ -5036,6 +5062,24 @@ module.exports = {
                 });
             }
             collection.set(TrueMusic.user.id, TrueMusic);
+
+            // Reconcile a configured room that was already occupied before this
+            // bot connected. No new voiceStateUpdate is guaranteed after login.
+            setTimeout(async () => {
+                const currentTokenObj = (store.get('tokens') || []).find(entry => entry.token === token);
+                if (!currentTokenObj?.channel || !currentTokenObj.Server) return;
+                const guild = TrueMusic.guilds.cache.get(currentTokenObj.Server);
+                const room = guild?.channels.cache.get(currentTokenObj.channel)
+                    || await guild?.channels.fetch(currentTokenObj.channel).catch(() => null);
+                if (!room?.userLimit) return;
+                let state = _roomLimitState.get(room.id);
+                if (!state) {
+                    state = createRoomLimitState(room);
+                    _roomLimitState.set(room.id, state);
+                }
+                refreshRoomLimitState(room, state);
+                if (state.overflowUserIds.size) updateRoomLimitMessage(room, state);
+            }, 1500).unref?.();
 
             // Restore only a player that was actively playing before a full
             // project restart. This is deliberately guarded so it never adds a
