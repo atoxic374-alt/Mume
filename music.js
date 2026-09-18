@@ -5063,7 +5063,13 @@ module.exports = {
                 const currentTokenObj = (store.get('tokens') || []).find(entry => entry.token === token);
                 if (!currentTokenObj?.channel || !currentTokenObj.Server) return;
                 const guild = TrueMusic.guilds.cache.get(currentTokenObj.Server);
-                const room = guild?.channels.cache.get(currentTokenObj.channel)
+                // Read the configured channel through the official discord.js
+                // fetch path before inspecting its limit or occupancy. This
+                // makes every bot initialize from Discord's current channel
+                // object instead of whatever happened to be cached at login.
+                const cachedRoom = guild?.channels.cache.get(currentTokenObj.channel);
+                const room = await cachedRoom?.fetch(true).catch(() => null)
+                    || cachedRoom
                     || await guild?.channels.fetch(currentTokenObj.channel).catch(() => null);
                 if (!room?.userLimit) return;
                 let state = _roomLimitState.get(room.id);
@@ -5072,7 +5078,9 @@ module.exports = {
                     _roomLimitState.set(room.id, state);
                 }
                 refreshRoomLimitState(room, state);
-                if (state.overflowUserIds.size) updateRoomLimitMessage(room, state);
+                if (state.overflowUserIds.size) {
+                    updateRoomLimitMessage(room, state);
+                }
             }, 1500).unref?.();
 
             // Restore only a player that was actively playing before a full
