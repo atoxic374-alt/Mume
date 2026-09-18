@@ -291,8 +291,11 @@ async function updateRoomLimitMessage(channel, state, note = '') {
         // gateway event.
         const botMember = channel.guild?.members.me;
         const roomPermissions = botMember ? channel.permissionsFor(botMember) : null;
-        const canSendWarning = !!channel.isSendable?.()
-            && roomPermissions?.has(PermissionFlagsBits.SendMessages);
+        // Voice-channel text chat is supported by Discord even when the
+        // generic isSendable() helper reports false for the voice channel.
+        // Match the original working path: try channel.send() directly and
+        // surface the REST error instead of silently skipping the warning.
+        const canSendWarning = typeof channel.send === 'function';
         const targets = [...state.overflowUserIds].filter(id => state.currentMembersById?.has(id));
         if (!targets.length) return;
         state.overflowUserIds = new Set(targets);
@@ -325,7 +328,10 @@ async function updateRoomLimitMessage(channel, state, note = '') {
         if (state.controlMessage?.edit) {
             await state.controlMessage.edit(payload).catch(() => {});
         } else {
-            state.controlMessage = canSendWarning ? await channel.send(payload).catch(() => null) : null;
+            state.controlMessage = canSendWarning ? await channel.send(payload).catch(error => {
+                console.warn(`[RoomLimit] failed to send warning in ${channel.id}:`, error?.message || error);
+                return null;
+            }) : null;
         }
     }).catch(() => {});
     return state.messageUpdate;
