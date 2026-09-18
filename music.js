@@ -259,11 +259,22 @@ function refreshRoomLimitState(channel, state) {
     for (const voiceState of voiceStateMembers) {
         if (voiceState.member) currentMembersById.set(voiceState.member.id, voiceState.member);
     }
+    // Fallback source: Discord may deliver the voice event before either cache
+    // is updated. Keep the member from the event briefly so the first check
+    // still counts the real entrant instead of silently missing the overflow.
+    const now = Date.now();
+    for (const [id, pending] of state.pendingMembers || []) {
+        if (!pending?.expiresAt || pending.expiresAt <= now) {
+            state.pendingMembers.delete(id);
+            continue;
+        }
+        if (pending.member) currentMembersById.set(id, pending.member);
+    }
     for (const id of state.joinedAt.keys()) {
         if (!currentMembersById.has(id)) state.joinedAt.delete(id);
     }
     const currentMembers = [...currentMembersById.values()];
-    const currentMemberCount = voiceStateMembers.length || currentMembers.length;
+    const currentMemberCount = currentMembers.length;
     const ordered = [...state.joinedAt.entries()]
         .filter(([id]) => currentMembersById.has(id) && !currentMembersById.get(id)?.user?.bot)
         .sort((a, b) => a[1] - b[1]);
@@ -343,12 +354,15 @@ function scheduleRoomLimitReconcile(channel, state, { allowRecoveryNote = false 
     if (!channel || !state) return;
     for (const timer of state.reconcileTimers || []) clearTimeout(timer);
     state.reconcileTimers = [0, 250, 750].map(delay => {
-        const timer = setTimeout(() => {
-            refreshRoomLimitState(channel, state);
+        const timer = setTimeout(async () => {
+            // Third source: refresh the channel object from Discord in case the
+            // local member cache missed the gateway update.
+            const freshChannel = await channel.guild?.channels.fetch(channel.id, { force: true }).catch(() => null) || channel;
+            refreshRoomLimitState(freshChannel, state);
             const note = state.overflowUserIds.size || !allowRecoveryNote
                 ? ''
                 : '**عاد الروم إلى الحد المسموح.**';
-            updateRoomLimitMessage(channel, state, note);
+            updateRoomLimitMessage(freshChannel, state, note);
         }, delay);
         timer.unref?.();
         return timer;
@@ -4924,10 +4938,11 @@ module.exports = {
         // ── limitGuard: زر Kick للعضو الزائد مع قفل 5 دقائق ────────────────────
         TrueMusic.on('voiceStateUpdate', (oldState, newState) => {
             if (oldState.channelId && oldState.channelId !== newState.channelId) {
-                const oldRoomState = _roomLimitState.get(oldState.channelId);
-                if (oldRoomState) {
-                    oldRoomState.joinedAt.delete(newState.id);
-                        const oldRoom = oldState.guild?.channels.cache.get(oldState.channelId);
+                        const oldRoomState = _roomLimitState.get(oldState.channelId);
+                        if (oldRoomState) {
+                            oldRoomState.joinedAt.delete(newState.id);
+                            oldRoomState.pendingMembers?.delete(newState.id);
+                            const oldRoom = oldState.guild?.channels.cache.get(oldState.channelId);
                         if (oldRoom?.userLimit) {
                             refreshRoomLimitState(oldRoom, oldRoomState);
                             scheduleRoomLimitReconcile(oldRoom, oldRoomState, { allowRecoveryNote: true });
@@ -4958,7 +4973,7 @@ module.exports = {
 
             let roomState = _roomLimitState.get(newState.channelId);
             if (!roomState) {
-                roomState = { joinedAt: new Map(), overflowUserIds: new Set(), allowedUserIds: new Set(), eligibleUserIds: new Set(), pendingKicks: new Set(), incidentActive: false, controlMessage: null, reconcileTimers: [], version: 0 };
+                roomState = { joinedAt: new Map(), overflowUserIds: new Set(), allowedUserIds: new Set(), eligibleUserIds: new Set(), pendingKicks: new Set(), pendingMembers: new Map(), incidentActive: false, controlMessage: null, reconcileTimers: [], version: 0 };
                 _roomLimitState.set(newState.channelId, roomState);
                 // Members already present are older than the member in this event.
                 for (const member of channel.members.values()) {
@@ -4967,6 +4982,10 @@ module.exports = {
                     }
                 }
             }
+            roomState.pendingMembers.set(newState.member.id, {
+                member: newState.member,
+                expiresAt: Date.now() + 2_000,
+            });
             roomState.joinedAt.set(newState.member.id, Date.now());
             refreshRoomLimitState(channel, roomState);
             scheduleRoomLimitReconcile(channel, roomState);
