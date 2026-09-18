@@ -324,7 +324,17 @@ async function updateRoomLimitMessage(channel, state, note = '') {
             && roomPermissions?.has(PermissionFlagsBits.SendMessages);
         // This is deliberately the same snapshot used by refreshRoomLimitState.
         const targets = [...state.overflowUserIds].filter(id => state.currentMemberIds?.has(id));
-        if (!targets.length && state.isOverLimit) return;
+        // Never manufacture a "processed" message.  A limit warning is only
+        // valid when there is a confirmed overflow target; this also prevents
+        // normal joins (under the limit) from editing the old warning into a
+        // misleading success message.
+        if (!targets.length) {
+            if (state.isOverLimit) return;
+            if (state.controlMessage?.edit && note && /عاد الروم إلى الحد المسموح/.test(note)) {
+                await state.controlMessage.edit({ content: note, embeds: [], components: [] }).catch(() => {});
+            }
+            return;
+        }
         state.overflowUserIds = new Set(targets);
         if (!canSendWarning && !state.controlMessage) return;
         const rows = [];
@@ -344,13 +354,13 @@ async function updateRoomLimitMessage(channel, state, note = '') {
             rows.push(row);
         }
         const canEmbed = roomPermissions?.has(PermissionFlagsBits.EmbedLinks);
-        const payload = targets.length ? {
+        const payload = {
             // Never append a stale "room is within limit" note while targets
             // are still present. Voice events can arrive out of order.
             content: `${targets.map(id => `<@${id}>`).join(' ')}${note && !/عاد الروم إلى الحد المسموح/.test(note) ? `\n${note}` : ''}`,
             ...(canEmbed ? { embeds: [new EmbedBuilder().setDescription('**يرجى مغادرة الروم وعدم تجاوز اللمت الخاص بالروم.**')] } : {}),
             components: rows,
-        } : { content: note || '**تمت معالجة كل الأعضاء الزائدين.**', embeds: [], components: [] };
+        };
         if (state.controlMessage?.edit) {
             await state.controlMessage.edit(payload).catch(() => {});
         } else {
