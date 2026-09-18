@@ -242,48 +242,21 @@ function pruneRoomKickLocks() {
 }
 setInterval(pruneRoomKickLocks, 30_000).unref?.();
 
-function refreshRoomLimitState(channel, state) {
-    const voiceStateMembers = channel.guild?.voiceStates?.cache
-        ? [...channel.guild.voiceStates.cache.values()].filter(voiceState => voiceState.channelId === channel.id)
-        : [];
-    // channel.members can lag one gateway event behind voiceStateUpdate. Prefer
-    // the voice-state cache for the count, while retaining channel.members for
-    // member objects/buttons.
+function refreshRoomLimitState(channel, state, { addedMember = null, removedId = null } = {}) {
+    // Keep the enforcement path deliberately simple: one snapshot from the
+    // voice channel, just like the original working implementation.
     const currentMembersById = new Map([...channel.members.values()].map(member => [member.id, member]));
-    const currentVoiceIds = new Set(voiceStateMembers.map(voiceState => voiceState.id));
-    if (currentVoiceIds.size) {
-        for (const id of currentMembersById.keys()) {
-            if (!currentVoiceIds.has(id)) currentMembersById.delete(id);
-        }
-    }
-    for (const voiceState of voiceStateMembers) {
-        if (voiceState.member) currentMembersById.set(voiceState.member.id, voiceState.member);
-    }
-    // Fallback source: Discord may deliver the voice event before either cache
-    // is updated. Keep the member from the event briefly so the first check
-    // still counts the real entrant instead of silently missing the overflow.
-    const now = Date.now();
-    for (const [id, pending] of state.pendingMembers || []) {
-        if (!pending?.expiresAt || pending.expiresAt <= now) {
-            state.pendingMembers.delete(id);
-            continue;
-        }
-        if (pending.member) currentMembersById.set(id, pending.member);
-    }
+    if (removedId) currentMembersById.delete(removedId);
+    if (addedMember?.id) currentMembersById.set(addedMember.id, addedMember);
     for (const id of state.joinedAt.keys()) {
         if (!currentMembersById.has(id)) state.joinedAt.delete(id);
     }
     const currentMembers = [...currentMembersById.values()];
+    state.currentMembersById = currentMembersById;
     const currentMemberCount = currentMembers.length;
-    // Use the same snapshot for counting and for the overflow buttons. If a
-    // member is visible in a voice state but was not recorded in joinedAt
-    // (for example after startup or a missed event), add it now instead of
-    // declaring the room handled with no targets.
     const snapshotAt = Date.now();
     for (const member of currentMembers) {
-        if (!member.user?.bot && !state.joinedAt.has(member.id)) {
-            state.joinedAt.set(member.id, snapshotAt);
-        }
+        if (!member.user?.bot && !state.joinedAt.has(member.id)) state.joinedAt.set(member.id, snapshotAt);
     }
     const ordered = [...state.joinedAt.entries()]
         .filter(([id]) => currentMembersById.has(id) && !currentMembersById.get(id)?.user?.bot)
@@ -291,14 +264,12 @@ function refreshRoomLimitState(channel, state) {
     const botCount = currentMembers.filter(member => member.user.bot).length;
     const allowedHumanCount = Math.max(0, channel.userLimit - botCount);
     const isOverLimit = currentMemberCount > channel.userLimit;
-    state.currentMemberIds = new Set(currentMembersById.keys());
-    state.isOverLimit = isOverLimit;
     if (!isOverLimit) {
         state.incidentActive = false;
         state.eligibleUserIds = new Set();
         state.allowedUserIds = new Set(ordered.map(([id]) => id));
         state.overflowUserIds = new Set();
-    } else if (!state.incidentActive || (!state.eligibleUserIds?.size && ordered.length)) {
+    } else if (!state.incidentActive) {
         // Freeze eligibility at the first over-limit event. Later entrants must
         // not become authorized just because an older member leaves.
         state.incidentActive = true;
@@ -322,26 +293,16 @@ async function updateRoomLimitMessage(channel, state, note = '') {
         const roomPermissions = botMember ? channel.permissionsFor(botMember) : null;
         const canSendWarning = !!channel.isSendable?.()
             && roomPermissions?.has(PermissionFlagsBits.SendMessages);
-        // This is deliberately the same snapshot used by refreshRoomLimitState.
-        const targets = [...state.overflowUserIds].filter(id => state.currentMemberIds?.has(id));
-        // Never manufacture a "processed" message.  A limit warning is only
-        // valid when there is a confirmed overflow target; this also prevents
-        // normal joins (under the limit) from editing the old warning into a
-        // misleading success message.
-        if (!targets.length) {
-            if (state.isOverLimit) return;
-            if (state.controlMessage?.edit && note && /عاد الروم إلى الحد المسموح/.test(note)) {
-                await state.controlMessage.edit({ content: note, embeds: [], components: [] }).catch(() => {});
-            }
-            return;
-        }
+        const targets = [...state.overflowUserIds].filter(id => state.currentMembersById?.has(id));
+        if (!targets.length) return;
         state.overflowUserIds = new Set(targets);
         if (!canSendWarning && !state.controlMessage) return;
         const rows = [];
         for (let offset = 0; offset < targets.length && rows.length < 5; offset += 5) {
             const row = new ActionRowBuilder();
             for (const targetId of targets.slice(offset, offset + 5)) {
-                const targetMember = channel.members.get(targetId)
+                const targetMember = state.currentMembersById?.get(targetId)
+                    || channel.members.get(targetId)
                     || channel.guild?.members.cache.get(targetId);
                 const targetName = String(targetMember?.displayName || targetMember?.user?.username || targetId)
                     .replace(/[\r\n]/g, ' ')
@@ -373,16 +334,14 @@ async function updateRoomLimitMessage(channel, state, note = '') {
 function scheduleRoomLimitReconcile(channel, state, { allowRecoveryNote = false } = {}) {
     if (!channel || !state) return;
     for (const timer of state.reconcileTimers || []) clearTimeout(timer);
-    state.reconcileTimers = [0, 250, 750, 1500, 3000, 7500].map(delay => {
+    state.reconcileTimers = [0, 300].map(delay => {
         const timer = setTimeout(async () => {
-            // Third source: refresh the channel object from Discord in case the
-            // local member cache missed the gateway update.
-            const freshChannel = await channel.guild?.channels.fetch(channel.id, { force: true }).catch(() => null) || channel;
+            const freshChannel = delay ? await channel.fetch(true).catch(() => null) || channel : channel;
             refreshRoomLimitState(freshChannel, state);
-            const note = state.overflowUserIds.size || !allowRecoveryNote
-                ? ''
-                : '**عاد الروم إلى الحد المسموح.**';
-            updateRoomLimitMessage(freshChannel, state, note);
+            if (state.overflowUserIds.size) updateRoomLimitMessage(freshChannel, state);
+            else if (allowRecoveryNote && state.controlMessage?.edit) {
+                await state.controlMessage.edit({ content: '**عاد الروم إلى الحد المسموح.**', embeds: [], components: [] }).catch(() => {});
+            }
         }, delay);
         timer.unref?.();
         return timer;
@@ -4961,10 +4920,9 @@ module.exports = {
                         const oldRoomState = _roomLimitState.get(oldState.channelId);
                         if (oldRoomState) {
                             oldRoomState.joinedAt.delete(newState.id);
-                            oldRoomState.pendingMembers?.delete(newState.id);
                             const oldRoom = oldState.guild?.channels.cache.get(oldState.channelId);
                         if (oldRoom?.userLimit) {
-                            refreshRoomLimitState(oldRoom, oldRoomState);
+                            refreshRoomLimitState(oldRoom, oldRoomState, { removedId: newState.id });
                             scheduleRoomLimitReconcile(oldRoom, oldRoomState, { allowRecoveryNote: true });
                         }
                 }
@@ -4993,7 +4951,7 @@ module.exports = {
 
             let roomState = _roomLimitState.get(newState.channelId);
             if (!roomState) {
-                roomState = { joinedAt: new Map(), overflowUserIds: new Set(), allowedUserIds: new Set(), eligibleUserIds: new Set(), pendingKicks: new Set(), pendingMembers: new Map(), incidentActive: false, controlMessage: null, reconcileTimers: [], version: 0 };
+                roomState = { joinedAt: new Map(), overflowUserIds: new Set(), allowedUserIds: new Set(), eligibleUserIds: new Set(), pendingKicks: new Set(), incidentActive: false, controlMessage: null, reconcileTimers: [], version: 0 };
                 _roomLimitState.set(newState.channelId, roomState);
                 // Members already present are older than the member in this event.
                 for (const member of channel.members.values()) {
@@ -5002,12 +4960,8 @@ module.exports = {
                     }
                 }
             }
-            roomState.pendingMembers.set(newState.member.id, {
-                member: newState.member,
-                expiresAt: Date.now() + 10_000,
-            });
             roomState.joinedAt.set(newState.member.id, Date.now());
-            refreshRoomLimitState(channel, roomState);
+            refreshRoomLimitState(channel, roomState, { addedMember: newState.member });
             scheduleRoomLimitReconcile(channel, roomState);
         });
 
