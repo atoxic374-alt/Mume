@@ -20,9 +20,17 @@ const {
 
 const fs = require('fs');
 const store = require('./utils/store');
+const { reconcileTokenStores } = require('./utils/tokenReconciler');
 const config = require(`${process.cwd()}/config`);
 const { getEmbedColor, refreshEmbedColor } = require('./utils/embedColor');
 const { liftDiscordClientLimits } = require('./utils/discordClientTuning');
+
+// Normalize inventory/subscriptions before any manager can start sub-bots.
+// Active subscription tokens always win over the inventory file.
+const initialTokenReconciliation = reconcileTokenStores();
+if (initialTokenReconciliation.changed) {
+    console.log('[TokenReconciler] Startup cleanup:', initialTokenReconciliation);
+}
 
 const { prefix, Token, logChannelId } = config;
 
@@ -193,6 +201,12 @@ client.once('clientReady', () => {
     const { checkAndReplaceTokens } = require('./tokenHealthChecker');
     setTimeout(() => checkAndReplaceTokens(client), 15000);
     setInterval(() => checkAndReplaceTokens(client), 30 * 60 * 1000);
+    // Keep tokens.json, bots.json and subscription counts consistent after
+    // manual edits or changes made by subscription commands.
+    setInterval(() => {
+        const result = reconcileTokenStores();
+        if (result.changed) console.log('[TokenReconciler] Periodic cleanup:', result);
+    }, 60 * 1000).unref?.();
     setInterval(() => checkSubscriptions().catch(error => console.error('[subscriptions]', error)), 30000);
     });
     

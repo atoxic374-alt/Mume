@@ -1,5 +1,6 @@
 const { Client, GatewayIntentBits, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
 const store = require('./utils/store');
+const { reconcileTokenStores } = require('./utils/tokenReconciler');
 const { getEmbedColor } = require('./utils/embedColor');
 
 // ── Extract bot ID from token (base64 first segment) ──────────────────────────
@@ -147,6 +148,13 @@ async function notifyNoStock(mainClient, entry, oldBotName) {
 // ── Main checker ──────────────────────────────────────────────────────────────
 async function checkAndReplaceTokens(mainClient) {
     try {
+        // Repair duplicate/conflicting records before validating or replacing
+        // tokens, so the checker never consumes a replacement for a duplicate
+        // entry and subscription counts stay aligned with actual tokens.
+        const reconciliation = reconcileTokenStores();
+        if (reconciliation.changed) {
+            console.log('[TokenChecker] Reconciled token stores:', reconciliation);
+        }
         let tokensArray = store.get('tokens') || [];
         let botsArray   = store.get('bots')   || [];
 

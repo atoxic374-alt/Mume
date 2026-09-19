@@ -45,6 +45,23 @@ class Store {
     return this._mem[key];
   }
 
+  // Re-read a file changed outside the process. Never replace dirty in-memory
+  // data, because it may contain a newer update waiting to be flushed.
+  reload(key) {
+    const file = FILES[key];
+    if (!file || this._dirty.has(key) || this._flushing.has(key)) return false;
+    try {
+      if (!fs.existsSync(file)) return false;
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      this._mem[key] = OBJ_KEYS.includes(key) && (Array.isArray(parsed) || !parsed || typeof parsed !== 'object')
+        ? {}
+        : parsed;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   set(key, value) {
     this._mem[key] = value;
     this._dirty.add(key);

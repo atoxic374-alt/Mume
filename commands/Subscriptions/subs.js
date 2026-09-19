@@ -6,6 +6,7 @@ const {
 } = require('discord.js');
 const ms = require('ms');
 const store = require('../../utils/store');
+const { reconcileTokenStores } = require('../../utils/tokenReconciler');
 const { getEmbedColor } = require('../../utils/embedColor');
 const {
   applyProfileToToken,
@@ -207,6 +208,9 @@ async function handleAddSub(interaction, client) {
 
   coll.on('end', async (_, reason) => {
     if (reason !== 'FINISH') return;
+    // A manually edited bots.json may contain active or duplicate tokens.
+    // Clean it immediately before allocating bots to a new subscription.
+    reconcileTokenStores();
     const bots = getBots();
             if (bots.length < selectedCount) return prompt.edit({ embeds: [basePanelEmbed(client, 'Not Enough Bots | لا توجد بوتات كافية')], components: [] });
 
