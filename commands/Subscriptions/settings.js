@@ -2925,7 +2925,8 @@ module.exports = {
                                 const position = ['before', 'ب', 'قبل', 'b'].includes(positionRaw) ? 'before' : 'after';
                                 const nameOnly = ['none', 'no', 'بدون', 'اسم فقط'].includes(startRaw);
                                 const parsedStart = Number.parseInt(startRaw, 10);
-                                let nextNumber = Number.isInteger(parsedStart) && parsedStart > 0 ? parsedStart : 1;
+                                const hasExplicitStart = Number.isInteger(parsedStart) && parsedStart > 0;
+                                let nextNumber = hasExplicitStart ? parsedStart : 1;
                                 const ordered = orderedRenameTargets(modalCode);
                                 const usedNumbers = new Set();
                                 ordered.forEach(item => {
@@ -2941,11 +2942,15 @@ module.exports = {
                                     if (nameOnly) {
                                         safeName = (prefix || currentName.replace(/[\s_-]*\d+\s*$/, '').trim()).slice(0, 32);
                                     } else {
-                                        const number = existingNumber ? Number(existingNumber) : (() => {
+                                        // A numeric start is an explicit request to
+                                        // renumber every target sequentially. Only
+                                        // preserve existing suffixes when no start
+                                        // number was supplied.
+                                        const number = hasExplicitStart ? nextNumber++ : (existingNumber ? Number(existingNumber) : (() => {
                                             while (usedNumbers.has(nextNumber)) nextNumber++;
                                             usedNumbers.add(nextNumber);
                                             return nextNumber++;
-                                        })();
+                                        })());
                                         safeName = prefix
                                             ? (position === 'before' ? `${number}${prefix}` : `${prefix}${number}`)
                                             : String(number);
@@ -2957,7 +2962,7 @@ module.exports = {
                                 }, { concurrency: SETTINGS_NAME_CONCURRENCY, code: modalCode });
                                 await mainMsg.edit({ content: '', embeds: [new EmbedBuilder()
                                     .setTitle('Names Updated | تم تحديث الأسماء')
-                                    .setDescription(`تم تحديث ${targets.length} بوت، مع الحفاظ على أرقام الأسماء الموجودة وإعادة استخدام ترتيب الرومات لغير المرقمة.`)
+                                    .setDescription(`تم تحديث ${targets.length} بوت. عند إدخال رقم بداية، تمت إعادة الترقيم بالتسلسل من الرقم المحدد؛ وبدون رقم بداية يتم الحفاظ على الأرقام الموجودة.`)
                                     .setColor(getEmbedColor(client))], components: [] });
                                 setTimeout(() => updatePanel(), 3000);
                                 return;
