@@ -1305,9 +1305,9 @@ module.exports = {
 
                                     // ── helper: compute target name for an assignment ────
                                     function computeTargetName(idx, chan) {
-                                        if (state.mode === 'names') {
-                                            return state.namesWithNumbers
-                                                ? `${chan.name} ${idx + 1}`.trim().slice(0, 32)
+                                if (state.mode === 'names') {
+                                    return state.namesWithNumbers
+                                                ? `${chan.name} ${idx + 1 + (state.numberOffset || 0)}`.trim().slice(0, 32)
                                                 : chan.name.trim().slice(0, 32);
                                         }
                                         if (state.mode === 'numbers') {
@@ -1816,10 +1816,10 @@ module.exports = {
                                     .setMaxLength(28)
                             ),
                             new ActionRowBuilder().addComponents(
-                                new TextInputBuilder()
-                                    .setCustomId('start_from')
-                                    .setLabel('هل تريد التكملة على آخر رقم؟')
-                                    .setPlaceholder('نعم / ن / Yes / Y   —   لا / ل / No / N')
+                                    new TextInputBuilder()
+                                        .setCustomId('start_from')
+                                    .setLabel('رقم البداية أو التكملة على آخر رقم')
+                                    .setPlaceholder('مثال: 1 أو 10 — أو نعم للاستكمال — اتركه فارغاً للبداية من 1')
                                     .setRequired(false)
                                     .setStyle(TextInputStyle.Short)
                                     .setMaxLength(10)
@@ -3086,8 +3086,12 @@ module.exports = {
 
                                 // ── التكملة على آخر رقم ──────────────────────────────────
                                 const startFromRaw = (interaction.fields.getTextInputValue('start_from').trim() || '').toLowerCase();
+                                const explicitStart = Number.parseInt(startFromRaw, 10);
+                                const hasExplicitStart = Number.isInteger(explicitStart) && explicitStart > 0;
                                 const _isYes = ['نعم', 'ن', 'yes', 'y'].includes(startFromRaw);
-                                if (_isYes) {
+                                if (hasExplicitStart) {
+                                    activeDistributionState.numberOffset = explicitStart - 1;
+                                } else if (_isYes) {
                                     const detectedMax = detectNumberOffset(
                                         activeDistributionState.namePrefix,
                                         activeDistributionState.code
