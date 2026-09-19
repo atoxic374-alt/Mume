@@ -402,6 +402,10 @@ module.exports = {
             return primaryOwnerIdFor(code) === userId;
         }
 
+        function canUseBotActions(code = selectedCode) {
+            return isAdmin || isPrimarySubscriptionOwner(code);
+        }
+
         function buildInviteLinks(tokenEntries) {
             return tokenEntries.map((entry, index) => {
                 const clientId = getClientId(entry.token);
@@ -493,7 +497,7 @@ module.exports = {
         }
 
         async function addStockBotsToSubscription(code, count) {
-            if (!isPrimarySubscriptionOwner(code)) throw new Error('هذا الخيار متاح لمالك الاشتراك الأساسي فقط.');
+            if (!isAdmin) throw new Error('إضافة البوتات مباشرة متاحة لأونرات النظام فقط.');
             if (!Number.isInteger(count) || count < 1) throw new Error('عدد البوتات غير صحيح.');
             if (activeStockAssignments.has(code)) throw new Error('توجد عملية إضافة قيد التنفيذ لهذا الاشتراك.');
 
@@ -566,6 +570,105 @@ module.exports = {
             } finally {
                 activeStockAssignments.delete(code);
             }
+        }
+
+        if (!client.__botRequestHandlersInstalled) {
+            client.__botRequestHandlersInstalled = true;
+            const pendingStatuses = new Set(['awaiting_invoice', 'pending_approval', 'processing']);
+            setInterval(() => {
+                const now = Date.now();
+                const requests = store.get('botRequests') || [];
+                let changed = false;
+                for (const request of requests) {
+                    if (pendingStatuses.has(request.status) && now - Number(request.createdAt || 0) > 48 * 60 * 60 * 1000) {
+                        request.status = 'expired';
+                        request.updatedAt = now;
+                        changed = true;
+                    }
+                }
+                if (changed) store.set('botRequests', requests);
+            }, 60 * 60 * 1000).unref?.();
+            const saveBotRequests = requests => store.set('botRequests', requests);
+            const getRequest = id => (store.get('botRequests') || []).find(request => request.id === id);
+            const updateRequest = (id, patch) => {
+                const requests = store.get('botRequests') || [];
+                const index = requests.findIndex(request => request.id === id);
+                if (index < 0) return null;
+                requests[index] = { ...requests[index], ...patch, updatedAt: Date.now() };
+                saveBotRequests(requests);
+                return requests[index];
+            };
+            const ownerUsers = async () => (await Promise.all(owners.map(id => client.users.fetch(id).catch(() => null)))).filter(Boolean);
+            const sendApprovalRequest = async request => {
+                const ownerList = await ownerUsers();
+                const embed = new EmbedBuilder()
+                    .setTitle('Bot Request | طلب بوتات')
+                    .setDescription(`طلب إضافة بوتات للاشتراك \`${request.code}\``)
+                    .addFields(
+                        { name: 'Requester', value: `<@${request.requesterId}>`, inline: true },
+                        { name: 'Requested Bots', value: `\`${request.count}\``, inline: true },
+                        { name: 'Request ID', value: `\`${request.id}\``, inline: true },
+                    )
+                    .setImage(request.invoiceUrl)
+                    .setColor(getEmbedColor(client));
+                const row = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`bot_request_approve_${request.id}`).setLabel('Approve').setStyle(ButtonStyle.Success),
+                    new ButtonBuilder().setCustomId(`bot_request_reject_${request.id}`).setLabel('Reject').setStyle(ButtonStyle.Danger),
+                );
+                await Promise.allSettled(ownerList.map(owner => owner.send({ embeds: [embed], components: [row] })));
+            };
+            client.on('messageCreate', async message => {
+                if (message.author.bot || message.guild) return;
+                const requests = store.get('botRequests') || [];
+                const request = requests.find(item => item.requesterId === message.author.id && item.status === 'awaiting_invoice');
+                if (!request) return;
+                const image = message.attachments.find(file => String(file.contentType || '').startsWith('image/'))
+                    || message.attachments.find(file => /\.(png|jpe?g|webp|gif)$/i.test(file.name || ''));
+                if (!image) {
+                    await message.reply('يرجى إرسال صورة الفاتورة فقط.').catch(() => {});
+                    return;
+                }
+                const updated = updateRequest(request.id, { status: 'pending_approval', invoiceUrl: image.url });
+                await message.reply('✅ تم استلام الفاتورة وإرسالها للأونرات للمراجعة.').catch(() => {});
+                await sendApprovalRequest(updated);
+            });
+            client.on('interactionCreate', async interaction => {
+                const id = String(interaction.customId || '');
+                if (id.startsWith('bot_request_approve_')) {
+                    if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '❌ هذا الإجراء للأونرات الأساسيين فقط.', flags: MessageFlags.Ephemeral });
+                    const request = getRequest(id.slice('bot_request_approve_'.length));
+                    if (!request || request.status !== 'pending_approval') return interaction.reply({ content: '⚠️ الطلب غير متاح أو تمت معالجته.', flags: MessageFlags.Ephemeral });
+                    updateRequest(request.id, { status: 'processing', approvedBy: interaction.user.id });
+                    await interaction.update({ content: '⏳ جارٍ تنفيذ الطلب...', embeds: interaction.message.embeds, components: [] }).catch(() => {});
+                    try {
+                        const result = await addStockBotsToSubscription(request.code, request.count);
+                        updateRequest(request.id, { status: 'approved', result });
+                        const requester = await client.users.fetch(request.requesterId).catch(() => null);
+                        await requester?.send(`✅ تمت الموافقة على طلبك وإضافة ${result.added} بوت للاشتراك \`${request.code}\`.`).catch(() => {});
+                    } catch (error) {
+                        updateRequest(request.id, { status: 'pending_approval', error: String(error?.message || error) });
+                        await client.users.fetch(request.requesterId).then(user => user.send(`⚠️ تعذر تنفيذ طلب البوتات: ${String(error?.message || error).slice(0, 300)}`)).catch(() => {});
+                    }
+                    return;
+                }
+                if (id.startsWith('bot_request_reject_') && !interaction.isModalSubmit()) {
+                    if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '❌ هذا الإجراء للأونرات الأساسيين فقط.', flags: MessageFlags.Ephemeral });
+                    const request = getRequest(id.slice('bot_request_reject_'.length));
+                    if (!request || request.status !== 'pending_approval') return interaction.reply({ content: '⚠️ الطلب غير متاح أو تمت معالجته.', flags: MessageFlags.Ephemeral });
+                    const modal = new ModalBuilder().setCustomId(`bot_request_reject_modal_${request.id}`).setTitle('Reject Bot Request');
+                    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('reason').setLabel('Reason | سبب الرفض').setRequired(true).setStyle(TextInputStyle.Paragraph)));
+                    return interaction.showModal(modal);
+                }
+                if (interaction.isModalSubmit() && id.startsWith('bot_request_reject_modal_')) {
+                    if (!owners.includes(interaction.user.id)) return interaction.reply({ content: '❌ هذا الإجراء للأونرات الأساسيين فقط.', flags: MessageFlags.Ephemeral });
+                    const request = getRequest(id.slice('bot_request_reject_modal_'.length));
+                    if (!request || request.status !== 'pending_approval') return interaction.reply({ content: '⚠️ الطلب غير متاح أو تمت معالجته.', flags: MessageFlags.Ephemeral });
+                    const reason = interaction.fields.getTextInputValue('reason').trim();
+                    updateRequest(request.id, { status: 'rejected', rejectedBy: interaction.user.id, rejectionReason: reason });
+                    await interaction.reply({ content: '✅ تم رفض الطلب وإبلاغ العميل.', flags: MessageFlags.Ephemeral });
+                    await client.users.fetch(request.requesterId).then(user => user.send(`❌ تم رفض طلب البوتات للاشتراك \`${request.code}\`.\n\n**السبب:** ${reason}`)).catch(() => {});
+                }
+            });
         }
 
                 function getBotVoiceInfo(t) {
@@ -1305,8 +1408,8 @@ module.exports = {
 
                                     // ── helper: compute target name for an assignment ────
                                     function computeTargetName(idx, chan) {
-                                if (state.mode === 'names') {
-                                    return state.namesWithNumbers
+                                        if (state.mode === 'names') {
+                                            return state.namesWithNumbers
                                                 ? `${chan.name} ${idx + 1 + (state.numberOffset || 0)}`.trim().slice(0, 32)
                                                 : chan.name.trim().slice(0, 32);
                                         }
@@ -1816,8 +1919,8 @@ module.exports = {
                                     .setMaxLength(28)
                             ),
                             new ActionRowBuilder().addComponents(
-                                    new TextInputBuilder()
-                                        .setCustomId('start_from')
+                                new TextInputBuilder()
+                                    .setCustomId('start_from')
                                     .setLabel('رقم البداية أو التكملة على آخر رقم')
                                     .setPlaceholder('مثال: 1 أو 10 — أو نعم للاستكمال — اتركه فارغاً للبداية من 1')
                                     .setRequired(false)
@@ -2263,12 +2366,24 @@ module.exports = {
                     const row2 = new ActionRowBuilder().addComponents(
                         new ButtonBuilder().setCustomId(`stg_${mid}_close`).setLabel('Close').setStyle(ButtonStyle.Danger)
                     );
-                    if (isPrimarySubscriptionOwner(selectedCode)) {
-                        row2.addComponents(
-                            new ButtonBuilder()
+                    if (isAdmin || isPrimarySubscriptionOwner(selectedCode)) {
+                        const botRequests = store.get('botRequests') || [];
+                        const pendingRequest = botRequests.find(request =>
+                            request.code === selectedCode
+                            && ['awaiting_invoice', 'pending_approval', 'processing'].includes(request.status)
+                        );
+                        if (isAdmin) {
+                            row2.addComponents(new ButtonBuilder()
                                 .setCustomId(`stg_${mid}_add_bots`)
                                 .setLabel('Add Bots')
-                                .setStyle(ButtonStyle.Success),
+                                .setStyle(ButtonStyle.Secondary));
+                        }
+                        row2.addComponents(
+                            new ButtonBuilder()
+                                .setCustomId(`stg_${mid}_request_bots`)
+                                .setLabel(pendingRequest ? 'Pending Bots' : 'Request Bots')
+                                .setStyle(pendingRequest ? ButtonStyle.Primary : ButtonStyle.Secondary)
+                                .setDisabled(!!pendingRequest),
                         );
                     }
                     if (uniqueCodes.length > 1) {
@@ -2534,9 +2649,34 @@ module.exports = {
                         return updatePanel(i);
                     }
 
+                    if (i.customId === `stg_${mid}_request_bots`) {
+                        if (!isAdmin && !isPrimarySubscriptionOwner(selectedCode)) {
+                            return i.reply({ content: '❌ طلب البوتات متاح لمالك الاشتراك الأساسي أو أونر النظام فقط.', flags: MessageFlags.Ephemeral });
+                        }
+                        const pendingRequest = (store.get('botRequests') || []).find(request =>
+                            request.code === selectedCode
+                            && ['awaiting_invoice', 'pending_approval', 'processing'].includes(request.status)
+                        );
+                        if (pendingRequest) {
+                            return i.reply({ content: '⏳ يوجد طلب بوتات معلق لهذا الاشتراك بالفعل.', flags: MessageFlags.Ephemeral });
+                        }
+                        const modal = new ModalBuilder()
+                            .setCustomId(createSettingsModalId('request_bots', { code: selectedCode }))
+                            .setTitle('Request Bots | طلب بوتات');
+                        modal.addComponents(new ActionRowBuilder().addComponents(
+                            new TextInputBuilder()
+                                .setCustomId('count')
+                                .setLabel('Bot count | عدد البوتات')
+                                .setPlaceholder('مثال: 10')
+                                .setRequired(true)
+                                .setStyle(TextInputStyle.Short),
+                        ));
+                        return i.showModal(modal);
+                    }
+
                     if (i.customId === `stg_${mid}_add_bots`) {
-                        if (!isPrimarySubscriptionOwner(selectedCode)) {
-                            return i.reply({ content: '❌ إضافة البوتات متاحة لمالك الاشتراك الأساسي فقط.', flags: MessageFlags.Ephemeral });
+                        if (!isAdmin) {
+                            return i.reply({ content: '❌ إضافة البوتات المباشرة متاحة لأونرات النظام فقط.', flags: MessageFlags.Ephemeral });
                         }
                         const available = (store.get('bots') || []).length;
                         if (!available) {
@@ -2914,9 +3054,42 @@ module.exports = {
                             }
 
                                     await interaction.deferUpdate();
-                                    const modalContext = consumeSettingsModalContext(interaction.customId);
-                                    if (!modalContext) return;
+                            const modalContext = consumeSettingsModalContext(interaction.customId);
+                            if (!modalContext) return;
                             const modalCode = modalContext.code || selectedCode;
+
+                            if (modalContext.type === 'request_bots') {
+                                if (!isAdmin && !isPrimarySubscriptionOwner(modalCode)) {
+                                    return mainMsg.edit({ content: '❌ طلب البوتات متاح لمالك الاشتراك الأساسي أو أونر النظام فقط.', embeds: [], components: [] });
+                                }
+                                const count = Number.parseInt(interaction.fields.getTextInputValue('count').trim(), 10);
+                                const stockCount = (store.get('bots') || []).length;
+                                const activeRequest = (store.get('botRequests') || []).find(request =>
+                                    request.code === modalCode && ['awaiting_invoice', 'pending_approval', 'processing'].includes(request.status)
+                                );
+                                if (!Number.isInteger(count) || count < 1 || count > stockCount) {
+                                    return mainMsg.edit({ content: `❌ العدد يجب أن يكون بين 1 و${stockCount}.`, embeds: [], components: [] });
+                                }
+                                if (activeRequest) {
+                                    return mainMsg.edit({ content: '⏳ يوجد طلب بوتات معلق لهذا الاشتراك بالفعل.', embeds: [], components: [] });
+                                }
+                                const request = {
+                                    id: `BR-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                                    code: modalCode,
+                                    requesterId: userId,
+                                    count,
+                                    status: 'awaiting_invoice',
+                                    createdAt: Date.now(),
+                                    updatedAt: Date.now(),
+                                    invoiceUrl: null,
+                                };
+                                store.set('botRequests', [...(store.get('botRequests') || []), request]);
+                                const requester = await client.users.fetch(userId).catch(() => null);
+                                await requester?.send(`📄 تم إنشاء طلب إضافة ${count} بوت للاشتراك \`${modalCode}\`. يرجى إرسال صورة الفاتورة هنا في الخاص.`).catch(() => {});
+                                await mainMsg.edit({ content: '✅ تم إنشاء الطلب. أرسِل صورة الفاتورة في الخاص، وسيتم إرسالها للأونرات للمراجعة.', embeds: [], components: [] });
+                                setTimeout(() => updatePanel(), 2500);
+                                return;
+                            }
 
                             if (modalContext.type === 'rename') {
                                 const prefix = interaction.fields.getTextInputValue('prefix').trim();
@@ -2942,10 +3115,8 @@ module.exports = {
                                     if (nameOnly) {
                                         safeName = (prefix || currentName.replace(/[\s_-]*\d+\s*$/, '').trim()).slice(0, 32);
                                     } else {
-                                        // A numeric start is an explicit request to
-                                        // renumber every target sequentially. Only
-                                        // preserve existing suffixes when no start
-                                        // number was supplied.
+                                        // A numeric start explicitly renumbers every target.
+                                        // Without one, preserve existing suffixes.
                                         const number = hasExplicitStart ? nextNumber++ : (existingNumber ? Number(existingNumber) : (() => {
                                             while (usedNumbers.has(nextNumber)) nextNumber++;
                                             usedNumbers.add(nextNumber);
@@ -2962,7 +3133,7 @@ module.exports = {
                                 }, { concurrency: SETTINGS_NAME_CONCURRENCY, code: modalCode });
                                 await mainMsg.edit({ content: '', embeds: [new EmbedBuilder()
                                     .setTitle('Names Updated | تم تحديث الأسماء')
-                                    .setDescription(`تم تحديث ${targets.length} بوت. عند إدخال رقم بداية، تمت إعادة الترقيم بالتسلسل من الرقم المحدد؛ وبدون رقم بداية يتم الحفاظ على الأرقام الموجودة.`)
+                                    .setDescription(`تم تحديث ${targets.length} بوت. عند إدخال رقم بداية تتم إعادة الترقيم بالتسلسل من الرقم المحدد؛ وبدونه يتم الحفاظ على الأرقام الموجودة.`)
                                     .setColor(getEmbedColor(client))], components: [] });
                                 setTimeout(() => updatePanel(), 3000);
                                 return;
