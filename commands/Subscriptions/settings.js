@@ -1311,7 +1311,7 @@ module.exports = {
                             };
                         }
 
-                                function detectNumberOffset(prefix, code) {
+                                function detectNumberOffset(prefix, code, numberPosition = 'after') {
                                     const allTokens = getSelectedTokens({ code: code || selectedCode, includeWaiting: true });
                                     let max = 0;
                                     for (const t of allTokens) {
@@ -1319,7 +1319,12 @@ module.exports = {
                                         if (!bot?.user) continue;
                                         const name = (bot.user.username || '').trim();
                                         let num = 0;
-                                        if (prefix) {
+                                        if (prefix && numberPosition === 'before') {
+                                            if (!name.endsWith(prefix)) continue;
+                                            const rest = name.slice(0, -prefix.length).trim();
+                                            num = parseInt(rest, 10);
+                                            if (String(num) !== rest) continue;
+                                        } else if (prefix) {
                                             if (!name.startsWith(prefix)) continue;
                                             const rest = name.slice(prefix.length);
                                             num = parseInt(rest, 10);
@@ -3102,22 +3107,34 @@ module.exports = {
                                 let nextNumber = hasExplicitStart ? parsedStart : 1;
                                 const ordered = orderedRenameTargets(modalCode);
                                 const usedNumbers = new Set();
+                                const readExistingNumber = (name) => {
+                                    const raw = String(name || '').trim();
+                                    if (prefix && position === 'before' && raw.endsWith(prefix)) {
+                                        const value = raw.slice(0, -prefix.length).trim();
+                                        return /^\d+$/.test(value) ? Number(value) : null;
+                                    }
+                                    if (prefix && position === 'after' && raw.startsWith(prefix)) {
+                                        const value = raw.slice(prefix.length).trim();
+                                        return /^\d+$/.test(value) ? Number(value) : null;
+                                    }
+                                    const suffix = raw.match(/(\d+)\s*$/);
+                                    return suffix ? Number(suffix[1]) : null;
+                                };
                                 ordered.forEach(item => {
-                                    const match = String(item.info.bot?.user?.username || '').match(/(\d+)\s*$/);
-                                    if (match) usedNumbers.add(Number(match[1]));
+                                    const number = readExistingNumber(item.info.bot?.user?.username);
+                                    if (Number.isInteger(number) && number > 0) usedNumbers.add(number);
                                 });
                                 const targets = ordered;
                                 await runBotProcess('Change Names', targets.map(item => item.token), async (t, bot) => {
                                     if (!bot?.user) throw new Error('bot offline');
                                     const currentName = String(bot.user.username || '');
-                                    const existingNumber = currentName.match(/(\d+)\s*$/)?.[1];
                                     let safeName;
                                     if (nameOnly) {
                                         safeName = (prefix || currentName.replace(/[\s_-]*\d+\s*$/, '').trim()).slice(0, 32);
                                     } else {
                                         // A numeric start explicitly renumbers every target.
                                         // Without one, preserve existing suffixes.
-                                        const number = hasExplicitStart ? nextNumber++ : (existingNumber ? Number(existingNumber) : (() => {
+                                        const number = hasExplicitStart ? nextNumber++ : (readExistingNumber(currentName) || (() => {
                                             while (usedNumbers.has(nextNumber)) nextNumber++;
                                             usedNumbers.add(nextNumber);
                                             return nextNumber++;
@@ -3265,7 +3282,8 @@ module.exports = {
                                 } else if (_isYes) {
                                     const detectedMax = detectNumberOffset(
                                         activeDistributionState.namePrefix,
-                                        activeDistributionState.code
+                                        activeDistributionState.code,
+                                        activeDistributionState.numberPosition,
                                     );
                                     activeDistributionState.numberOffset = detectedMax;
                                 } else {
