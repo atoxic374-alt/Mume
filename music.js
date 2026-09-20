@@ -2623,9 +2623,13 @@ function rankTracksForQuery(tracks, query, { strict = false } = {}) {
 }
 
 async function resolveSmartTracks(poru, query, source, limit = 20, options = {}) {
-    const timeoutMs = Math.max(4000, Number(process.env.MUSIC_SMART_RESOLVE_TIMEOUT_MS || 8000));
+    const timeoutMs = Math.max(3000, Number(process.env.MUSIC_SMART_RESOLVE_TIMEOUT_MS || 6000));
     if (isProbablyUrl(query)) {
-        const result = await withTimeout(poru.resolve({ query }), timeoutMs, null);
+        const result = await withTimeout(
+            withSearchResolveSlot(() => poru.resolve({ query })),
+            timeoutMs,
+            null,
+        );
         return dedupeTracks(result?.tracks || []).slice(0, limit);
     }
 
@@ -2636,19 +2640,23 @@ async function resolveSmartTracks(poru, query, source, limit = 20, options = {})
         ? ['ytmsearch', 'ytsearch', 'scsearch', 'spsearch', 'amsearch', 'dzsearch']
         : [source || 'ytsearch'];
     const tracks = [];
-    const prefetchLimit = Math.max(limit, limit * Math.max(1, Number(options.prefetchMultiplier || 2)));
     const perResolveLimit = Math.max(1, Math.min(8, Number(options.perResolveLimit || 8)));
 
-    for (const searchSource of sources) {
-        for (const variant of variants) {
-            if (tracks.length >= prefetchLimit) break;
-            const result = await withTimeout(
-                poru.resolve({ query: variant, source: searchSource }).catch(() => null),
-                timeoutMs,
-                null,
-            );
-            if (result?.tracks?.length) tracks.push(...result.tracks.slice(0, perResolveLimit));
-        }
+    // Sources and query variants are independent. Running them serially made
+    // auto-search wait for (sources * variants * timeoutMs), even when one
+    // source had already returned useful results. Collect every response in
+    // parallel, then apply the same dedupe/ranking/output path below.
+    const jobs = sources.flatMap(searchSource => variants.map(variant => ({ searchSource, variant })));
+    const results = await Promise.allSettled(jobs.map(({ searchSource, variant }) =>
+        withTimeout(
+            withSearchResolveSlot(() => poru.resolve({ query: variant, source: searchSource }).catch(() => null)),
+            timeoutMs,
+            null,
+        )
+    ));
+    for (const result of results) {
+        const resolved = result.status === 'fulfilled' ? result.value : null;
+        if (resolved?.tracks?.length) tracks.push(...resolved.tracks.slice(0, perResolveLimit));
     }
 
     return rankTracksForQuery(tracks, query, { strict: options.strict }).slice(0, limit);
@@ -2682,11 +2690,47 @@ const KNOWN_LABEL_NAMES = [
     'تي سيريز', 'زي ميوزك', 'ساريغاما', 'سبيد ريكوردز', 'كوك ستوديو',
 ];
 const NORMALIZED_LABEL_NAMES = KNOWN_LABEL_NAMES.map(normalizeSearchText).filter(Boolean);
-const ARTIST_TRACK_CACHE_TTL_MS = 10 * 60 * 1000;
-const ARTIST_TRACK_CACHE_MAX = 200;
+const ARTIST_TRACK_CACHE_TTL_MS = Math.max(
+    5 * 60 * 1000,
+    Number(process.env.MUSIC_ARTIST_CACHE_TTL_MS || 15 * 60 * 1000),
+);
+const ARTIST_TRACK_CACHE_MAX = Math.max(
+    100,
+    Math.min(500, Number(process.env.MUSIC_ARTIST_CACHE_MAX || 300)),
+);
+const ARTIST_TRACK_CACHE_MAX_TRACKS = Math.max(
+    8,
+    Math.min(24, Number(process.env.MUSIC_ARTIST_CACHE_MAX_TRACKS || 16)),
+);
 const AUTOPLAY_HISTORY_MAX = 30;
 const ARTIST_RANDOM_SOURCES = ['ytmsearch', 'spsearch', 'scsearch'];
 const artistTrackCache = new Map();
+const artistTrackPending = new Map();
+const SEARCH_RESOLVE_GLOBAL_CONCURRENCY = Math.max(4, Math.min(
+    24,
+    Number(process.env.MUSIC_SEARCH_GLOBAL_CONCURRENCY || 12),
+));
+let searchResolveActive = 0;
+const searchResolveWaiters = [];
+const SEARCH_RATE_LIMIT_MS = Math.max(
+    500,
+    Number(process.env.MUSIC_SEARCH_RATE_LIMIT_MS || 1500),
+);
+const searchRateLimits = new Map();
+setInterval(() => {
+    const cutoff = Date.now() - SEARCH_RATE_LIMIT_MS * 4;
+    for (const [key, timestamp] of searchRateLimits) {
+        if (timestamp < cutoff) searchRateLimits.delete(key);
+    }
+}, Math.max(10_000, SEARCH_RATE_LIMIT_MS * 4)).unref?.();
+function allowSearchRequest(message) {
+    const key = `${message?.guild?.id || 'dm'}:${message?.author?.id || 'unknown'}`;
+    const now = Date.now();
+    const previous = searchRateLimits.get(key) || 0;
+    if (now - previous < SEARCH_RATE_LIMIT_MS) return false;
+    searchRateLimits.set(key, now);
+    return true;
+}
 
 function trimArtistCandidate(value) {
     return String(value || '')
@@ -2736,25 +2780,32 @@ function artistQueryForTrack(track) {
     const author = trimArtistCandidate(rawAuthor);
     const titleArtist = inferArtistFromTitle(info.title);
     const authorCandidate = author && !isLikelyLabelAuthor(author) ? author : '';
-
-    if (titleArtist) {
+    // Lavalink's author/channel metadata is normally the strongest signal
+    // (including the common "Artist - Topic" form after cleanup). Only use
+    // the title-derived artist as primary when author is missing or clearly a
+    // label/channel name.
+    const primary = authorCandidate || titleArtist;
+    const fallback = authorCandidate && titleArtist
+        && normalizeSearchText(authorCandidate) !== normalizeSearchText(titleArtist)
+        ? titleArtist
+        : '';
+    if (primary) {
         return {
-            primary: titleArtist,
-            fallback: authorCandidate && normalizeSearchText(authorCandidate) !== normalizeSearchText(titleArtist)
-                ? authorCandidate
-                : '',
+            primary,
+            fallback,
         };
     }
-
-    return {
-        primary: authorCandidate,
-        fallback: '',
-    };
+    return { primary: '', fallback: '' };
 }
 
-function artistCacheKey(source, artistName) {
+function artistCacheKey(_source, artistName) {
     const normalized = normalizeSearchText(artistName);
-    return `${source || 'auto'}:${normalized}`;
+    // artistSearchSources() always resolves the same catalog family
+    // (YT Music, SoundCloud and Spotify) and only changes preference order.
+    // Do not create duplicate cache entries for auto/ytsearch/ytmsearch/etc.
+    // The catalog key is intentionally source-independent so bots/settings
+    // can reuse the same resolved tracks without another Kerit request.
+    return `artist-catalog:${normalized}`;
 }
 
 function getCachedArtistTracks(key) {
@@ -2764,17 +2815,26 @@ function getCachedArtistTracks(key) {
         artistTrackCache.delete(key);
         return null;
     }
+    // Refresh insertion order so the bounded map behaves as LRU.
+    artistTrackCache.delete(key);
+    artistTrackCache.set(key, cached);
     return cached.tracks;
 }
 
 function setCachedArtistTracks(key, tracks) {
-    if (artistTrackCache.size >= ARTIST_TRACK_CACHE_MAX) {
+    const boundedTracks = dedupeTracks(tracks).slice(0, ARTIST_TRACK_CACHE_MAX_TRACKS);
+    for (const [cachedKey, cached] of artistTrackCache) {
+        if (cached.expiresAt <= Date.now()) artistTrackCache.delete(cachedKey);
+    }
+    artistTrackCache.delete(key);
+    while (artistTrackCache.size >= ARTIST_TRACK_CACHE_MAX) {
         const oldest = artistTrackCache.keys().next().value;
         if (oldest) artistTrackCache.delete(oldest);
+        else break;
     }
     artistTrackCache.set(key, {
         expiresAt: Date.now() + ARTIST_TRACK_CACHE_TTL_MS,
-        tracks,
+        tracks: boundedTracks,
     });
 }
 
@@ -3035,14 +3095,9 @@ function clearAutoPlaySessionData(player) {
 
 function clearStoppedPlaybackCaches(player) {
     if (!player?.data) return;
-    // Clear artistTrackCache entries for the seed artist of this player
-    const seedArtist = player.data.autoPlaySeedArtist?.primary;
-    if (seedArtist) {
-        const normalized = normalizeSearchText(seedArtist);
-        for (const key of artistTrackCache.keys()) {
-            if (key.endsWith(`:${normalized}`)) artistTrackCache.delete(key);
-        }
-    }
+    // artistTrackCache is a process-wide, TTL-bounded catalog cache. Keep it
+    // when one player stops; clearing it here would force Kerit to resolve the
+    // same artist again on the next playback session.
     clearAutoPlaySessionData(player);
     if (player.data.ui) {
         player.data.ui.artistTracks = [];
@@ -3114,7 +3169,10 @@ function filterArtistTracks(tracks, currentTrack, limit, artistName = '', option
         uniqueSongs.push(track);
     }
     const artistPool = artistName ? uniqueSongs.filter(t => trackMatchesArtist(t, artistName)) : uniqueSongs;
-    const pool = artistPool.length ? artistPool : uniqueSongs;
+    // When an artist was identified, never silently fall back to arbitrary
+    // songs from the provider. An empty accurate suggestion list is preferable
+    // to showing tracks from another artist.
+    const pool = artistName ? artistPool : uniqueSongs;
     const history = options.historySet instanceof Set ? options.historySet : null;
     const withoutSameSong = pool.filter(t => !isNearSameTrackTitle(t, currentTrack) && !leaksCurrentTitleSignal(t, currentTrack));
     const withoutHistory = history
@@ -3153,6 +3211,20 @@ function withTimeout(promise, ms, fallback = []) {
     ]).finally(() => clearTimeout(timer));
 }
 
+async function withSearchResolveSlot(task) {
+    if (searchResolveActive >= SEARCH_RESOLVE_GLOBAL_CONCURRENCY) {
+        await new Promise(resolve => searchResolveWaiters.push(resolve));
+    }
+    searchResolveActive++;
+    try {
+        return await task();
+    } finally {
+        searchResolveActive = Math.max(0, searchResolveActive - 1);
+        const next = searchResolveWaiters.shift();
+        if (next) next();
+    }
+}
+
 function randomTrack(tracks) {
     if (!tracks.length) return null;
     return tracks[Math.floor(Math.random() * tracks.length)] || null;
@@ -3173,7 +3245,6 @@ async function resolveQuickAutoPlayTrack(poru, artistQuery, source, currentTrack
     if (!artistName) return null;
 
     const historySet = autoPlayHistorySet(player);
-    const sourceOrder = artistSearchSources(source);
 
     const names = [artistName];
     if (fallbackName && normalizeSearchText(fallbackName) !== normalizeSearchText(artistName)) {
@@ -3182,18 +3253,15 @@ async function resolveQuickAutoPlayTrack(poru, artistQuery, source, currentTrack
 
     for (const name of shuffleTracks(names)) {
         const artist = trimArtistCandidate(name);
-        const query = `${artist} songs`;
-        const variants = shuffleTracks([query, artist]).filter(Boolean);
-        const results = await Promise.allSettled(sourceOrder.map(searchSource => withTimeout(
-            resolveSmartTracks(poru, query, searchSource, 5, {
-                variants,
-                prefetchMultiplier: 1,
-                perResolveLimit: 5,
-            }),
-            2500,
-            [],
-        )));
-        const tracks = shuffleTracks(results.flatMap(item => item.status === 'fulfilled' ? item.value || [] : []));
+        // Reuse the same bounded artist catalog as Suggest For You. Without
+        // this, every autoplay transition opened a fresh multi-source search
+        // even when the artist had just been resolved for the current panel.
+        const tracks = await resolveArtistCatalogTracks(
+            poru,
+            artist,
+            source || 'auto',
+            12,
+        ).catch(() => []);
         const candidates = filterArtistTracks(tracks, currentTrack, 12, name, { historySet });
         const picked = randomTrack(candidates);
         if (picked) return picked;
@@ -3204,9 +3272,14 @@ async function resolveQuickAutoPlayTrack(poru, artistQuery, source, currentTrack
 
 async function resolveCachedArtistQuery(poru, query, source, limit) {
     const key = artistCacheKey(source, query);
-    let tracks = getCachedArtistTracks(key);
+    const cached = getCachedArtistTracks(key);
+    if (cached) return shuffleTracks(cached);
 
-    if (!tracks) {
+    const pendingKey = `query:${key}`;
+    const pending = artistTrackPending.get(pendingKey);
+    if (pending) return shuffleTracks(await pending);
+
+    const task = (async () => {
         const sources = artistSearchSources(source);
         const perSourceLimit = Math.max(4, Math.min(8, limit));
         const results = await Promise.allSettled(sources.map(artistSource => withTimeout(
@@ -3218,11 +3291,12 @@ async function resolveCachedArtistQuery(poru, query, source, limit) {
             3500,
             [],
         )));
-        tracks = dedupeTracks(results.flatMap(item => item.status === 'fulfilled' ? item.value || [] : []));
+        const tracks = dedupeTracks(results.flatMap(item => item.status === 'fulfilled' ? item.value || [] : []));
         setCachedArtistTracks(key, tracks);
-    }
-
-    return shuffleTracks(tracks);
+        return tracks;
+    })().finally(() => artistTrackPending.delete(pendingKey));
+    artistTrackPending.set(pendingKey, task);
+    return shuffleTracks(await task);
 }
 
 async function resolveArtistCatalogTracks(poru, artistName, source, limit) {
@@ -3236,27 +3310,6 @@ async function resolveArtistCatalogTracks(poru, artistName, source, limit) {
     return shuffleTracks(dedupeTracks(tracks));
 }
 
-async function resolveFreshArtistCatalogTracks(poru, artistName, source, limit) {
-    const artist = trimArtistCandidate(artistName);
-    const sources = artistSearchSources(source);
-    const perSourceLimit = Math.max(4, Math.min(8, limit));
-    const query = `${artist} songs`;
-    const variants = shuffleTracks([query, artist]).filter(Boolean);
-
-    const tasks = sources.map(artistSource => withTimeout(
-        resolveSmartTracks(poru, query, artistSource, perSourceLimit, {
-            variants,
-            prefetchMultiplier: 1,
-            perResolveLimit: perSourceLimit,
-        }),
-        3500,
-        [],
-    ));
-
-    const results = await Promise.allSettled(tasks);
-    return shuffleTracks(dedupeTracks(results.flatMap(item => item.status === 'fulfilled' ? item.value || [] : [])));
-}
-
 async function resolveArtistTracks(poru, artistQuery, source, currentTrack, limit = 5, options = {}) {
     const artistName = typeof artistQuery === 'string' ? artistQuery : artistQuery?.primary;
     const fallbackName = typeof artistQuery === 'object' ? artistQuery.fallback : '';
@@ -3265,7 +3318,7 @@ async function resolveArtistTracks(poru, artistQuery, source, currentTrack, limi
         historySet: options.historySet instanceof Set ? options.historySet : null,
     };
 
-    const tracks = await resolveFreshArtistCatalogTracks(poru, artistName, source || 'auto', Math.max(18, limit * 4));
+    const tracks = await resolveArtistCatalogTracks(poru, artistName, source || 'auto', Math.max(18, limit * 4));
     const primaryTracks = filterArtistTracks(tracks, currentTrack, limit, artistName, filterOptions);
     const needsFallback = fallbackName
         && normalizeSearchText(fallbackName) !== normalizeSearchText(artistName)
@@ -3274,7 +3327,7 @@ async function resolveArtistTracks(poru, artistQuery, source, currentTrack, limi
     if (!needsFallback) return primaryTracks;
 
     const fallbackTracks = filterArtistTracks(
-        await resolveFreshArtistCatalogTracks(poru, fallbackName, source || 'auto', Math.max(18, limit * 4)),
+        await resolveArtistCatalogTracks(poru, fallbackName, source || 'auto', Math.max(18, limit * 4)),
         currentTrack,
         limit,
         fallbackName,
@@ -7243,6 +7296,11 @@ module.exports = {
             }
 
             else if (cmdsArray.search.includes(command)) {
+                // A subscription may have several music bots in the same
+                // voice room. Claim the message before building/sending the
+                // menu so only one bot handles this search request.
+                if (!claimVoiceScopedUtility(message, 'search')) return;
+                if (!allowSearchRequest(message)) return;
                 const rawSearchQuery = args.join(' ').replace(/\s+/g, ' ').trim();
                 const searchQuery = rawSearchQuery.split(' ').slice(0, 2).join(' ');
                 const searchQueryNote = rawSearchQuery && rawSearchQuery !== searchQuery
@@ -7277,6 +7335,7 @@ module.exports = {
                 let selectedSource = null;
                 let searchOffset = 0;
                 let completed = false;
+                let searchInFlight = false;
 
                         const platformOptions = [
                             { label: 'Smart Search', value: 'auto', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.smartSearch, TrueMusic, '🔎'), description: 'All Source' },
@@ -7330,28 +7389,27 @@ module.exports = {
 
                     const counts = {};
                     const merged = [];
-                    for (const searchSource of advancedSearchSources) {
-                        await sourceMessage.edit(musicPayload(tokenObj, {
-                            title: 'Advanced Search',
-                            description: buildSearchProgress(counts, searchSource),
-                            ...smartSearchThumbnail,
-                        })).catch(() => {});
-
+                    // These providers are independent. The previous serial
+                    // loop made six searches wait for one another before the
+                    // results message could be rendered.
+                    const sourceResults = await Promise.all(advancedSearchSources.map(async searchSource => {
                         const tracks = await resolveSmartTracks(TrueMusic.poru, searchQuery, searchSource, 14, {
                             strict: false,
                             variants: [searchQuery],
                             prefetchMultiplier: 3,
                             perResolveLimit: 10,
                         }).catch(() => []);
+                        return { searchSource, tracks };
+                    }));
+                    for (const { searchSource, tracks } of sourceResults) {
                         counts[searchSource] = tracks.length;
                         merged.push(...tracks);
-
-                        await sourceMessage.edit(musicPayload(tokenObj, {
-                            title: 'Advanced Search',
-                            description: buildSearchProgress(counts),
-                            ...smartSearchThumbnail,
-                        })).catch(() => {});
                     }
+                    await sourceMessage.edit(musicPayload(tokenObj, {
+                        title: 'Advanced Search',
+                        description: buildSearchProgress(counts),
+                        ...smartSearchThumbnail,
+                    })).catch(() => {});
 
                     return rankTracksForQuery(dedupeTracks(merged), searchQuery, { strict: false }).slice(0, 60);
                 };
@@ -7444,6 +7502,12 @@ module.exports = {
                     }
 
                     if (interaction.customId === `${searchId}_back`) {
+                        if (searchInFlight) {
+                            return interaction.reply({
+                                content: '**انتظر انتهاء البحث الحالي قبل الرجوع.**',
+                                flags: MessageFlags.Ephemeral,
+                            }).catch(() => {});
+                        }
                         currentTracks = [];
                         allSearchTracks = [];
                         selectedSource = null;
@@ -7457,8 +7521,16 @@ module.exports = {
                     }
 
                             if (interaction.customId === `${searchId}_source`) {
+                                if (searchInFlight) {
+                                    return interaction.reply({
+                                        content: '**البحث جارٍ بالفعل، انتظر ظهور النتائج.**',
+                                        flags: MessageFlags.Ephemeral,
+                                    }).catch(() => {});
+                                }
+                                searchInFlight = true;
                                 selectedSource = interaction.values[0];
                                 searchOffset = 0;
+                                try {
                                 await interaction.update(musicPayload(tokenObj, {
                                     title: selectedSource === 'auto' ? 'Advanced Search' : 'Searching',
                                     description: selectedSource === 'auto'
@@ -7466,8 +7538,6 @@ module.exports = {
                                         : `**يتم البحث في : ${platformDisplay(selectedSource, TrueMusic)} عن ${searchQuery}**...${searchQueryNote}`,
                                     ...smartSearchThumbnail,
                                 }));
-
-                                try {
                                     allSearchTracks = await resolveSearchTracks(selectedSource);
                                     if (completed) return;
                                     currentTracks = allSearchTracks.slice(searchOffset, searchOffset + 10);
@@ -7495,6 +7565,8 @@ module.exports = {
                                 components: [controlRow(true)],
                                 ...smartSearchThumbnail,
                             }));
+                        } finally {
+                            searchInFlight = false;
                         }
                     }
 
