@@ -8102,6 +8102,14 @@ module.exports = {
                     await TrueMusic.login(token);
                 } catch (e) {
                     console.log(`[Music] Failed to login a subscription bot for server ${idbot || 'unknown'}: ${e?.message || e}`);
+                    // runningBots is populated before login to reserve this
+                    // token. Release the reservation and all gateway/Poru
+                    // resources when login fails; otherwise the failed
+                    // Client remains retained and manager.js cannot retry it.
+                    try { lavalinkKeepAlive.destroyKeepAlive(TrueMusic.poru); } catch {}
+                    await TrueMusic.destroy().catch(() => {});
+                    if (runningBots.get(token) === TrueMusic) runningBots.delete(token);
+                    botLastActivity.delete(token);
                     return;
                 }
 
