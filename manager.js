@@ -1,6 +1,7 @@
 'use strict';
 const { runsys, runningBots, botLastActivity } = require('./music');
 const store = require('./utils/store');
+const lavalinkConsole = require('./utils/lavalinkConsole');
 const {
   applyProfileToClient,
   getSubBotProfile,
@@ -113,6 +114,7 @@ async function unloadIdleBots() {
     try { await botClient.destroy(); } catch (err) {
       console.warn('[Manager] destroy failed for orphaned bot:', err?.message || err);
     }
+    lavalinkConsole.removeBot(botClient);
     runningBots.delete(token);
     botLastActivity?.delete(token);
     console.log(`[Manager] Unloaded orphaned bot token …${token.slice(-6)}`);

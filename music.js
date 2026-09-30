@@ -5348,6 +5348,7 @@ module.exports = {
                     clearInterval(playbackWatchdog);
                     lavalinkKeepAlive.destroyKeepAlive(TrueMusic.poru); // Fix #8: تنظيف intervals قبل destroy
                     await TrueMusic.destroy().catch(() => 0);
+                    lavalinkConsole.removeBot(TrueMusic, { token });
                     runningBots.delete(token);
                     return clearInterval(int);
                 }
@@ -5362,6 +5363,7 @@ module.exports = {
                     clearInterval(playbackWatchdog);
                     lavalinkKeepAlive.destroyKeepAlive(TrueMusic.poru); // Fix #8: تنظيف intervals قبل destroy
                     await TrueMusic.destroy().catch(() => 0);
+                    lavalinkConsole.removeBot(TrueMusic, { token });
                     runningBots.delete(token);
                     return clearInterval(int);
                 }
@@ -8108,6 +8110,7 @@ module.exports = {
                     // Client remains retained and manager.js cannot retry it.
                     try { lavalinkKeepAlive.destroyKeepAlive(TrueMusic.poru); } catch {}
                     await TrueMusic.destroy().catch(() => {});
+                    lavalinkConsole.removeBot(TrueMusic, { token });
                     if (runningBots.get(token) === TrueMusic) runningBots.delete(token);
                     botLastActivity.delete(token);
                     return;
