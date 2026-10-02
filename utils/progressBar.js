@@ -7,6 +7,14 @@ const path = require('path');
 (function registerFallbackFonts() {
     const candidates = [
         {
+            file: '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
+            family: 'PB-NotoSansRegular',
+        },
+        {
+            file: '/usr/share/fonts/truetype/noto/NotoSans-SemiBold.ttf',
+            family: 'PB-NotoSansSemiBold',
+        },
+        {
             file: path.join(__dirname, '../node_modules/duratiform/docs/fonts/Montserrat/Montserrat-Bold.ttf'),
             family: 'PB-Montserrat',
         },
@@ -28,7 +36,7 @@ const path = require('path');
 function resolveFont(size = 19, bold = true) {
     const weight    = bold ? 'bold ' : '';
     const available = new Set((GlobalFonts.families || []).map(f => f.family));
-    const priority  = ['PB-Montserrat', 'PB-SourceSans', 'DejaVu Sans', 'DejaVu Serif'];
+    const priority  = ['PB-NotoSansRegular', 'PB-NotoSansSemiBold', 'PB-Montserrat', 'PB-SourceSans', 'DejaVu Sans', 'DejaVu Serif'];
     for (const family of priority) {
         if (available.has(family)) return `${weight}${size}px "${family}"`;
     }
@@ -51,7 +59,7 @@ function fontRendersText(ctx, text, font) {
 function pickWorkingFont(ctx, sample, size = 19, bold = true) {
     const weight    = bold ? 'bold ' : '';
     const available = new Set((GlobalFonts.families || []).map(f => f.family));
-    const priority  = ['PB-Montserrat', 'PB-SourceSans', 'DejaVu Sans', 'DejaVu Serif', 'DejaVu Sans Mono'];
+    const priority  = ['PB-NotoSansRegular', 'PB-NotoSansSemiBold', 'PB-Montserrat', 'PB-SourceSans', 'DejaVu Sans', 'DejaVu Serif', 'DejaVu Sans Mono'];
     for (const family of priority) {
         if (!available.has(family)) continue;
         const font = `${weight}${size}px "${family}"`;
@@ -141,6 +149,26 @@ function fillRoundedRect(ctx, x, y, width, height, radius) {
     if (width <= 0 || height <= 0) return;
     roundedRectPath(ctx, x, y, width, height, radius);
     ctx.fill();
+}
+
+// Draw compact time labels with a restrained accent edge. The text remains
+// white for readability; the bot/progress color is only used as a soft 1px
+// contour and shadow so it never overwhelms the digits at small sizes.
+function drawCompactTimeLabel(ctx, text, x, y, align, accent) {
+    if (!text) return;
+
+    ctx.save();
+    ctx.textAlign = align;
+    ctx.textBaseline = 'middle';
+    // Keep the digits clean and separated; use a restrained glow so the accent
+    // is visible on black without turning the small labels into heavy outlines.
+    ctx.shadowColor = rgba(accent, 0.44);
+    ctx.shadowBlur = 1;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.fillStyle = 'rgb(225,227,232)';
+    ctx.fillText(text, x, y);
+    ctx.restore();
 }
 
 function compactLabelKey(currentLabel, durationLabel) {
@@ -246,7 +274,9 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
 
         // ── Resolve font: pick first family that measurably renders digits ───────
         const sampleText = currentLabel || durationLabel || '0:00';
-        const FONT = pickWorkingFont(cx, sampleText, 14, true);
+        // Match the approved preview: medium-weight, clean digits rather than
+        // the heavier bold treatment used by the older progress-bar version.
+        const FONT = pickWorkingFont(cx, sampleText, 14, false);
 
         // ── Measure labels first so the rail sits between them ──────────────────
         cx.font         = FONT;
@@ -286,25 +316,13 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         // current time — right-aligned, sitting left of the rail
         if (currentLabel) {
             const tx = railX - GUTTER;
-            cx.textAlign   = 'right';
-            cx.lineWidth   = 3;
-            cx.strokeStyle = 'rgba(0,0,0,0.65)';
-            cx.lineJoin    = 'round';
-            cx.strokeText(currentLabel, tx, H / 2);
-            cx.fillStyle   = 'rgb(225,227,232)';
-            cx.fillText(currentLabel, tx, H / 2);
+            drawCompactTimeLabel(cx, currentLabel, tx, H / 2, 'right', base);
         }
 
         // total duration — left-aligned, sitting right of the rail
         if (durationLabel) {
             const tx = railEnd + GUTTER;
-            cx.textAlign   = 'left';
-            cx.lineWidth   = 3;
-            cx.strokeStyle = 'rgba(0,0,0,0.65)';
-            cx.lineJoin    = 'round';
-            cx.strokeText(durationLabel, tx, H / 2);
-            cx.fillStyle   = 'rgb(225,227,232)';
-            cx.fillText(durationLabel, tx, H / 2);
+            drawCompactTimeLabel(cx, durationLabel, tx, H / 2, 'left', base);
         }
 
         return progressCacheSet(cacheKey, {
