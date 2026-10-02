@@ -304,10 +304,22 @@ function buildProgressBarAttachment({ position = 0, duration = 0, color, current
         }
 
         // ── 3. Knob ──────────────────────────────────────────────────────────────
-        cx.fillStyle = 'rgb(255,255,255)';
+        // White center with a clearer, color-aware edge and restrained glow.
+        // Both the edge and glow follow the same accent as the filled rail.
+        cx.save();
+        cx.shadowColor = rgba(base, 0.42);
+        cx.shadowBlur = 4;
+        cx.fillStyle = 'rgb(248,249,255)';
         cx.beginPath();
         cx.arc(knobX, knobY, KNOB_R, 0, Math.PI * 2);
         cx.fill();
+        cx.restore();
+
+        cx.strokeStyle = rgba(base, 0.82);
+        cx.lineWidth = 1.5;
+        cx.beginPath();
+        cx.arc(knobX, knobY, KNOB_R - 0.5, 0, Math.PI * 2);
+        cx.stroke();
 
         // ── 4. Time labels drawn LAST so they are always on top ─────────────────
         cx.font         = FONT;
