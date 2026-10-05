@@ -628,48 +628,36 @@ setInterval(() => {
 const FILTER_NAMES = {
     clear: 'None',
     bassboost: 'Bass Boost',
-    bassboost2: 'Bass Boost+',
     nightcore: 'Nightcore',
-    spedup: 'Sped Up',
-    slowmode: 'Slow Mode',
-    deep: 'Deep Voice',
-    highpitch: 'High Pitch',
-    '8d': '8D Audio',
     vaporwave: 'Vaporwave',
+    '8d': '8D Audio',
     karaoke: 'Karaoke',
     tremolo: 'Tremolo',
     vibrato: 'Vibrato',
     lowpass: 'Low Pass',
-    muffled: 'Muffled',
-    channelmix: 'Channel Mix',
-    treble: 'Treble Boost',
-    pop: 'Pop EQ',
-    electronic: 'Electronic EQ',
-    soft: 'Soft EQ',
+    mono: 'Mono',
 };
 
 const FILTER_OPTIONS = [
-    { label: 'Clear Filters', value: 'clear', description: 'إزالة جميع الفلاتر', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'Bass Boost', value: 'bassboost', description: 'جهير أوضح بدون تشويه', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'Bass Boost+', value: 'bassboost2', description: 'جهير أقوى وواضح', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'Nightcore', value: 'nightcore', description: 'سرعة ونبرة أعلى', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'Sped Up', value: 'spedup', description: 'تسريع خفيف بدون رفع مبالغ', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'Slow Mode', value: 'slowmode', description: 'إبطاء ناعم للأغنية', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'Deep Voice', value: 'deep', description: 'نبرة أعمق وأثقل', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'High Pitch', value: 'highpitch', description: 'نبرة عالية وسريعة', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: '8D Audio', value: '8d', description: 'حركة صوتية خفيفة', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'Vaporwave', value: 'vaporwave', description: 'أبطأ وأنعم', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'Karaoke', value: 'karaoke', description: 'تقليل الصوت البشري', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'Tremolo', value: 'tremolo', description: 'اهتزاز مستوى الصوت', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'Vibrato', value: 'vibrato', description: 'اهتزاز النبرة', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'Low Pass', value: 'lowpass', description: 'صوت أنعم', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'Muffled', value: 'muffled', description: 'صوت مكتوم وواضح الفرق', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'Channel Mix', value: 'channelmix', description: 'مزج خفيف للقنوات', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'Treble Boost', value: 'treble', description: 'إبراز الأصوات العالية', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'Pop EQ', value: 'pop', description: 'موازنة مناسبة للأغاني العامة', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'Electronic EQ', value: 'electronic', description: 'إيقاع وحدّة أكثر', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
-    { label: 'Soft EQ', value: 'soft', description: 'صوت أهدأ وأنظف', emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters) },
+    { label: 'Clear Filters', value: 'clear', description: 'إزالة جميع التأثيرات', requires: [] },
+    { label: 'Bass Boost', value: 'bassboost', description: 'Kerit EQ: boost خفيف ومتوازن', requires: ['equalizer'] },
+    { label: 'Nightcore', value: 'nightcore', description: 'سرعة ونبرة أعلى', requires: ['timescale'] },
+    { label: 'Vaporwave', value: 'vaporwave', description: 'أبطأ ونبرة أخفض', requires: ['timescale'] },
+    { label: '8D Audio', value: '8d', description: 'دوران ستيريو 0.2 Hz', requires: ['rotation'] },
+    { label: 'Karaoke', value: 'karaoke', description: 'تقليل الغناء المركزي؛ النتيجة تختلف حسب المكس', requires: ['karaoke'] },
+    { label: 'Tremolo', value: 'tremolo', description: 'تذبذب مستوى الصوت', requires: ['tremolo'] },
+    { label: 'Vibrato', value: 'vibrato', description: 'تذبذب النبرة', requires: ['vibrato'] },
+    { label: 'Low Pass', value: 'lowpass', description: 'يخفض الترددات العالية عمدًا؛ ليس تعزيزًا للباس', requires: ['lowpass'] },
+    { label: 'Mono', value: 'mono', description: 'مزج القناتين إلى صوت أحادي', requires: ['channelmix'] },
 ];
+
+function filterOptionsFor(supportedFilterTypes = null) {
+    const supported = supportedFilterTypes instanceof Set ? supportedFilterTypes : null;
+    return FILTER_OPTIONS
+        .filter(option => option.value === 'clear'
+            || (!!supported && option.requires.every(name => supported.has(name.toLowerCase()))))
+        .map(({ requires, ...option }) => option);
+}
 
 const ARTIST_MENU_HEADER_VALUE = '__artist_header';
 const TINTED_ICON_FILES = [
@@ -702,76 +690,22 @@ function warnUnavailableMusicEmojis(client) {
     console.log(`[MusicEmoji] ${freshMissing.length} emoji(s) not available in this bot app/guild yet: ${freshMissing.map(({ key, emoji }) => `${key}(${emoji.name || 'emoji'}:${emoji.id})`).join(', ')}`);
 }
 
-const BASE_FILTERS = {
-    volume: 1.0,
-    equalizer: [],
-    karaoke: null,
-    timescale: null,
-    tremolo: null,
-    vibrato: null,
-    rotation: null,
-    distortion: null,
-    lowPass: null,
-};
-
+// Values follow Kerit's published Lavalink examples. These are native per-player
+// Lavalink filters; the bot does not process or re-encode the audio itself.
+// Keep EQ boosts gentle and omit distortion to avoid avoidable clipping/harshness.
 const FILTER_PRESETS = {
     clear: {},
     bassboost: {
-        equalizer: [
-            { band: 0, gain: 0.28 }, { band: 1, gain: 0.24 }, { band: 2, gain: 0.18 },
-            { band: 3, gain: 0.11 }, { band: 4, gain: 0.05 }, { band: 5, gain: 0.00 },
-            { band: 6, gain: -0.03 }, { band: 7, gain: -0.04 },
-        ],
+        equalizer: [0.20, 0.15, 0.10, 0.05].map((gain, band) => ({ band, gain })),
     },
-    bassboost2: {
-        equalizer: [
-            { band: 0, gain: 0.40 }, { band: 1, gain: 0.34 }, { band: 2, gain: 0.26 },
-            { band: 3, gain: 0.15 }, { band: 4, gain: 0.06 }, { band: 5, gain: -0.02 },
-            { band: 6, gain: -0.05 }, { band: 7, gain: -0.06 },
-        ],
-    },
-    nightcore: { timescale: { speed: 1.12, pitch: 1.10, rate: 1.0 } },
-    spedup: { timescale: { speed: 1.16, pitch: 1.02, rate: 1.05 } },
-    slowmode: { timescale: { speed: 0.86, pitch: 0.98, rate: 0.92 } },
-    deep: { timescale: { speed: 0.96, pitch: 0.82, rate: 1.0 } },
-    highpitch: { timescale: { speed: 1.06, pitch: 1.35, rate: 1.02 } },
-    '8d': { rotation: { rotationHz: 0.14 } },
-    vaporwave: { timescale: { speed: 0.92, pitch: 0.90, rate: 1.0 } },
-    karaoke: { karaoke: { level: 0.35, monoLevel: 0.35, filterBand: 220.0, filterWidth: 90.0 } },
-    tremolo: { tremolo: { frequency: 3.5, depth: 0.25 } },
-    vibrato: { vibrato: { frequency: 4.5, depth: 0.25 } },
-    lowpass: { lowPass: { smoothing: 5.0 } },
-    muffled: { lowPass: { smoothing: 13.0 }, equalizer: [{ band: 10, gain: -0.12 }, { band: 11, gain: -0.16 }, { band: 12, gain: -0.20 }] },
-    channelmix: { channelMix: { leftToLeft: 0.85, leftToRight: 0.15, rightToLeft: 0.15, rightToRight: 0.85 } },
-    treble: {
-        equalizer: [
-            { band: 5, gain: 0.05 }, { band: 6, gain: 0.08 }, { band: 7, gain: 0.11 },
-            { band: 8, gain: 0.13 }, { band: 9, gain: 0.15 }, { band: 10, gain: 0.13 },
-            { band: 11, gain: 0.10 }, { band: 12, gain: 0.07 },
-        ],
-    },
-    pop: {
-        equalizer: [
-            { band: 0, gain: 0.10 }, { band: 1, gain: 0.08 }, { band: 2, gain: 0.04 },
-            { band: 5, gain: 0.05 }, { band: 6, gain: 0.07 }, { band: 8, gain: 0.06 },
-            { band: 10, gain: 0.04 },
-        ],
-    },
-    electronic: {
-        equalizer: [
-            { band: 0, gain: 0.16 }, { band: 1, gain: 0.12 }, { band: 2, gain: 0.07 },
-            { band: 6, gain: 0.08 }, { band: 7, gain: 0.10 }, { band: 8, gain: 0.12 },
-            { band: 10, gain: 0.10 },
-        ],
-        timescale: { speed: 1.03, pitch: 1.0, rate: 1.0 },
-    },
-    soft: {
-        equalizer: [
-            { band: 0, gain: -0.03 }, { band: 1, gain: -0.02 }, { band: 8, gain: -0.05 },
-            { band: 9, gain: -0.07 }, { band: 10, gain: -0.08 }, { band: 11, gain: -0.10 },
-        ],
-        lowPass: { smoothing: 7.0 },
-    },
+    nightcore: { timescale: { speed: 1.2, pitch: 1.2, rate: 1.0 } },
+    vaporwave: { timescale: { speed: 0.85, pitch: 0.8, rate: 1.0 } },
+    '8d': { rotation: { rotationHz: 0.2 } },
+    karaoke: { karaoke: { level: 1.0, monoLevel: 1.0, filterBand: 220.0, filterWidth: 100.0 } },
+    tremolo: { tremolo: { frequency: 4.0, depth: 0.3 } },
+    vibrato: { vibrato: { frequency: 2.0, depth: 0.5 } },
+    lowpass: { lowPass: { smoothing: 20.0 } },
+    mono: { channelMix: { leftToLeft: 0.5, leftToRight: 0.5, rightToLeft: 0.5, rightToRight: 0.5 } },
 };
 
 function displaySettings(tokenObj) {
@@ -885,7 +819,7 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
     return [row1, row2];
 }
 
-function buildMusicComponents({ liked = false, paused = false, artistTracks = [], selectedFilter = 'clear', selectedArtistIndex = null, showControls = true, compactControls = false, tokenObj = null, client = null }) {
+function buildMusicComponents({ liked = false, paused = false, artistTracks = [], selectedFilter = 'clear', selectedArtistIndex = null, showControls = true, compactControls = false, tokenObj = null, client = null, supportedFilterTypes = null }) {
     const rows = [];
 
     if (showControls && artistTracks.length > 0) {
@@ -919,7 +853,7 @@ function buildMusicComponents({ liked = false, paused = false, artistTracks = []
         const filterMenu = new StringSelectMenuBuilder()
             .setCustomId('np_filter')
             .setPlaceholder(` Current Filter : ${activeFilterName}`)
-            .addOptions(FILTER_OPTIONS.map(option => ({
+            .addOptions(filterOptionsFor(supportedFilterTypes).map(option => ({
                 ...option,
                 emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.filters, client, option.emoji),
                 default: option.value === safeSelectedFilter,
@@ -1286,6 +1220,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
             compactControls: compactPlayLayout,
             tokenObj,
             client: TrueMusic,
+            supportedFilterTypes: player?.data?.supportedFilterTypes || cachedLavalinkFilterTypes(player?.node),
         })
         : [];
 
@@ -1519,6 +1454,98 @@ function trackIdentity(track) {
     if (source && identifier) return `${source}:${identifier}`;
     if (identifier) return identifier;
     return track?.track || [source, info.author, info.title, info.length].filter(Boolean).join(':');
+}
+
+function trackActionStatusState(player) {
+    const data = ensurePlayerData(player);
+    if (!(data.trackActionStatusMessages instanceof Map)) data.trackActionStatusMessages = new Map();
+    if (!(data.trackActionStatusTasks instanceof Map)) data.trackActionStatusTasks = new Map();
+    return { messages: data.trackActionStatusMessages, tasks: data.trackActionStatusTasks };
+}
+
+function queueTrackActionStatusTask(player, identity, task) {
+    const { tasks } = trackActionStatusState(player);
+    const previous = tasks.get(identity) || Promise.resolve();
+    const current = previous
+        .catch(() => {})
+        .then(task)
+        .catch(err => {
+            console.warn(`[TrackActionStatus] ${err?.message || err}`);
+            return null;
+        });
+    const queued = current.finally(() => {
+        if (tasks.get(identity) === queued) tasks.delete(identity);
+    });
+    tasks.set(identity, queued);
+    return current;
+}
+
+function publishTrackActionStatus(player, channel, track, content, actorId, deleteAfterMs = 0) {
+    const identity = trackIdentity(track);
+    if (!player || !identity || !canSendMusicPanel(channel) || !content) return Promise.resolve(null);
+
+    const { messages } = trackActionStatusState(player);
+    return queueTrackActionStatusTask(player, identity, async () => {
+        let entry = messages.get(identity) || null;
+        if (entry?.deleteTimer) {
+            clearTimeout(entry.deleteTimer);
+            entry.deleteTimer = null;
+        }
+
+        const payload = {
+            content,
+            allowedMentions: { parse: [], users: actorId ? [String(actorId)] : [] },
+        };
+        let message = entry?.message || null;
+        if (message) {
+            try {
+                await message.edit(payload);
+            } catch {
+                if (messages.get(identity) === entry) messages.delete(identity);
+                entry = null;
+                message = null;
+            }
+        }
+
+        if (!message) {
+            message = await channel.send(payload).catch(err => {
+                console.warn(`[TrackActionStatus] failed to send: ${err?.message || err}`);
+                return null;
+            });
+            if (!message) return null;
+            entry = { message, deleteTimer: null };
+            messages.set(identity, entry);
+        }
+
+        if (deleteAfterMs > 0) {
+            entry.deleteTimer = setTimeout(() => {
+                queueTrackActionStatusTask(player, identity, async () => {
+                    if (messages.get(identity) !== entry) return false;
+                    messages.delete(identity);
+                    entry.deleteTimer = null;
+                    await entry.message.delete().catch(() => {});
+                    return true;
+                });
+            }, deleteAfterMs);
+            entry.deleteTimer.unref?.();
+        }
+
+        return message;
+    });
+}
+
+function removeTrackActionStatus(player, track, { preserveScheduledDelete = false } = {}) {
+    const identity = trackIdentity(track);
+    if (!player || !identity) return Promise.resolve(false);
+    const { messages } = trackActionStatusState(player);
+    return queueTrackActionStatusTask(player, identity, async () => {
+        const entry = messages.get(identity);
+        if (!entry || (preserveScheduledDelete && entry.deleteTimer)) return false;
+        if (entry.deleteTimer) clearTimeout(entry.deleteTimer);
+        messages.delete(identity);
+        await entry.message.delete().catch(() => {});
+        return true;
+    });
 }
 
 function playbackStateKey(token, guildId) {
@@ -2164,6 +2191,58 @@ function lavalinkRestAgent(origin) {
     return agent;
 }
 
+const lavalinkFilterCapabilityCache = new WeakMap();
+
+function cachedLavalinkFilterTypes(node) {
+    return node && typeof node === 'object'
+        ? lavalinkFilterCapabilityCache.get(node)?.filters || null
+        : null;
+}
+
+async function fetchLavalinkFilterTypes(node) {
+    if (!node || typeof node !== 'object') return null;
+    const cached = lavalinkFilterCapabilityCache.get(node);
+    if (cached?.filters) return cached.filters;
+    if (cached?.promise) return cached.promise;
+
+    const task = (async () => {
+        const origin = lavalinkRestOrigin(node);
+        const password = node.password || node.rest?.password;
+        if (!origin || !password) return null;
+        try {
+            const response = await undiciRequest(`${origin}/v4/info`, {
+                method: 'GET',
+                dispatcher: lavalinkRestAgent(origin),
+                headers: { authorization: password },
+                headersTimeout: 2000,
+                bodyTimeout: 2000,
+            });
+            if (response.statusCode >= 400) {
+                await drainUndiciBody(response.body);
+                return null;
+            }
+            const text = await readUndiciBody(response.body);
+            const info = JSON.parse(text || '{}');
+            if (!Array.isArray(info.filters)) return null;
+            const filters = new Set(info.filters.map(value => String(value).toLowerCase()));
+            lavalinkFilterCapabilityCache.set(node, { filters, checkedAt: Date.now() });
+            return filters;
+        } catch (err) {
+            if (process.env.DEBUG_FILTERS) {
+                console.warn(`[Filters] Lavalink capability probe failed: ${err?.message || err}`);
+            }
+            return null;
+        }
+    })();
+
+    lavalinkFilterCapabilityCache.set(node, { promise: task });
+    const result = await task;
+    if (!result && lavalinkFilterCapabilityCache.get(node)?.promise === task) {
+        lavalinkFilterCapabilityCache.delete(node);
+    }
+    return result;
+}
+
 async function readUndiciBody(body) {
     if (!body) return '';
     if (typeof body.text === 'function') return body.text().catch(() => '');
@@ -2258,6 +2337,8 @@ function waitUntil(predicate, timeoutMs = 500, intervalMs = 25) {
 async function setPlayerVolumeSynced(player, volume) {
     const nextVolume = clampPlayerVolume(volume);
     player.volume = nextVolume;
+    // Use Lavalink's normal player volume (0..1000), not filters.volume; the
+    // optional filter multiplier can amplify/clamp audio and is unnecessary here.
     updateLavalinkPlayer(player, { volume: nextVolume }, 'volume update').catch(() => {});
     return nextVolume;
 }
@@ -4658,6 +4739,16 @@ module.exports = {
             }
             // Start CPU/RAM load monitor for this node
             startNodeLoadMonitor(node, TrueMusic);
+            runBackground('Lavalink filter discovery', async () => {
+                const supportedFilterTypes = await fetchLavalinkFilterTypes(node);
+                if (!supportedFilterTypes) return;
+                TrueMusic.poru?.players?.forEach(player => {
+                    if (player.node === node) ensurePlayerData(player).supportedFilterTypes = supportedFilterTypes;
+                });
+                if (process.env.DEBUG_FILTERS) {
+                    console.log(`[Filters] node ${name} advertises: ${[...supportedFilterTypes].join(', ')}`);
+                }
+            });
 
             let newData = tempData.get("bots");
             if (!newData.includes(TrueMusic)) newData.push(TrueMusic);
@@ -4668,6 +4759,14 @@ module.exports = {
         TrueMusic.poru.on('nodeReconnect', (node) => {
             // Reapply resume and ping after every reconnect.
             lavalinkKeepAlive.onNodeConnect(node, TrueMusic).catch(() => {});
+            lavalinkFilterCapabilityCache.delete(node);
+            runBackground('Lavalink filter rediscovery', async () => {
+                const supportedFilterTypes = await fetchLavalinkFilterTypes(node);
+                if (!supportedFilterTypes) return;
+                TrueMusic.poru?.players?.forEach(player => {
+                    if (player.node === node) ensurePlayerData(player).supportedFilterTypes = supportedFilterTypes;
+                });
+            });
             const name = node.options.name || node.options.host;
             const prev = statusStore.getNodes().get(name) || {};
             const data = {
@@ -6045,6 +6144,9 @@ module.exports = {
       const reason = data?.reason || 'unknown';
       const naturalEnd = isNaturalTrackEnd(reason);
       const transientEnd = /disconnect|shutdown|destroy|reconnect|node|voice|session|connection|cleanup/i.test(String(reason));
+      if (naturalEnd) {
+          runBackground('track action status natural-end cleanup', () => removeTrackActionStatus(player, track, { preserveScheduledDelete: true }));
+      }
       if (naturalEnd && player.loop === 'TRACK') {
           player.data._loopRestartPending = true;
       }
@@ -6169,16 +6271,16 @@ module.exports = {
 
     // ── Helper: apply audio filter preset ──────────────────────────────
     function filterPayloadFor(name) {
-        const selected = FILTER_PRESETS[name] ? name : 'clear';
+        const selected = Object.prototype.hasOwnProperty.call(FILTER_PRESETS, name) ? name : 'clear';
         return {
             selected,
-            filters: { ...BASE_FILTERS, ...FILTER_PRESETS[selected] },
+            filters: JSON.parse(JSON.stringify(FILTER_PRESETS[selected])),
         };
     }
 
     function syncPlayerFilters(player, filters) {
         if (!player?.filters) return;
-        player.filters.volume = filters.volume;
+        player.filters.volume = filters.volume ?? 1.0;
         player.filters.equalizer = filters.equalizer || [];
         player.filters.karaoke = filters.karaoke || undefined;
         player.filters.timescale = filters.timescale || undefined;
@@ -6192,9 +6294,28 @@ module.exports = {
 
     async function applyFilter(player, name) {
         if (!player?.node?.rest) throw new Error('player is not connected');
+        ensurePlayerData(player);
+        const supportedFilterTypes = await fetchLavalinkFilterTypes(player.node);
+        const requestedOption = FILTER_OPTIONS.find(item => item.value === name);
+        if (name !== 'clear' && !supportedFilterTypes) {
+            throw new Error('Could not verify this Lavalink node filter list');
+        }
+        if (supportedFilterTypes) {
+            player.data.supportedFilterTypes = supportedFilterTypes;
+            const unsupported = requestedOption?.requires?.filter(filter => !supportedFilterTypes.has(filter.toLowerCase())) || [];
+            if (unsupported.length) {
+                throw new Error(`Lavalink node does not advertise support for: ${unsupported.join(', ')}`);
+            }
+        }
         const { selected, filters } = filterPayloadFor(name);
+        const update = { filters };
+        const currentTrack = player.currentTrack;
+        const currentPosition = Math.max(0, Math.floor(Number(player.position || 0)));
+        if (currentTrack?.info?.isSeekable && !currentTrack.info?.isStream && currentPosition > 0) {
+            update.position = currentPosition;
+        }
 
-        await updateLavalinkPlayer(player, { filters }, `filter:${name}`);
+        await updateLavalinkPlayer(player, update, `filter:${selected}`);
 
         syncPlayerFilters(player, filters);
 
@@ -7794,6 +7915,9 @@ module.exports = {
                             if (!player || !player.currentTrack) {
                                 return replyEphemeral('**لا يوجد شيء يعمل الآن.**');
                             }
+                            const actionTrack = player.currentTrack;
+                            let actionStatusContent = null;
+                            let actionStatusDeleteAfterMs = 0;
 
                                     const activePanelId = player.data?.nowPlayingMessage?.id;
                                     if (activePanelId && interaction.message?.id !== activePanelId) {
@@ -7832,48 +7956,71 @@ module.exports = {
 
                     if (isMusicMenu) {
                         if (interaction.customId === 'np_artist') {
-                            interaction.deferUpdate().catch(() => {});
-                            if (ui.requesterId && interaction.user.id !== ui.requesterId) {
-                                return replyEphemeral('هذه القائمة لصاحب الطلب فقط.');
-                            }
-
-                                    const selectedValue = interaction.values[0];
-                                    if (selectedValue === ARTIST_MENU_HEADER_VALUE) {
-                                        return replyEphemeral('**اختر أغنية من القائمة.**');
-                                    }
-
-                                    const selectedIndex = Number(selectedValue);
-                                    const selectedTrack = ui.artistTracks?.[selectedIndex];
-                                    if (!selectedTrack) return replyEphemeral('**لم أجد الأغنية المختارة.**');
-
-                                            const queuedTrack = { ...selectedTrack, info: { ...selectedTrack.info, requester: interaction.user } };
-                                            player.queue.add(queuedTrack);
-                                            runBackground('artist queue panels', () => bumpQueueVersion(player, 'artist_menu_add'));
-                                                    ui.selectedArtistIndex = null;
-                                                    player.data.ui = ui;
-
-                                    runBackground('artist panel edit', () => editPanel(!!ui.liked));
-                                    runBackground('artist queue playback', () => safePlay(player));
-                                    return replyEphemeral(`**تمت إضافة ${queuedTrack.info.title || 'الأغنية'} للطابور.**`);
+                            // Acknowledge immediately with a private reply. deferUpdate()
+                            // races with replyEphemeral() and can leave the selection
+                            // spinning or make the success message disappear into the panel.
+                            await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+                            try {
+                                if (ui.requesterId && interaction.user.id !== ui.requesterId) {
+                                    return replyEphemeral('هذه القائمة لصاحب الطلب فقط.');
                                 }
+
+                                const selectedValue = interaction.values[0];
+                                if (selectedValue === ARTIST_MENU_HEADER_VALUE) {
+                                    return replyEphemeral('**اختر أغنية من القائمة.**');
+                                }
+
+                                const selectedIndex = Number(selectedValue);
+                                const selectedTrack = Number.isInteger(selectedIndex) && selectedIndex >= 0
+                                    ? ui.artistTracks?.[selectedIndex]
+                                    : null;
+                                if (!selectedTrack) return replyEphemeral('**لم أجد الأغنية المختارة. حدّث اللوحة وحاول مجددًا.**');
+
+                                const queuedTrack = { ...selectedTrack, info: { ...selectedTrack.info, requester: interaction.user } };
+                                player.queue.add(queuedTrack);
+                                const suggestionTitle = cleanInlineText(queuedTrack.info?.title, 'Unknown track', 120);
+                                publishTrackActionStatus(
+                                    player,
+                                    interaction.channel,
+                                    queuedTrack,
+                                    `**ϟ <@${interaction.user.id}> Added ${suggestionTitle} From Suggestions**`,
+                                    interaction.user.id,
+                                ).catch(() => {});
+                                ui.selectedArtistIndex = null;
+                                player.data.ui = ui;
+
+                                runBackground('artist queue panels', () => bumpQueueVersion(player, 'artist_menu_add'));
+                                runBackground('artist panel edit', () => editPanel(!!ui.liked));
+                                runBackground('artist queue playback', () => safePlay(player));
+                                return replyEphemeral(`**تمت إضافة ${queuedTrack.info.title || 'الأغنية'} للطابور.**`);
+                            } catch (err) {
+                                console.error('[ArtistMenu] failed to add selected track:', err?.message || err);
+                                return replyEphemeral('**تعذر إضافة الأغنية الآن. حاول مرة أخرى بعد لحظات.**');
+                            }
+                        }
 
                         if (interaction.customId === 'np_filter') {
                             const filterName = interaction.values[0];
-                            // Acknowledge immediately; filter application continues in the background.
-                            interaction.deferUpdate().catch(() => {});
-                            // Apply the filter asynchronously; do not hold the interaction or audio path.
-                            runBackground('filter apply', async () => {
-                                try {
-                                    const applied = await applyFilter(player, filterName);
-                                    ui.selectedFilter = applied;
-                                    ui.selectedArtistIndex = null;
-                                    player.data.ui = ui;
-                                    runBackground('filter panel edit', () => editPanel(!!ui.liked));
-                                } catch (err) {
-                                    console.error('[Filters] failed:', err?.message || err);
-                                }
-                            });
-                            return replyEphemeral('**Filter request received.**');
+                            await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+                            try {
+                                const applied = await applyFilter(player, filterName);
+                                ui.selectedFilter = applied;
+                                ui.selectedArtistIndex = null;
+                                player.data.ui = ui;
+                                await editPanel(!!ui.liked);
+                                return replyEphemeral(`**تم تطبيق فلتر ${FILTER_NAMES[applied] || applied}.**`);
+                            } catch (err) {
+                                console.error('[Filters] failed:', err?.message || err);
+                                await editPanel(!!ui.liked);
+                                const filterError = String(err?.message || '');
+                                const unsupported = filterError.includes('does not advertise support');
+                                const unverified = filterError.includes('Could not verify');
+                                return replyEphemeral(unsupported
+                                    ? '**هذا الفلتر غير معلَن كمدعوم من عقدة Lavalink الحالية.**'
+                                    : unverified
+                                        ? '**لم أتمكن من التحقق من فلاتر العقدة الآن؛ أعد المحاولة بعد اتصال Lavalink.**'
+                                    : '**تعذر تطبيق الفلتر. جرّب إزالة الفلاتر أو أعد المحاولة.**');
+                            }
                         }
                     }
 
@@ -7888,6 +8035,7 @@ module.exports = {
                     if (interaction.customId === 'loop') {
                         const newLoopMode = player.loop === 'NONE' ? 'TRACK' : 'NONE';
                         player.setLoop(newLoopMode);
+                        actionStatusContent = `**ϟ <@${interaction.user.id}> ${newLoopMode === 'TRACK' ? 'Start Loop' : 'Stop Loop'}**`;
                         responseMessage = `**Loop is ${newLoopMode === 'TRACK' ? 'ON' : 'OFF'}.**`;
                         // Fire panel update in background — no need to await for instant response
                         runBackground('loop panel edit', () => editPanel(!!ui.liked));
@@ -7895,6 +8043,7 @@ module.exports = {
 
                     if (interaction.customId === 'pause') {
                         if (player.isPaused) {
+                            actionStatusContent = `**ϟ <@${interaction.user.id}> Resumed The Song**`;
                             responseMessage = '**Done resume the music.**';
                             // Update local state immediately, fire both tasks in background
                             player.isPaused = false;
@@ -7902,6 +8051,7 @@ module.exports = {
                             queuePlayerControl(player, 'button resume audio', () => pausePlayerSynced(player, false));
                             runBackground('button resume panel edit', () => editPanel(!!ui.liked));
                         } else {
+                            actionStatusContent = `**ϟ <@${interaction.user.id}> Paused The Song**`;
                             responseMessage = '**Done pause the music.**';
                             player.isPaused = true;
                             player.isPlaying = false;
@@ -7911,7 +8061,9 @@ module.exports = {
                     }
 
                     if (interaction.customId === 'volume_down') {
-                        const newVolume = clampPlayerVolume(playerVolumeValue(player) - 10);
+                        const oldVolume = clampPlayerVolume(playerVolumeValue(player));
+                        const newVolume = clampPlayerVolume(oldVolume - 10);
+                        actionStatusContent = `**ϟ <@${interaction.user.id}> Decreased The Volume From ${oldVolume}% To ${newVolume}%**`;
                         responseMessage = `**Volume is now __${newVolume}%__.**`;
                         // setPlayerVolumeSynced already updates local state + fires lavalink fire-and-forget
                         queuePlayerControl(player, 'button volume down audio', () => setPlayerVolumeSynced(player, newVolume));
@@ -7919,7 +8071,9 @@ module.exports = {
                     }
 
                     if (interaction.customId === 'volume_up') {
-                        const newVolume = clampPlayerVolume(playerVolumeValue(player) + 10);
+                        const oldVolume = clampPlayerVolume(playerVolumeValue(player));
+                        const newVolume = clampPlayerVolume(oldVolume + 10);
+                        actionStatusContent = `**ϟ <@${interaction.user.id}> Increased The Volume From ${oldVolume}% To ${newVolume}%**`;
                         responseMessage = `**Volume is now __${newVolume}%__.**`;
                         queuePlayerControl(player, 'button volume up audio', () => setPlayerVolumeSynced(player, newVolume));
                         runBackground('button volume up panel edit', () => editPanel(!!ui.liked));
@@ -7930,11 +8084,15 @@ module.exports = {
                                 if (!currentTrack) {
                                     responseMessage = '*لا توجد أغنية للتخطي*.';
                                 } else if (player.queue.length === 0 && player.data?.autoPlay) {
+                                    actionStatusContent = `**ϟ <@${interaction.user.id}> Skipped The Song**`;
+                                    actionStatusDeleteAfterMs = 15_000;
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                     // Fire both in background — instant response
                                     queuePlayerControl(player, 'button skip audio', () => skipPlayerSynced(TrueMusic.poru, player, currentTrack));
                                     editPanel(!!ui.liked).catch(() => {});
                                 } else if (player.queue.length === 0) {
+                                    actionStatusContent = `**ϟ <@${interaction.user.id}> Skipped The Song**`;
+                                    actionStatusDeleteAfterMs = 15_000;
                                     const finalOptions = finalUiOptionsFor(player, currentTrack);
                                     markStopped();
                                     setAutoPlayState(player, false);
@@ -7950,6 +8108,8 @@ module.exports = {
                                         await updatePlaybackVoiceStatus(TrueMusic, tokenObj, player, null);
                                     });
                                 } else {
+                                    actionStatusContent = `**ϟ <@${interaction.user.id}> Skipped The Song**`;
+                                    actionStatusDeleteAfterMs = 15_000;
                                     responseMessage = `**Done skipped : ${currentTrack.info.title || 'الأغنية'}**`;
                                     // Fire both in background — instant response
                                     queuePlayerControl(player, 'button skip audio', () => skipPlayerSynced(TrueMusic.poru, player, currentTrack));
@@ -7991,6 +8151,8 @@ module.exports = {
                         setAutoPlayState(player, false);
                         clearStoppedPlaybackCaches(player);
                         clearProgressInterval(player, 'button stop');
+                        actionStatusContent = `**ϟ <@${interaction.user.id}> Stopped The Song**`;
+                        actionStatusDeleteAfterMs = 15_000;
                         responseMessage = '**Done stopped the song.**';
                         // Fire both in background — instant response
                         queuePlayerControl(player, 'button stop audio', () => stopPlayerAudio(player, { wait: true }));
@@ -8095,6 +8257,16 @@ module.exports = {
                                 }
                             }
 
+                    if (actionStatusContent) {
+                        publishTrackActionStatus(
+                            player,
+                            interaction.channel,
+                            actionTrack,
+                            actionStatusContent,
+                            interaction.user.id,
+                            actionStatusDeleteAfterMs,
+                        ).catch(() => {});
+                    }
                     await replyEphemeral(responseMessage || '*Done*.');
                 });
 
