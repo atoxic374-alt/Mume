@@ -819,20 +819,31 @@ function createMusicControlButtons(paused = false, liked = false, { includeLike 
     return [row1, row2];
 }
 
-function buildMusicComponents({ liked = false, paused = false, artistTracks = [], selectedFilter = 'clear', selectedArtistIndex = null, showControls = true, compactControls = false, tokenObj = null, client = null, supportedFilterTypes = null }) {
+function buildMusicComponents({ liked = false, paused = false, artistTracks = [], artistMenuState = null, selectedFilter = 'clear', selectedArtistIndex = null, showControls = true, compactControls = false, tokenObj = null, client = null, supportedFilterTypes = null }) {
     const rows = [];
 
-    if (showControls && artistTracks.length > 0) {
+    const normalizedArtistMenuState = artistMenuState || (artistTracks.length ? 'ready' : 'hidden');
+    if (showControls && normalizedArtistMenuState !== 'hidden') {
         const safeSelectedArtistIndex = Number.isInteger(selectedArtistIndex) ? selectedArtistIndex : null;
+        const artistHeaderLabel = normalizedArtistMenuState === 'loading'
+            ? 'Suggest For You · Loading'
+            : normalizedArtistMenuState === 'empty'
+                ? 'No suggestions found'
+                : 'Suggest For You';
+        const artistHeaderDescription = normalizedArtistMenuState === 'loading'
+            ? 'Suggestions are being prepared'
+            : normalizedArtistMenuState === 'empty'
+                ? 'No suitable tracks were found for this song'
+                : 'Songs from the same artist';
         const artistOptions = [
             {
-                label: 'Suggest For You',
+                label: artistHeaderLabel,
                 value: ARTIST_MENU_HEADER_VALUE,
-                description: 'Songs from the same artist',
+                description: artistHeaderDescription,
                 emoji: MUSIC_EMOJIS.componentEmoji(MUSIC_EMOJIS.artistTop, client, '🎤'),
                 default: safeSelectedArtistIndex === null,
             },
-            ...artistTracks.slice(0, 6).map((t, i) => ({
+            ...(normalizedArtistMenuState === 'ready' ? artistTracks.slice(0, 6) : []).map((t, i) => ({
                 label: (t.info.title || 'Unknown').slice(0, 99),
                 value: String(i),
                 description: `${shortDuration(t.info.length)} · ${(t.info.author || '').slice(0, 50)}`.slice(0, 99),
@@ -885,6 +896,7 @@ function buildNowPlayingPayload(TrueMusic, tokenObj, track, requester, options =
     const components = buildMusicComponents({
         liked: !!options.liked,
         artistTracks: options.artistTracks || [],
+        artistMenuState: options.artistMenuState,
         selectedFilter: options.selectedFilter || 'clear',
         selectedArtistIndex: options.selectedArtistIndex ?? null,
         showControls: settings.buttons,
@@ -1214,6 +1226,7 @@ function buildNowPlayingV2Payload(TrueMusic, tokenObj, player, message, options 
             liked: !!options.liked,
             paused: !!player.isPaused,
             artistTracks: options.artistTracks || [],
+            artistMenuState: options.artistMenuState ?? player?.data?.ui?.artistMenuState,
             selectedFilter: options.selectedFilter || player.data?.activeFilter || 'clear',
             selectedArtistIndex: options.selectedArtistIndex ?? null,
             showControls: true,
@@ -1482,7 +1495,14 @@ function queueTrackActionStatusTask(player, identity, task) {
 
 function publishTrackActionStatus(player, channel, track, content, actorId, deleteAfterMs = 0) {
     const identity = trackIdentity(track);
-    if (!player || !identity || !canSendMusicPanel(channel) || !content) return Promise.resolve(null);
+    if (!player || !identity || !content) return Promise.resolve(null);
+    const targetChannel = canSendMusicPanel(channel)
+        ? channel
+        : player.data?.nowPlayingMessage?.channel;
+    if (!canSendMusicPanel(targetChannel)) {
+        console.warn(`[TrackActionStatus] no writable chat channel for ${identity}`);
+        return Promise.resolve(null);
+    }
 
     const { messages } = trackActionStatusState(player);
     return queueTrackActionStatusTask(player, identity, async () => {
@@ -1508,7 +1528,7 @@ function publishTrackActionStatus(player, channel, track, content, actorId, dele
         }
 
         if (!message) {
-            message = await channel.send(payload).catch(err => {
+            message = await targetChannel.send(payload).catch(err => {
                 console.warn(`[TrackActionStatus] failed to send: ${err?.message || err}`);
                 return null;
             });
@@ -1722,7 +1742,19 @@ function rememberTextChannel(player, channelId) {
 function canSendMusicPanel(channel) {
     if (!channel || typeof channel.send !== 'function') return false;
     if (typeof channel.isTextBased === 'function' && !channel.isTextBased()) return false;
-    return true;
+    const botMember = channel.guild?.members?.me;
+    if (!botMember || typeof channel.permissionsFor !== 'function') return true;
+    try {
+        const permissions = channel.permissionsFor(botMember);
+        if (!permissions) return false;
+        const sendPermission = channel.isThread?.()
+            ? PermissionFlagsBits.SendMessagesInThreads
+            : PermissionFlagsBits.SendMessages;
+        return permissions.has(PermissionFlagsBits.ViewChannel) && permissions.has(sendPermission);
+    } catch {
+        // Still attempt the send if Discord.js cannot resolve cached permissions.
+        return true;
+    }
 }
 
 function hasHumanVoiceMember(channel, botUserId = null) {
@@ -1734,7 +1766,7 @@ function hasHumanVoiceMember(channel, botUserId = null) {
     return false;
 }
 
-async function resolveNowPlayingTextChannel(client, player, tokenObj = null) {
+async function resolveNowPlayingTextChannels(client, player, tokenObj = null) {
     const data = ensurePlayerData(player);
     const candidates = [
         data.lastTextChannel,
@@ -1744,20 +1776,22 @@ async function resolveNowPlayingTextChannel(client, player, tokenObj = null) {
         tokenObj?.logChannel,
     ].filter(Boolean);
 
+    const channels = [];
+    const seen = new Set();
     for (const candidate of candidates) {
         const id = typeof candidate === 'string' ? candidate : candidate?.id;
         let channel = id ? client.channels.cache.get(id) : candidate;
         if (!channel && id) channel = await client.channels.fetch(id).catch(() => null);
-        if (canSendMusicPanel(channel)) {
-            rememberTextChannel(player, channel.id);
-            return channel;
-        }
+        if (!canSendMusicPanel(channel)) continue;
+        const key = String(channel.id || id || '');
+        if (key && seen.has(key)) continue;
+        if (key) seen.add(key);
+        channels.push(channel);
     }
 
-    // Do not fall back to an arbitrary guild text channel. If the configured
-    // channel candidates are missing/stale, skipping the panel is safer than
-    // posting controls into staff/log/unrelated channels based on cache order.
-    return null;
+    // Only consider explicitly remembered/configured channels; never guess an
+    // arbitrary guild channel if these are missing or inaccessible.
+    return channels;
 }
 
 function ensureTrackRequester(track, player, fallbackUser) {
@@ -4624,6 +4658,43 @@ module.exports = {
             await restartCurrentTrack(player, reason).catch(() => {});
         }
 
+        function recoverPlayerVoiceIfNeeded(player, reason = 'voice_refresh_watchdog') {
+            if (!player) return Promise.resolve(false);
+            ensurePlayerData(player);
+            const data = player.data;
+            if (!data.needsVoiceRefresh) return Promise.resolve(false);
+            if (data.voiceRecoveryPromise) return data.voiceRecoveryPromise;
+            const now = Date.now();
+            if (now - Number(data.lastVoiceRecoveryAttemptAt || 0) < 15_000) return Promise.resolve(false);
+            data.lastVoiceRecoveryAttemptAt = now;
+
+            const task = (async () => {
+                if (!player.node?.isConnected || !player.node?.rest) return false;
+                if (!player.currentTrack && player.isPlaying) player.isPlaying = false;
+                if (player.currentTrack && player.isPaused) {
+                    return restorePausedTrackSession(player, reason);
+                }
+                if (player.currentTrack) {
+                    return recoverPlayerPlayback(player, reason);
+                }
+
+                const refreshed = await refreshPlayerVoiceSession(player, reason);
+                if (refreshed && player.queue?.length && !player.currentTrack && !player.isPlaying) {
+                    await safePlay(player).catch(() => {});
+                }
+                return refreshed;
+            })()
+                .catch(err => {
+                    warnPlayerOnce(player, `voice-recovery:${reason}`, `[VoiceRefresh] recovery attempt failed for ${player.guildId}: ${err?.message || err}`, 15_000);
+                    return false;
+                })
+                .finally(() => {
+                    if (data.voiceRecoveryPromise === task) data.voiceRecoveryPromise = null;
+                });
+            data.voiceRecoveryPromise = task;
+            return task;
+        }
+
         function scheduleNodeRecovery(node, reason = 'node_reconnect') {
             // Wait 8s to allow the node session to fully establish before
             // attempting to restart player tracks.
@@ -4638,22 +4709,13 @@ module.exports = {
                     if (player.data?.startupRestoreAt
                         && Date.now() - player.data.startupRestoreAt < 30_000) return;
 
-                    if (player.isPaused) {
-                        restorePausedTrackSession(player, reason).catch(() => {});
-                        return;
-                    }
-
-                    if (!player.currentTrack) {
-                        // Idle player: its Lavalink session no longer exists after
-                        // a reconnect. Keep the Discord voice state in place and
-                        // refresh Lavalink voice data on the next play command.
-                        if (process.env.DEBUG_RECOVERY)
-                            console.log(`[IdleCleanup] marking stale idle player after ${reason} for guild ${player.guildId}`);
+                    // A fresh node session may have lost the Lavalink player's
+                    // voice payload even when Discord still shows the bot in VC.
+                    // Re-send it before restoring active, paused, or idle players.
+                    if (!player.data?.needsVoiceRefresh) {
                         markPlayerNeedsVoiceRefresh(player, `node_recovery:${reason}`);
-                        return;
                     }
-
-                    recoverPlayerPlayback(player, reason).catch(() => {});
+                    recoverPlayerVoiceIfNeeded(player, reason).catch(() => {});
                 });
             }, 8000);
         }
@@ -5373,9 +5435,10 @@ module.exports = {
             // Disabled by default for large bot fleets. A REST probe per bot can
             // overload Lavalink/Railway networking and a transient fetch failure
             // should not disconnect an otherwise connected Poru node.
+            let restHealthInterval = null;
             if (process.env.PORU_REST_HEALTH_MONITOR === '1') {
                 const nodeRestFailures = new Map();
-                setInterval(async () => {
+                restHealthInterval = setInterval(async () => {
                     if (!TrueMusic.readyAt) return;
                     const nodes = [...(TrueMusic.poru?.nodes?.values() || [])];
                     if (!nodes.length) return;
@@ -5484,17 +5547,16 @@ module.exports = {
                 // ── Lavalink Node Guardian (Layers 2 + 3) ────────────────────────────
                 // Runs every 15s for EVERY bot regardless of channel assignment.
                 //
-                // Layer 2 — WS readyState ground-truth check
-                //   node.isConnected can lie (flag not cleared on silent WS close).
-                //   node.ws.readyState === 1 (OPEN) is the real source of truth.
-                //   Any node with WS != OPEN is force-reconnected immediately,
-                //   no cooldown — this is a lightweight per-node call, not a full init.
+                // Layer 2 — verify both the socket and Lavalink handshake state.
+                //   OPEN alone can be stale, while isConnected alone can lag a close;
+                //   persistent mismatches are force-reconnected after a grace period.
                 //
                 // Layer 3 — Proactive attempt-counter reset
                 //   Poru gives up permanently when node.attempt >= reconnectTries (50).
                 //   We reset it at 30 so the bot NEVER exhausts its reconnect budget.
                 //   For truly connected nodes we reset to 0 as maintenance.
                 {
+                    const guardianNow = Date.now();
                     const nodes = TrueMusic.poru?.nodes;
                     if (!nodes || nodes.size === 0) {
                         // Poru was never initialized or all nodes vanished
@@ -5513,12 +5575,20 @@ module.exports = {
                             if (truly) {
                                 // Layer 3: connected — keep attempt at 0 as maintenance
                                 if ((node.attempt ?? 0) > 0) node.attempt = 0;
+                                node._llGuardianObservedState = null;
+                                node._llGuardianUnhealthySince = 0;
                                 connectedCount++;
                                 continue;
                             }
 
                             // ── Not truly connected ────────────────────────────────────
                             const name = node.options?.name || node.options?.host || 'node';
+                            const observedState = `${wsState ?? 'none'}:${node.isConnected === true}`;
+                            if (node._llGuardianObservedState !== observedState) {
+                                node._llGuardianObservedState = observedState;
+                                node._llGuardianUnhealthySince = guardianNow;
+                            }
+                            const unhealthyFor = guardianNow - Number(node._llGuardianUnhealthySince || guardianNow);
 
                             // Layer 3: reset attempt counter BEFORE it hits the limit (50)
                             if ((node.attempt ?? 0) >= 30) {
@@ -5543,8 +5613,28 @@ module.exports = {
                                         note: `WS=${wsState ?? 'none'}`,
                                     });
                                 } catch {}
+                            } else if ((wsState === 1 && node.isConnected !== true && unhealthyFor >= 45_000)
+                                || ((wsState === 0 || wsState === 2) && unhealthyFor >= 60_000)) {
+                                // An OPEN socket is not sufficient proof that
+                                // Poru completed the Lavalink handshake. Likewise,
+                                // CONNECTING/CLOSING can become stuck indefinitely.
+                                // Force a fresh connection only after a grace
+                                // period, and no more than once per 30 seconds.
+                                const lastForcedAt = Number(node._llGuardianReconnectAt || 0);
+                                if (guardianNow - lastForcedAt >= 30_000) {
+                                    node._llGuardianReconnectAt = guardianNow;
+                                    try {
+                                        node.attempt = 0;
+                                        clearTimeout(node.reconnectAttempt);
+                                        node.reconnectAttempt = null;
+                                        node.connect?.().catch(() => {});
+                                        lavalinkConsole.updateNode(node, 'reconnecting', {
+                                            event: 'stale_socket_reconnect',
+                                            note: `WS=${wsState} connected=${node.isConnected === true} unhealthy=${Math.floor(unhealthyFor / 1000)}s`,
+                                        });
+                                    } catch {}
+                                }
                             }
-                            // wsState 0 (CONNECTING) or 2 (CLOSING) → in progress, wait
                         }
 
                         // All nodes dead AND all WS sockets closed → full re-init fallback
@@ -5646,8 +5736,21 @@ module.exports = {
                         const length = Number(player.currentTrack.info?.length || 0);
                         const grace = length && length < 90_000 ? 35_000 : 55_000;
                         if (wdNow - lastProgress > grace) {
-                            recoverPlayerPlayback(player, 'stalled_progress').catch(() => {});
+                            if (!player.data.needsVoiceRefresh) {
+                                markPlayerNeedsVoiceRefresh(player, 'stalled_progress');
+                            }
+                            recoverPlayerVoiceIfNeeded(player, 'stalled_progress').catch(() => {});
                         }
+                    });
+                }
+
+                // A temporary Discord shard or Lavalink outage can make a single
+                // voice refresh fail. Keep retrying marked players after both
+                // services are healthy; do not require a user to leave/rejoin.
+                if (wdNodesOnline) {
+                    TrueMusic.poru.players.forEach(player => {
+                        if (!player?.data?.needsVoiceRefresh) return;
+                        recoverPlayerVoiceIfNeeded(player, 'periodic_voice_recovery').catch(() => {});
                     });
                 }
 
@@ -5746,6 +5849,34 @@ module.exports = {
                 // ─────────────────────────────────────────────────────────────────
 
             }, 15_000); // ── Optimization: was 5s → 15s (3× fewer fires, same responsiveness for music)
+            TrueMusic._musicWatchdogInterval = int;
+            TrueMusic._managerCleanup = async () => {
+                clearTimeout(startupTrackStartGateTimer);
+                clearTimeout(voiceRejoinRetryTimer);
+                if (restHealthInterval) clearInterval(restHealthInterval);
+                clearInterval(int);
+
+                for (const player of [...(TrueMusic.poru?.players?.values?.() || [])]) {
+                    try { savePlaybackState(token, player); } catch {}
+                    try { clearProgressInterval(player, 'sub-bot-recycle'); } catch {}
+                    if (player.data?._prefetchTimer) {
+                        clearTimeout(player.data._prefetchTimer);
+                        player.data._prefetchTimer = null;
+                    }
+                    try { await finalizePlayerUi(player); } catch {}
+                    try { await player.destroy(); } catch {}
+                }
+
+                try { lavalinkKeepAlive.destroyKeepAlive(TrueMusic.poru); } catch {}
+                for (const node of TrueMusic.poru?.nodes?.values?.() || []) {
+                    clearTimeout(node.reconnectAttempt);
+                    node.reconnectAttempt = null;
+                    try {
+                        node.ws?.removeAllListeners?.();
+                        node.ws?.close?.();
+                    } catch {}
+                }
+            };
         });
 
 
@@ -6510,13 +6641,14 @@ module.exports = {
                             return;
                         }
 
-                const channel = await resolveNowPlayingTextChannel(TrueMusic, player, tokenObj2);
-                        if (!channel) {
+                const channels = await resolveNowPlayingTextChannels(TrueMusic, player, tokenObj2);
+                        if (!channels.length) {
                             player.data.nowPlayingSendLock = null;
                             warnPlayerOnce(player, `np-no-text:${identity || 'unknown'}`, `[NowPlaying] no usable text channel for ${identity || 'unknown'}`);
                             return;
                         }
 
+                const artistQuery = artistQueryForTrack(track);
                 const selectedFilter = player.data.activeFilter || 'clear';
         const alreadyLiked = await likes.isLiked(requester.id, track).catch((err) => {
             console.error('[Likes] isLiked failed:', err?.message || err);
@@ -6526,6 +6658,7 @@ module.exports = {
         player.data.ui = {
             requesterId: requester.id,
             artistTracks: [],
+            artistMenuState: artistQuery?.primary ? 'loading' : 'hidden',
             selectedFilter,
             selectedArtistIndex: null,
             compactPlayLayout: true,
@@ -6545,15 +6678,31 @@ module.exports = {
             progressWidth: PLAY_PROGRESS_WIDTH,
         });
 
-        const msg = await channel.send(payload).catch((err) => {
-            console.warn(`[NowPlaying] failed to send panel for ${identity || 'unknown'}: ${err?.message || err}`);
-            return null;
-        });
+        let msg = null;
+        let postedChannel = null;
+        let lastSendError = null;
+        for (const candidateChannel of channels) {
+            try {
+                msg = await candidateChannel.send(payload);
+                if (msg) {
+                    postedChannel = candidateChannel;
+                    break;
+                }
+            } catch (err) {
+                lastSendError = err;
+            }
+        }
         if (!msg) {
             player.data.nowPlayingSendLock = null;
+            warnPlayerOnce(
+                player,
+                `np-send-failed:${identity || 'unknown'}`,
+                `[NowPlaying] send failed in ${channels.length} configured channel(s) for ${identity || 'unknown'}: ${lastSendError?.code || lastSendError?.message || 'unknown error'}`,
+            );
             return;
         }
 
+        rememberTextChannel(player, postedChannel.id);
         player.data.nowPlayingMessage = msg;
         player.data.nowPlayingToken = track?.track || track?.info?.identifier || track?.info?.title || null;
         player.data.nowPlayingTrackIdentity = identity || null;
@@ -6643,34 +6792,63 @@ module.exports = {
             }
         }, 15000);
 
-        const artistQuery = artistQueryForTrack(track);
+        const updateArtistSuggestionPanel = async (artistTracks) => {
+            if (player.data.nowPlayingMessage?.id !== msg.id || player.currentTrack !== track) return false;
+            const currentUi = player.data.ui || {};
+            const payload = buildNowPlayingV2Payload(TrueMusic, tokenObj2, player, { author: requester }, {
+                track,
+                requester,
+                includeControls: true,
+                liked: currentUi.liked ?? alreadyLiked,
+                artistTracks,
+                selectedFilter: currentUi.selectedFilter,
+                selectedArtistIndex: currentUi.selectedArtistIndex,
+                compactPlayLayout: true,
+                showProgressLabels: true,
+                showInfoRow: false,
+                useEmbedAccent: false,
+                progressWidth: PLAY_PROGRESS_WIDTH,
+            });
+            let lastError = null;
+            for (let attempt = 0; attempt < 2; attempt++) {
+                try {
+                    await safeEditMessage(msg, payload);
+                    return true;
+                } catch (err) {
+                    lastError = err;
+                    if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 350));
+                }
+            }
+            warnPlayerOnce(
+                player,
+                `artist-menu-edit-failed:${msg.id}`,
+                `[TopSongs] failed to refresh Suggest For You menu: ${lastError?.message || lastError}`,
+            );
+            return false;
+        };
+
         if (!artistQuery?.primary) return;
 
-                try {
-                    const source = displaySettings(tokenObj2).platform;
-                    const artistTracks = await resolveArtistTracks(TrueMusic.poru, artistQuery, source || 'auto', track, 6, {
-                        historySet: autoPlayHistorySet(player),
-                    });
+        try {
+            const source = displaySettings(tokenObj2).platform;
+            const timeoutMs = Math.max(3_000, Math.min(20_000, Number(process.env.MUSIC_SUGGESTIONS_TIMEOUT_MS) || 12_000));
+            const artistTracks = await withTimeout(
+                resolveArtistTracks(TrueMusic.poru, artistQuery, source || 'auto', track, 6, {
+                    historySet: autoPlayHistorySet(player),
+                }),
+                timeoutMs,
+                [],
+            );
+            if (player.data.nowPlayingMessage?.id !== msg.id || player.currentTrack !== track) return;
             player.data.ui.artistTracks = artistTracks;
-            if (player.data.nowPlayingMessage?.id === msg.id && player.currentTrack === track) {
-                const payload = buildNowPlayingV2Payload(TrueMusic, tokenObj2, player, { author: requester }, {
-                    track,
-                    requester,
-                    includeControls: true,
-                            liked: player.data.ui?.liked ?? alreadyLiked,
-                            artistTracks,
-                            selectedFilter: player.data.ui.selectedFilter,
-                            selectedArtistIndex: player.data.ui.selectedArtistIndex,
-                            compactPlayLayout: true,
-                            showProgressLabels: true,
-                            showInfoRow: false,
-                            useEmbedAccent: false,
-                            progressWidth: PLAY_PROGRESS_WIDTH,
-                        });
-                await safeEditMessage(msg, payload).catch(() => {});
-            }
+            player.data.ui.artistMenuState = artistTracks.length ? 'ready' : 'empty';
+            await updateArtistSuggestionPanel(artistTracks);
         } catch (err) {
             console.error('[TopSongs] failed:', err?.message || err);
+            if (player.data.nowPlayingMessage?.id !== msg.id || player.currentTrack !== track) return;
+            player.data.ui.artistTracks = [];
+            player.data.ui.artistMenuState = 'empty';
+            await updateArtistSuggestionPanel([]);
         }
     });
 
