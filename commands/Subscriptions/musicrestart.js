@@ -62,7 +62,7 @@ module.exports = {
             const progressMsg = await message.reply({
                 embeds: [new EmbedBuilder()
                     .setTitle('Restart Stock Bots — Starting')
-                    .setDescription('جاري إعادة تهيئة البوتات الحرة وتطبيق الاسم والصورة والبنر.')
+                    .setDescription('جاري إعادة تهيئة البوتات الحرة وتطبيق الاسم والصورة مع الحفاظ على البنر الحالي لكل بوت.')
                     .addFields(
                         { name: 'Total',         value: `\`${total}\``,                                      inline: true },
                         { name: 'Batch Size',    value: `\`${RESTART_BATCH_SIZE}\``,                         inline: true },
@@ -78,6 +78,9 @@ module.exports = {
             const profile = getSubBotProfile();
             let assets = { avatarData: null, bannerData: null };
             try { assets = await resolveProfileAssets(profile); } catch {}
+            // Restarting stock bots must not replace individually assigned
+            // banners with the shared default profile banner.
+            assets.bannerData = null;
 
             let done     = 0;
             let failed   = 0;

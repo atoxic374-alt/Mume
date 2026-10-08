@@ -2,19 +2,11 @@
 const { runsys, runningBots, botLastActivity } = require('./music');
 const store = require('./utils/store');
 const lavalinkConsole = require('./utils/lavalinkConsole');
-const {
-  applyProfileToClient,
-  getSubBotProfile,
-  resolveProfileAssets,
-  profileFromClient,
-} = require('./utils/subBotProfile');
 
 // Semaphore: max 5 bots starting simultaneously
 let starting = 0;
 const MAX_CONCURRENT = 5;
 const startQueue = [];
-let profileSyncStarted = false;
-let profileSyncCompleted = false;
 const UNREADY_RESTART_AFTER_MS = Math.max(
   60_000,
   Number(process.env.SUBBOT_UNREADY_RESTART_MS) || 180_000,
@@ -117,47 +109,11 @@ async function checkForNewBots() {
       });
     }
   }
-  if (!profileSyncStarted) {
-    profileSyncStarted = true;
-    setTimeout(() => syncSubscriptionProfiles().catch(error => {
-      profileSyncStarted = false;
-      console.warn('[Manager] subscription profile sync failed:', error?.message || error);
-    }), 60_000).unref?.();
-  }
 }
 
-async function syncSubscriptionProfiles() {
-  if (profileSyncCompleted) return;
-  const tokens = store.get('tokens') || [];
-  const fallbackProfile = getSubBotProfile();
-  const byCode = new Map();
-  for (const entry of tokens) {
-    if (!entry?.token || !entry.code) continue;
-    if (!byCode.has(entry.code)) byCode.set(entry.code, []);
-    byCode.get(entry.code).push(entry);
-  }
-  for (const entries of byCode.values()) {
-    const readyEntries = entries.filter(entry => {
-      const bot = runningBots.get(entry.token);
-      return bot?.isReady?.() && bot.user;
-    });
-    if (!readyEntries.length) continue;
-    const profile = profileFromClient(runningBots.get(readyEntries[0].token), fallbackProfile);
-    let assets = { avatarData: null, bannerData: null };
-    try { assets = await resolveProfileAssets(profile); } catch (error) {
-      console.warn('[Manager] profile assets unavailable:', error?.message || error);
-    }
-    for (let index = 0; index < readyEntries.length; index++) {
-      const entry = readyEntries[index];
-      const bot = runningBots.get(entry.token);
-      await applyProfileToClient(bot, entry.token, { profile, assets, updateName: false })
-        .catch(error => console.warn(`[Manager] profile sync failed for …${String(entry.token).slice(-6)}:`, error?.message || error));
-    }
-  }
-  store.set('tokens', tokens);
-  profileSyncCompleted = true;
-  console.log('[Manager] subscription profiles synchronized.');
-}
+// Discord already persists each bot's appearance. Do not copy one sibling's
+// banner/avatar to other tokens during project startup; profile changes belong
+// to explicit profile-management actions or new-bot provisioning.
 
 // Lazy unloading: only destroy truly ORPHANED bots (running but no longer in tokens list).
 // Healthy subscribed bots are kept alive even while idle; the separate recovery
