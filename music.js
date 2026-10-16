@@ -43,6 +43,7 @@ const { tintAttachmentPayload, warmTintCache } = require('./utils/tintedThumbnai
 const { buildProgressBarAttachment, normalizeColorNumber, prewarmProgressBarCache } = require('./utils/progressBar');
 const { controlEmojiData } = require('./utils/subControlEmojis');
 const { liftDiscordClientLimits } = require('./utils/discordClientTuning');
+const { installPoruUnknownEventGuard } = require('./utils/poruEventGuard');
 
 const runningBots = new Collection();
 const warnedMissingMusicEmojiIds = new Set();
@@ -3678,6 +3679,7 @@ module.exports = {
             autoResume: false,
             bypassChecks: false,
         });
+        installPoruUnknownEventGuard(TrueMusic.poru);
 
         // Poru registers its own raw listener during init(). Keep this listener
         // activity-only so voice packets are not processed twice.
