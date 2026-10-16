@@ -49,6 +49,10 @@ function getBotId(botClient, token) {
     }
 }
 
+function escapeMarkdownLabel(value) {
+    return String(value).replace(/\\/g, '\\\\').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
+}
+
 function getSubscriptions() {
     const timeRows = store.get('time') || [];
     const tokenRows = (store.get('tokens') || []).filter(item => item?.token);
@@ -286,10 +290,12 @@ async function buildBotsView(client, code, page, customPrefix) {
                 }).join('\n')
                 : 'No node configured';
             const ordinal = (currentPage - 1) * BOTS_PER_PAGE + index + 1;
-            const mention = botId ? `<@${botId}>` : 'No ID';
+            const botLabel = botId
+                ? `[${escapeMarkdownLabel(String(botName).slice(0, 150))}](https://discord.com/users/${encodeURIComponent(botId)})`
+                : escapeMarkdownLabel(botName);
 
             embed.addFields({
-                name: `${ordinal}. ${mention} • ${String(botName).slice(0, 150)}`.slice(0, 256),
+                name: `${ordinal}. ${botLabel}`.slice(0, 256),
                 value: `Discord: ${discordState} • Ping ${formatRtt(discordRtt)}\nLavalink: ${nodeText}`.slice(0, 1024),
                 inline: false,
             });
