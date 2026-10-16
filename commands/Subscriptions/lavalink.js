@@ -111,12 +111,46 @@ function getBotNodeRows(tokenRow, botClient) {
         return liveNodes.map(node => ({
             name: node?.options?.name || node?.options?.host || 'Unknown',
             connected: Boolean(node?.isConnected),
+            rest: node?.rest,
         }));
     }
     return getAssignedNodeConfigs(tokenRow).map(node => ({
         name: node.name || node.host || 'Unknown',
         connected: false,
     }));
+}
+
+async function measureNodeRtts(tokenRows, runningBots) {
+    const measurements = new Map();
+    const requests = new Map();
+
+    for (const tokenRow of tokenRows) {
+        const botClient = runningBots.get(tokenRow.token);
+        for (const node of getBotNodeRows(tokenRow, botClient)) {
+            if (!node.connected || !node.rest?.get) continue;
+            const key = node.rest.url || node.name;
+            if (requests.has(key)) continue;
+
+            const start = Date.now();
+            let timer;
+            const request = Promise.race([
+                Promise.resolve(node.rest.get('/v4/info')),
+                new Promise(resolve => { timer = setTimeout(() => resolve(null), 1400); }),
+            ]).then(result => result == null ? null : Date.now() - start)
+                .catch(() => null)
+                .finally(() => clearTimeout(timer));
+            requests.set(key, request);
+        }
+    }
+
+    await Promise.all([...requests.entries()].map(async ([key, request]) => {
+        measurements.set(key, await request);
+    }));
+    return measurements;
+}
+
+function formatRtt(value) {
+    return Number.isFinite(value) && value >= 0 ? `${Math.round(value)} ms` : 'N/A';
 }
 
 function makeButton(customId, label, style, disabled = false) {
@@ -167,7 +201,7 @@ function buildSubscriptionView(client, page, customPrefix) {
     return { embed, components, totalPages, currentPage };
 }
 
-function buildBotsView(client, code, page, customPrefix) {
+async function buildBotsView(client, code, page, customPrefix) {
     const { runningBots } = getRuntime();
     const group = getSubscriptions().find(item => item.code === code);
     const tokenRows = group?.bots || [];
@@ -177,6 +211,7 @@ function buildBotsView(client, code, page, customPrefix) {
         (currentPage - 1) * BOTS_PER_PAGE,
         currentPage * BOTS_PER_PAGE,
     );
+    const nodeRtts = await measureNodeRtts(pageRows, runningBots);
 
     let discordReadyCount = 0;
     let botsWithConnectedNode = 0;
@@ -224,16 +259,21 @@ function buildBotsView(client, code, page, customPrefix) {
                 || tokenRow.profileName
                 || `Bot ${(currentPage - 1) * BOTS_PER_PAGE + index + 1}`;
             const discordState = isDiscordReady(botClient) ? '✅ Ready' : (botClient ? '⏳ Starting' : '❌ Offline');
+            const discordRtt = Number(botClient?.ws?.ping);
             const nodes = getBotNodeRows(tokenRow, botClient);
             const nodeText = nodes.length
-                ? nodes.map(node => `\`${node.name}\` ${node.connected ? '✅ Connected' : '❌ Offline'}`).join('\n')
+                ? nodes.map(node => {
+                    const key = node.rest?.url || node.name;
+                    const rtt = nodeRtts.get(key);
+                    return `\`${node.name}\` ${node.connected ? '✅' : '❌'} • Ping ${formatRtt(rtt)}`;
+                }).join('\n')
                 : 'No node configured';
             const ordinal = (currentPage - 1) * BOTS_PER_PAGE + index + 1;
             const mention = botId ? `<@${botId}>` : 'No ID';
 
             embed.addFields({
                 name: `${ordinal}. ${mention} • ${String(botName).slice(0, 150)}`.slice(0, 256),
-                value: `Discord: ${discordState}\n${nodeText}`.slice(0, 1024),
+                value: `Discord: ${discordState} • Ping ${formatRtt(discordRtt)}\nLavalink: ${nodeText}`.slice(0, 1024),
                 inline: false,
             });
         });
@@ -277,7 +317,7 @@ module.exports = {
             if (action === 'select') {
                 selectedCode = interaction.values?.[0] || null;
                 botsPage = 1;
-                view = buildBotsView(client, selectedCode, botsPage, customPrefix);
+                view = await buildBotsView(client, selectedCode, botsPage, customPrefix);
             } else if (action === 'back') {
                 selectedCode = null;
                 view = buildSubscriptionView(client, subscriptionPage, customPrefix);
@@ -288,10 +328,10 @@ module.exports = {
                 view = buildSubscriptionView(client, subscriptionPage, customPrefix);
                 subscriptionPage = view.currentPage;
             } else if (action.startsWith('bots_')) {
-                const current = buildBotsView(client, selectedCode, botsPage, customPrefix);
+                const current = await buildBotsView(client, selectedCode, botsPage, customPrefix);
                 if (action === 'bots_prev') botsPage = Math.max(1, current.currentPage - 1);
                 if (action === 'bots_next') botsPage = Math.min(current.totalPages, current.currentPage + 1);
-                view = buildBotsView(client, selectedCode, botsPage, customPrefix);
+                view = await buildBotsView(client, selectedCode, botsPage, customPrefix);
                 botsPage = view.currentPage;
             }
 
