@@ -105,17 +105,34 @@ function getAssignedNodeConfigs(tokenRow) {
     return Array.from({ length: replicas }, (_, offset) => nodes[(start + offset) % nodes.length]);
 }
 
+function configuredNodeName(node) {
+    const options = node?.options || node || {};
+    const configuredNodes = store.get('host') || [];
+    const runtimeHost = String(options.host || '').trim().toLowerCase();
+    const runtimePort = options.port == null ? '' : String(options.port);
+    const configured = Array.isArray(configuredNodes)
+        ? configuredNodes.find(entry => {
+            const configHost = String(entry?.host || '').trim().toLowerCase();
+            const configPort = entry?.port == null ? '' : String(entry.port);
+            return configHost && runtimeHost === configHost
+                && (!runtimePort || !configPort || runtimePort === configPort);
+        })
+        : null;
+
+    return configured?.name || options.name || node?.name || configured?.host || options.host || 'Unknown';
+}
+
 function getBotNodeRows(tokenRow, botClient) {
     const liveNodes = getNodeList(botClient);
     if (liveNodes.length) {
         return liveNodes.map(node => ({
-            name: node?.options?.name || node?.options?.host || 'Unknown',
+            name: configuredNodeName(node),
             connected: Boolean(node?.isConnected),
             rest: node?.rest,
         }));
     }
     return getAssignedNodeConfigs(tokenRow).map(node => ({
-        name: node.name || node.host || 'Unknown',
+        name: configuredNodeName(node),
         connected: false,
     }));
 }
