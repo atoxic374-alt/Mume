@@ -6921,6 +6921,22 @@ module.exports = {
                                 const settingsCommand = require('./commands/Subscriptions/settings');
                                 return settingsCommand.execute(TrueMusic, message, subBotCommand.args);
                             }
+                            if (subBotCommand?.name === 'lavalink') {
+                                // Prefer the main bot when it is in this guild; otherwise let
+                                // the first sub-bot that received the message handle the command.
+                                let mainClient = null;
+                                try { mainClient = require('./index'); } catch {}
+                                if (mainClient?.guilds?.cache?.has(message.guild.id)) return;
+
+                                if (!global._lavalinkHandledMsgIds) global._lavalinkHandledMsgIds = new Map();
+                                if (global._lavalinkHandledMsgIds.has(message.id)) return;
+                                global._lavalinkHandledMsgIds.set(message.id, Date.now());
+                                const cleanup = setTimeout(() => global._lavalinkHandledMsgIds?.delete(message.id), 10_000);
+                                cleanup.unref?.();
+
+                                const lavalinkCommand = require('./commands/Subscriptions/lavalink');
+                                return lavalinkCommand.execute(TrueMusic, message, subBotCommand.args);
+                            }
                                     const likesCommandNames = ['mylikes', 'likes', 'liked', 'لايكاتي'];
                                     const runMyLikesCommand = (args = []) => {
                                         // If this bot IS in a VC, the user must be in the same one.
