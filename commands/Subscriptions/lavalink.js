@@ -17,8 +17,7 @@ const COLLECTOR_MS = 120_000;
 
 function getRuntime() {
     try {
-        const music = require('../../music');
-        return { runningBots: music.runningBots };
+        return { runningBots: require('../../music').runningBots };
     } catch {
         return { runningBots: new Map() };
     }
@@ -37,6 +36,16 @@ function isDiscordReady(botClient) {
         return Boolean(botClient?.isReady?.() || botClient?.readyAt);
     } catch {
         return false;
+    }
+}
+
+function getBotId(botClient, token) {
+    if (botClient?.user?.id) return botClient.user.id;
+    try {
+        const id = Buffer.from(String(token || '').split('.')[0], 'base64url').toString('utf8');
+        return /^\d{17,20}$/.test(id) ? id : null;
+    } catch {
+        return null;
     }
 }
 
@@ -62,12 +71,56 @@ function getSubscriptions() {
     return [...groups.values()].sort((a, b) => String(a.code).localeCompare(String(b.code)));
 }
 
+function stableHash(value) {
+    const text = String(value || '');
+    let hash = 2166136261;
+    for (let i = 0; i < text.length; i++) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+}
+
+function getAssignedNodeConfigs(tokenRow) {
+    let nodes = store.get('host') || [];
+    if (process.env.LAVALINK_HOST) {
+        nodes = [{
+            name: 'main',
+            host: process.env.LAVALINK_HOST,
+            port: parseInt(process.env.LAVALINK_PORT || '2333', 10),
+            secure: process.env.LAVALINK_SECURE === 'true',
+        }];
+    }
+    nodes = Array.isArray(nodes) ? nodes.filter(node => node?.host && node?.port) : [];
+    if (nodes.length <= 1) return nodes;
+
+    const strategy = String(process.env.LAVALINK_NODE_STRATEGY || 'partition').toLowerCase();
+    if (strategy === 'all' || strategy === 'full') return nodes;
+
+    const replicas = Math.max(1, Math.min(
+        nodes.length,
+        Number(process.env.LAVALINK_NODE_REPLICAS || 1) || 1,
+    ));
+    const start = stableHash(`${tokenRow.Server || ''}:${String(tokenRow.token || '').slice(-12)}`) % nodes.length;
+    return Array.from({ length: replicas }, (_, offset) => nodes[(start + offset) % nodes.length]);
+}
+
+function getBotNodeRows(tokenRow, botClient) {
+    const liveNodes = getNodeList(botClient);
+    if (liveNodes.length) {
+        return liveNodes.map(node => ({
+            name: node?.options?.name || node?.options?.host || 'Unknown',
+            connected: Boolean(node?.isConnected),
+        }));
+    }
+    return getAssignedNodeConfigs(tokenRow).map(node => ({
+        name: node.name || node.host || 'Unknown',
+        connected: false,
+    }));
+}
+
 function makeButton(customId, label, style, disabled = false) {
-    return new ButtonBuilder()
-        .setCustomId(customId)
-        .setLabel(label)
-        .setStyle(style)
-        .setDisabled(disabled);
+    return new ButtonBuilder().setCustomId(customId).setLabel(label).setStyle(style).setDisabled(disabled);
 }
 
 function buildSubscriptionView(client, page, customPrefix) {
@@ -81,34 +134,33 @@ function buildSubscriptionView(client, page, customPrefix) {
 
     const embed = new EmbedBuilder()
         .setColor(getEmbedColor(client))
-        .setTitle('Lavalink — اختر الاشتراك')
+        .setTitle('Lavalink • Choose Subscription')
         .setDescription(subscriptions.length
-            ? `اختر الاشتراك لعرض بوتاته وحالة اتصال Discord وعقدة Lavalink.\nالاشتراكات: **${subscriptions.length}**`
-            : 'لم أجد اشتراكات مسجلة مرتبطة ببوتات.')
-        .setFooter({ text: `صفحة الاشتراكات ${currentPage}/${totalPages}` })
+            ? `Select a subscription to view its bots and node status.\n**Subscriptions:** ${subscriptions.length}`
+            : 'No subscriptions found.')
+        .setFooter({ text: `Subscriptions ${currentPage}/${totalPages}` })
         .setTimestamp();
 
     const components = [];
     if (pageRows.length) {
         const select = new StringSelectMenuBuilder()
             .setCustomId(`${customPrefix}:select`)
-            .setPlaceholder('اختر الاشتراك')
+            .setPlaceholder('Select a subscription')
             .addOptions(pageRows.map(group => {
-                const owner = group.time?.user ? `المالك ${group.time.user}` : 'اشتراك مسجل';
-                const active = group.time?.expirationTime
-                    ? (group.time.expirationTime > Date.now() ? 'نشط' : 'منتهي')
-                    : 'بيانات الاشتراك';
+                const status = group.time?.expirationTime
+                    ? (group.time.expirationTime > Date.now() ? 'Active' : 'Expired')
+                    : 'Registered';
                 return {
                     label: String(group.code).slice(0, 100),
                     value: String(group.code).slice(0, 100),
-                    description: `${group.bots.length} بوت • ${active} • ${owner}`.slice(0, 100),
+                    description: `${group.bots.length} bots • ${status}`.slice(0, 100),
                 };
             }));
         components.push(new ActionRowBuilder().addComponents(select));
         components.push(new ActionRowBuilder().addComponents(
-            makeButton(`${customPrefix}:subs_prev`, 'السابق', ButtonStyle.Secondary, currentPage <= 1),
-            makeButton(`${customPrefix}:subs_refresh`, 'تحديث', ButtonStyle.Primary),
-            makeButton(`${customPrefix}:subs_next`, 'التالي', ButtonStyle.Secondary, currentPage >= totalPages),
+            makeButton(`${customPrefix}:subs_prev`, 'Prev', ButtonStyle.Secondary, currentPage <= 1),
+            makeButton(`${customPrefix}:subs_refresh`, 'Refresh', ButtonStyle.Primary),
+            makeButton(`${customPrefix}:subs_next`, 'Next', ButtonStyle.Secondary, currentPage >= totalPages),
         ));
     }
 
@@ -127,85 +179,71 @@ function buildBotsView(client, code, page, customPrefix) {
     );
 
     let discordReadyCount = 0;
-    let hasOnlineNodeCount = 0;
+    let botsWithConnectedNode = 0;
     const nodeCounts = new Map();
 
     for (const tokenRow of tokenRows) {
         const botClient = runningBots.get(tokenRow.token);
         if (isDiscordReady(botClient)) discordReadyCount++;
-        const nodes = getNodeList(botClient);
-        if (nodes.some(node => node?.isConnected)) hasOnlineNodeCount++;
+        const nodes = getBotNodeRows(tokenRow, botClient);
+        if (nodes.some(node => node.connected)) botsWithConnectedNode++;
         for (const node of nodes) {
-            const name = node?.options?.name || node?.options?.host || 'unknown';
-            const counts = nodeCounts.get(name) || { assigned: 0, connected: 0 };
+            const counts = nodeCounts.get(node.name) || { assigned: 0, connected: 0 };
             counts.assigned++;
-            if (node?.isConnected) counts.connected++;
-            nodeCounts.set(name, counts);
+            if (node.connected) counts.connected++;
+            nodeCounts.set(node.name, counts);
         }
-    }
-
-    for (const config of (store.get('host') || [])) {
-        const name = config?.name || config?.host;
-        if (name && !nodeCounts.has(name)) nodeCounts.set(name, { assigned: 0, connected: 0 });
     }
 
     const nodeSummary = nodeCounts.size
         ? [...nodeCounts.entries()]
-            .map(([name, counts]) => `\`${name}\`: ${counts.connected}/${counts.assigned} متصلة`)
-            .join(' • ')
-        : 'لا توجد بيانات عقد متاحة.';
+            .map(([name, counts]) => `\`${name}\` ${counts.connected}/${counts.assigned}`)
+            .join('  •  ')
+        : 'No nodes configured';
 
     const embed = new EmbedBuilder()
         .setColor(getEmbedColor(client))
-        .setTitle(`Lavalink — الاشتراك ${code}`.slice(0, 256))
+        .setTitle(`Lavalink • ${code}`.slice(0, 256))
         .setDescription([
-            `**البوتات:** ${tokenRows.length} | **Discord جاهز:** ${discordReadyCount} | **لديها عقدة متصلة:** ${hasOnlineNodeCount}`,
-            `**العقد (متصل/مخصص):** ${nodeSummary}`,
+            `**Bots:** ${tokenRows.length}  •  **Discord ready:** ${discordReadyCount}  •  **Node online:** ${botsWithConnectedNode}`,
+            `**Nodes (online/assigned):** ${nodeSummary}`,
         ].join('\n'))
-        .setFooter({ text: `صفحة البوتات ${currentPage}/${totalPages} • ${BOTS_PER_PAGE} بوتات في الصفحة` })
+        .setFooter({ text: `Bots ${currentPage}/${totalPages} • ${BOTS_PER_PAGE} per page` })
         .setTimestamp();
 
     if (!group) {
-        embed.addFields({ name: 'الاشتراك غير موجود', value: 'تغيرت قائمة الاشتراكات. ارجع واختر اشتراكًا آخر.' });
+        embed.addFields({ name: 'Subscription Not Found', value: 'Go back and select another subscription.' });
     } else if (!pageRows.length) {
-        embed.addFields({ name: 'لا توجد بوتات', value: 'لا توجد بوتات مرتبطة بهذا الاشتراك.' });
+        embed.addFields({ name: 'No Bots', value: 'No bots are linked to this subscription.' });
     } else {
         pageRows.forEach((tokenRow, index) => {
             const botClient = runningBots.get(tokenRow.token);
-            const discordReady = isDiscordReady(botClient);
+            const botId = getBotId(botClient, tokenRow.token);
             const botName = botClient?.user?.tag
                 || botClient?.user?.username
                 || tokenRow.profileName
-                || `بوت ${(currentPage - 1) * BOTS_PER_PAGE + index + 1}`;
-            const botId = botClient?.user?.id;
-            const nodes = getNodeList(botClient);
-
-            let nodeText;
-            if (!botClient) {
-                nodeText = 'غير مشغّل؛ لا توجد جلسة عقدة لهذا البوت.';
-            } else if (!nodes.length) {
-                nodeText = 'لا توجد عقدة مهيأة أو لم يبدأ اتصالها بعد.';
-            } else {
-                nodeText = nodes.map(node => {
-                    const name = node?.options?.name || node?.options?.host || 'unknown';
-                    return `\`${name}\` ${node?.isConnected ? '🟢 Connected' : '🔴 Disconnected'}`;
-                }).join('\n');
-            }
-
+                || `Bot ${(currentPage - 1) * BOTS_PER_PAGE + index + 1}`;
+            const discordState = isDiscordReady(botClient) ? '✅ Ready' : (botClient ? '⏳ Starting' : '❌ Offline');
+            const nodes = getBotNodeRows(tokenRow, botClient);
+            const nodeText = nodes.length
+                ? nodes.map(node => `\`${node.name}\` ${node.connected ? '✅ Connected' : '❌ Offline'}`).join('\n')
+                : 'No node configured';
             const ordinal = (currentPage - 1) * BOTS_PER_PAGE + index + 1;
+            const mention = botId ? `<@${botId}>` : 'No ID';
+
             embed.addFields({
-                name: `${ordinal}. ${String(botName).slice(0, 205)}${botId ? ` • ${botId}` : ''}`.slice(0, 256),
-                value: `Discord: ${discordReady ? '🟢 Connected' : (botClient ? '🟡 Starting' : '🔴 Offline')}\nLavalink:\n${nodeText}`.slice(0, 1024),
+                name: `${ordinal}. ${mention} • ${String(botName).slice(0, 150)}`.slice(0, 256),
+                value: `Discord: ${discordState}\n${nodeText}`.slice(0, 1024),
                 inline: false,
             });
         });
     }
 
     const buttons = new ActionRowBuilder().addComponents(
-        makeButton(`${customPrefix}:bots_prev`, 'السابق', ButtonStyle.Secondary, currentPage <= 1),
-        makeButton(`${customPrefix}:bots_refresh`, 'تحديث', ButtonStyle.Primary),
-        makeButton(`${customPrefix}:back`, 'اختيار اشتراك', ButtonStyle.Secondary),
-        makeButton(`${customPrefix}:bots_next`, 'التالي', ButtonStyle.Secondary, currentPage >= totalPages),
+        makeButton(`${customPrefix}:bots_prev`, 'Prev', ButtonStyle.Secondary, currentPage <= 1),
+        makeButton(`${customPrefix}:bots_refresh`, 'Refresh', ButtonStyle.Primary),
+        makeButton(`${customPrefix}:back`, 'Subscriptions', ButtonStyle.Secondary),
+        makeButton(`${customPrefix}:bots_next`, 'Next', ButtonStyle.Secondary, currentPage >= totalPages),
     );
 
     return { embed, components: [buttons], totalPages, currentPage };
@@ -236,7 +274,6 @@ module.exports = {
 
         collector.on('collect', async interaction => {
             const action = interaction.customId.slice(customPrefix.length + 1);
-
             if (action === 'select') {
                 selectedCode = interaction.values?.[0] || null;
                 botsPage = 1;
@@ -244,13 +281,13 @@ module.exports = {
             } else if (action === 'back') {
                 selectedCode = null;
                 view = buildSubscriptionView(client, subscriptionPage, customPrefix);
-            } else if (action === 'subs_prev' || action === 'subs_next' || action === 'subs_refresh') {
+            } else if (action.startsWith('subs_')) {
                 const current = buildSubscriptionView(client, subscriptionPage, customPrefix);
                 if (action === 'subs_prev') subscriptionPage = Math.max(1, current.currentPage - 1);
                 if (action === 'subs_next') subscriptionPage = Math.min(current.totalPages, current.currentPage + 1);
                 view = buildSubscriptionView(client, subscriptionPage, customPrefix);
                 subscriptionPage = view.currentPage;
-            } else if (action === 'bots_prev' || action === 'bots_next' || action === 'bots_refresh') {
+            } else if (action.startsWith('bots_')) {
                 const current = buildBotsView(client, selectedCode, botsPage, customPrefix);
                 if (action === 'bots_prev') botsPage = Math.max(1, current.currentPage - 1);
                 if (action === 'bots_next') botsPage = Math.min(current.totalPages, current.currentPage + 1);
