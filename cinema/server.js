@@ -27,6 +27,7 @@ const ROOM_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const INSTANCE_ID = id(8);
 const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL, max: Number(process.env.CINEMA_DB_POOL_SIZE || 5), idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000, ssl: process.env.PGSSLMODE === 'require' ? { rejectUnauthorized: process.env.PGSSL_REJECT_UNAUTHORIZED !== 'false' } : undefined }) : null;
 const rooms = new Map();
+const dirtyRooms = new Set();
 const connections = new Map();
 const tokenCache = new Map();
 const requestLimits = new Map();
@@ -189,19 +190,23 @@ async function saveRooms() {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     const snapshot = [...rooms.values()].map(room => Object.assign({}, room, { participants: undefined }));
+    const dirtySnapshot = [...dirtyRooms].map(key => rooms.get(key)).filter(Boolean).map(room => Object.assign({}, room, { participants: undefined }));
     if (pool) {
+      if (!dirtySnapshot.length) return;
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
-        for (const room of snapshot) await client.query('INSERT INTO cinema_rooms (id, data, updated_at) VALUES ($1, $2::jsonb, $3) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at', [room.id, JSON.stringify(room), room.updatedAt]);
+        for (const room of dirtySnapshot) await client.query('INSERT INTO cinema_rooms (id, data, updated_at) VALUES ($1, $2::jsonb, $3) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at', [room.id, JSON.stringify(room), room.updatedAt]);
         await client.query('DELETE FROM cinema_rooms WHERE updated_at < $1', [now() - ROOM_TTL_MS]);
         await client.query('COMMIT');
+        for (const room of dirtySnapshot) { const current = rooms.get(room.id); if (current && current.updatedAt === room.updatedAt) dirtyRooms.delete(room.id); }
       } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; }
       finally { client.release(); }
     } else {
       const temp = ROOM_FILE + '.' + process.pid + '.tmp';
       await fs.promises.writeFile(temp, JSON.stringify(snapshot), { mode: 0o600 });
       await fs.promises.rename(temp, ROOM_FILE);
+      dirtyRooms.clear();
     }
   } finally {
     isSaving = false;
@@ -240,7 +245,7 @@ function broadcast(room, payload) {
   const message = payload || { type: 'room:state', room: roomSnapshot(room) };
   for (const peer of peers.values()) send(peer.ws, message);
 }
-function publish(room) { room.updatedAt = now(); scheduleSave(); broadcast(room); }
+function publish(room) { room.updatedAt = now(); dirtyRooms.add(room.id); scheduleSave(); broadcast(room); }
 function addParticipant(room, user, ws) {
   let peers = connections.get(room.id);
   if (!peers) { peers = new Map(); connections.set(room.id, peers); }
@@ -294,6 +299,11 @@ function processRoomAction(room, user, msg) {
     const media = normalizeMedia(Object.assign({}, msg.media, { addedBy: user.id }));
     if (!media) throw Object.assign(new Error('Invalid or unauthorized media URL'), { status: 400 });
     room.queue.push(media);
+  } else if (action === 'queue:move') {
+    requireHost(room, user);
+    const from = Number(msg.fromIndex), to = Number(msg.toIndex);
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0 || from >= room.queue.length || to >= room.queue.length) throw Object.assign(new Error('Invalid queue position'), { status: 400 });
+    const moved = room.queue.splice(from, 1)[0]; room.queue.splice(to, 0, moved);
   } else if (action === 'queue:remove') {
     const index = room.queue.findIndex(x => x.id === String(msg.mediaId));
     if (index < 0) throw Object.assign(new Error('Queue item was not found'), { status: 404 });
@@ -323,6 +333,8 @@ function processRoomAction(room, user, msg) {
   } else if (action === 'settings:update') {
     const settings = msg.settings || {};
     for (const key of ['allowChat', 'allowQueue', 'syncEnabled', 'voteSkip']) if (typeof settings[key] === 'boolean') room.settings[key] = settings[key];
+    if (typeof settings.loop === 'boolean') room.state.loop = settings.loop;
+    if (typeof settings.name === 'string' && text(settings.name, 48)) room.name = text(settings.name, 48);
   } else if (action === 'chat:send') {
     if (!room.settings.allowChat) throw Object.assign(new Error('Chat is disabled'), { status: 403 });
     const message = text(msg.message, 500);
@@ -407,6 +419,20 @@ async function handleApi(req, res, url) {
     const data = type === 'anime' ? await searchConsumet(query) : await searchTmdb(query, type);
     return json(res, 200, Object.assign(data, { note: 'Catalog metadata only. Playback requires an authorized media source.' }));
   }
+  if (req.method === 'GET' && url.pathname === '/api/catalog/details') {
+    await requireUser(req);
+    const type = text(url.searchParams.get('type'), 10);
+    const itemId = text(url.searchParams.get('id'), 250);
+    if (!itemId || !['movie', 'tv', 'anime'].includes(type)) return json(res, 400, { error: 'A valid catalog type and title ID are required' });
+    if (type === 'anime') {
+      if (!CONSUMET_API_URL) return json(res, 503, { error: 'Consumet is not configured' });
+      const data = await discordRequest(CONSUMET_API_URL + '/anime/gogoanime/info?id=' + encodeURIComponent(itemId));
+      return json(res, 200, { title: text(data.title, 180), description: text(data.description, 1200), image: safeImage(data.image), genres: Array.isArray(data.genres) ? data.genres.slice(0, 20).map(x => text(x, 40)) : [], totalEpisodes: Number(data.totalEpisodes || 0), status: text(data.status, 40), type });
+    }
+    if (!TMDB_API_KEY) return json(res, 503, { error: 'TMDB is not configured' });
+    const data = await discordRequest('https://api.themoviedb.org/3/' + type + '/' + encodeURIComponent(itemId), { params: { api_key: TMDB_API_KEY, language: 'en-US' } });
+    return json(res, 200, { title: text(data.title || data.name, 180), overview: text(data.overview, 1200), poster: data.poster_path ? 'https://image.tmdb.org/t/p/w500' + data.poster_path : null, backdrop: data.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + data.backdrop_path : null, genres: (data.genres || []).slice(0, 20).map(x => text(x.name, 40)), runtime: Number(data.runtime || 0), seasons: Number(data.number_of_seasons || 0), episodes: Number(data.number_of_episodes || 0), releaseDate: text(data.release_date || data.first_air_date, 20), type });
+  }
   if (req.method === 'GET' && url.pathname === '/api/catalog/trending') {
     await requireUser(req);
     const type = text(url.searchParams.get('type') || 'movie', 10);
@@ -423,7 +449,7 @@ async function handleApi(req, res, url) {
       ownerId: user.id, hostId: user.id, visibility: data.visibility === 'public' ? 'public' : 'private',
       createdAt: now(), updatedAt: now()
     });
-    rooms.set(roomKey, room); scheduleSave();
+    rooms.set(roomKey, room); dirtyRooms.add(roomKey); scheduleSave();
     return json(res, 201, { room: roomSnapshot(room), inviteCode: room.inviteCode, invite: '/?room=' + roomKey + '&invite=' + room.inviteCode });
   }
   const roomMatch = url.pathname.match(/^\/api\/rooms\/([a-zA-Z0-9_-]{5,32})$/);
