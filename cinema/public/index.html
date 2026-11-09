@@ -85,7 +85,7 @@ main{max-width:1480px;margin:auto;padding:0 clamp(16px,4vw,60px) 70px}.hero{min-
         <div class="tabcontent" id="queueTab"><div id="queueList" class="muted">Your queue is empty.</div><button id="nextMedia" class="small primary" style="margin-top:12px">Play next</button><button id="clearQueue" class="small" style="margin-top:12px">Clear queue</button></div>
         <div class="tabcontent hidden" id="peopleTab"><div id="peopleList" class="muted">No one here yet.</div></div>
         <div class="tabcontent hidden" id="chatTab"><div id="chatList" class="chatlist"></div></div>
-        <div class="tabcontent hidden" id="settingsTab"><div class="muted" style="margin-bottom:10px">Room controls · Host only</div><label class="participant"><span>Allow chat</span><input type="checkbox" id="settingChat" style="flex:0"></label><label class="participant"><span>Allow queue</span><input type="checkbox" id="settingQueue" style="flex:0"></label><label class="participant"><span>Skip voting</span><input type="checkbox" id="settingVote" style="flex:0"></label><label class="participant"><span>Loop current video</span><input type="checkbox" id="settingLoop" style="flex:0"></label><label class="participant"><span>Public room</span><input type="checkbox" id="settingPublic" style="flex:0"></label><button id="saveSettings" class="primary small" style="margin-top:12px">Save settings</button><div class="muted" style="font-size:10px;margin-top:8px">Changes apply to everyone in this room.</div></div>
+        <div class="tabcontent hidden" id="settingsTab"><div class="muted" style="margin-bottom:10px">Room controls · Host only</div><label class="participant"><span>Allow chat</span><input type="checkbox" id="settingChat" style="flex:0"></label><label class="participant"><span>Allow queue</span><input type="checkbox" id="settingQueue" style="flex:0"></label><label class="participant"><span>Skip voting</span><input type="checkbox" id="settingVote" style="flex:0"></label><label class="participant"><span>Synchronize playback</span><input type="checkbox" id="settingSync" style="flex:0"></label><label class="participant"><span>Loop current video</span><input type="checkbox" id="settingLoop" style="flex:0"></label><label class="participant"><span>Public room</span><input type="checkbox" id="settingPublic" style="flex:0"></label><input id="settingRoomName" maxlength="48" placeholder="Room name"><button id="saveSettings" class="primary small" style="margin-top:12px">Save settings</button><div class="muted" style="font-size:10px;margin-top:8px">Changes apply to everyone in this room.</div></div>
         <form class="chatform hidden" id="chatForm"><input id="chatInput" maxlength="500" placeholder="Say something…"><button class="primary small">Send</button></form>
       </aside>
     </div>
@@ -176,7 +176,7 @@ function applyRoomState(nextRoom) {
     $('video').dataset.mediaId = state.media.id;
   }
   if (!state.media) { $('video').dataset.mediaId = ''; $('playerEmpty').classList.remove('hidden'); }
-  if (state.media && Number.isFinite(Number(state.currentTime))) {
+  if (state.media && (!room.settings || room.settings.syncEnabled !== false) && Number.isFinite(Number(state.currentTime))) {
     const target = Number(state.currentTime) + (state.status === 'playing' ? Math.max(0, (Number(state.serverTime || Date.now()) - Date.now()) / 1000) : 0);
     if (Math.abs(($('video').currentTime || 0) - target) > 1.8) {
       applyingRemote = true;
@@ -397,7 +397,7 @@ $('queueList').addEventListener('click', e => { const button = e.target.closest(
 $('peopleList').addEventListener('click', e => { const button = e.target.closest('[data-host]'); if (button) send('host:transfer', { userId: button.dataset.host }); });
 $('chatForm').onsubmit = e => { e.preventDefault(); const message = $('chatInput').value.trim(); if (!message) return; send('chat:send', { message }); $('chatInput').value = ''; };
 document.querySelectorAll('[data-reaction]').forEach(btn => btn.onclick = () => send('reaction', { emoji: btn.dataset.reaction }));
-$('saveSettings').onclick = () => send('settings:update', { settings: { allowChat: $('settingChat').checked, allowQueue: $('settingQueue').checked, voteSkip: $('settingVote').checked, loop: $('settingLoop').checked, visibility: $('settingPublic').checked ? 'public' : 'private' } });
+$('saveSettings').onclick = () => send('settings:update', { settings: { allowChat: $('settingChat').checked, allowQueue: $('settingQueue').checked, voteSkip: $('settingVote').checked, syncEnabled: $('settingSync').checked, loop: $('settingLoop').checked, name: $('settingRoomName').value.trim(), visibility: $('settingPublic').checked ? 'public' : 'private' } });
 $('video').addEventListener('timeupdate', updateTime);
 $('video').addEventListener('durationchange', updateTime);
 $('video').addEventListener('ended', () => { if (room && room.hostId === user.id) { if (room.state && room.state.loop) { send('seek', { currentTime: 0 }); send('play'); } else send('next'); } });
