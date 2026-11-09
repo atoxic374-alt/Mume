@@ -206,7 +206,7 @@ async function saveRooms() {
       const temp = ROOM_FILE + '.' + process.pid + '.tmp';
       await fs.promises.writeFile(temp, JSON.stringify(snapshot), { mode: 0o600 });
       await fs.promises.rename(temp, ROOM_FILE);
-      dirtyRooms.clear();
+      for (const room of dirtySnapshot) { const current = rooms.get(room.id); if (current && current.updatedAt === room.updatedAt) dirtyRooms.delete(room.id); }
     }
   } finally {
     isSaving = false;
@@ -249,6 +249,8 @@ function publish(room) { room.updatedAt = now(); dirtyRooms.add(room.id); schedu
 function addParticipant(room, user, ws) {
   let peers = connections.get(room.id);
   if (!peers) { peers = new Map(); connections.set(room.id, peers); }
+  const previous = peers.get(user.id);
+  if (previous && previous.ws !== ws) previous.ws.close(4001, 'Reconnected from another client');
   peers.set(user.id, { user, ws, joinedAt: now() });
   if (!room.ownerId) { room.ownerId = user.id; room.hostId = user.id; }
   broadcast(room, { type: 'room:presence', participants: [...peers.values()].map(x => x.user) });
@@ -279,7 +281,7 @@ function currentTime(state) {
 function processRoomAction(room, user, msg) {
   const action = text(msg.action, 32);
   const isHost = room.hostId === user.id || room.ownerId === user.id;
-  if (action === 'play' || action === 'pause' || action === 'seek' || action === 'load' || action === 'next' || action === 'host:transfer' || action === 'settings:update' || action === 'queue:clear') requireHost(room, user);
+  if (action === 'play' || action === 'pause' || action === 'seek' || action === 'load' || action === 'next' || action === 'host:transfer' || action === 'settings:update' || action === 'queue:clear' || action === 'queue:move') requireHost(room, user);
   if (action === 'load') {
     const media = normalizeMedia(Object.assign({}, msg.media, { addedBy: user.id }));
     if (!media) throw Object.assign(new Error('This media URL is not allowed. Use an authorized HTTPS source.'), { status: 400 });
@@ -493,7 +495,7 @@ server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
   const origin = req.headers.origin || '';
   const roomKey = url.searchParams.get('room') || '';
-  if (url.pathname !== '/ws' || !roomIdValid(roomKey) || (origin && !/^https:\/\//.test(origin))) return socket.destroy();
+  if (url.pathname !== '/ws' || !roomIdValid(roomKey) || (origin && origin !== 'https://' + req.headers.host)) return socket.destroy();
   wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, roomKey));
 });
 wss.on('connection', (ws, roomKey) => {
@@ -510,7 +512,8 @@ wss.on('connection', (ws, roomKey) => {
       try {
         const user = await authenticateToken(msg.accessToken);
         ws.user = user; ws.authenticated = true; clearTimeout(authTimer);
-        const room = getRoom(roomKey);
+        const room = rooms.get(roomKey);
+        if (!room) { ws.close(1008, 'Room not found'); return; }
         if (room.visibility === 'private' && room.ownerId && room.ownerId !== user.id && msg.inviteCode !== room.inviteCode && !(connections.get(room.id) || new Map()).has(user.id)) {
           ws.close(1008, 'Private room'); return;
         }
