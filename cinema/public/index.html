@@ -1,105 +1,392 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Mume Cinema</title>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#090b12"><title>Mume Cinema</title>
 <style>
-:root{color-scheme:dark;--bg:#090b10;--panel:#141821;--muted:#929bad;--accent:#8b9bff;--line:#252c39}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 15% -10%,#252c50 0,transparent 42%),var(--bg);color:#f4f6fb;font:15px/1.5 Inter,system-ui,sans-serif}
-header{height:70px;display:flex;align-items:center;justify-content:space-between;padding:0 4vw;border-bottom:1px solid var(--line);background:#090b10d9;position:sticky;top:0;z-index:2}
-.logo{font-size:22px;font-weight:850;letter-spacing:-1px}.logo span{color:var(--accent)}.status{color:var(--muted);font-size:12px}
-main{max-width:1240px;margin:auto;padding:30px 4vw 60px}.hero{padding:22px 0 28px}.eyebrow{color:var(--accent);font-weight:700;text-transform:uppercase;letter-spacing:2px;font-size:11px}
-h1{font-size:clamp(28px,5vw,48px);line-height:1.08;margin:8px 0}.sub{color:var(--muted);max-width:650px}
-.controls{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0}input,select,button{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:#fff;padding:12px 14px;font:inherit}input{min-width:220px;flex:1}button{cursor:pointer}button.primary{background:var(--accent);color:#0b1023;border:0;font-weight:800}button:disabled{opacity:.5;cursor:not-allowed}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:16px}.item{background:var(--panel);border:1px solid var(--line);border-radius:13px;overflow:hidden}.poster{width:100%;aspect-ratio:2/3;object-fit:cover;background:#202636}.item h3{font-size:14px;margin:10px 11px 4px}.item p{margin:0 11px 12px;color:var(--muted);font-size:11px}
-.player{margin-top:30px;background:#050608;border:1px solid var(--line);border-radius:16px;overflow:hidden}.player video{display:block;width:100%;max-height:62vh;background:#000}.playerbar{padding:13px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}.playerbar strong{margin-right:auto}.hint{font-size:12px;color:var(--muted)}
-footer{color:var(--muted);font-size:12px;margin-top:25px}
-@media(max-width:600px){header{padding:0 18px}main{padding:20px 18px 40px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+:root{color-scheme:dark;--bg:#080a10;--surface:#111621;--surface2:#171e2b;--line:#283144;--muted:#96a1b5;--text:#f5f7fc;--accent:#a7b4ff;--accent2:#7588f7;--danger:#f07178;--good:#65d6a3;--radius:15px}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(ellipse at 12% -18%,#30365d 0,transparent 43%),linear-gradient(180deg,#0b0e17,#080a10 45%);color:var(--text);font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;min-height:100vh}
+button,input,select{font:inherit}button{cursor:pointer;color:inherit;border:1px solid var(--line);background:var(--surface2);border-radius:10px;padding:10px 13px;transition:background .16s,border-color .16s,transform .16s}button:hover:not(:disabled){background:#222c40;border-color:#566487}button:active:not(:disabled){transform:scale(.98)}button:disabled{opacity:.45;cursor:not-allowed}button.primary{background:var(--accent);border-color:transparent;color:#101525;font-weight:800}button.primary:hover:not(:disabled){background:#c0c9ff}button.ghost{background:transparent}button.danger{color:#ff9da2}.small{font-size:12px;padding:7px 10px}.iconbtn{width:38px;height:38px;padding:0;display:grid;place-items:center;font-size:17px}
+input,select{color:var(--text);background:#0f141e;border:1px solid var(--line);border-radius:10px;padding:11px 13px;outline:none;min-width:0}input:focus,select:focus{border-color:#8294e9;box-shadow:0 0 0 3px #8294e91c}input::placeholder{color:#69758a}
+.topbar{height:68px;position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:25px;padding:0 clamp(16px,4vw,60px);background:#080a10eF;border-bottom:1px solid #202838;backdrop-filter:blur(18px)}
+.brand{font-size:22px;font-weight:900;letter-spacing:-1.3px;white-space:nowrap}.brand b{color:var(--accent)}.nav{display:flex;gap:5px}.nav button{border:0;background:transparent;color:var(--muted);padding:9px 11px}.nav button.active,.nav button:hover{color:white;background:#ffffff0d}.topright{margin-left:auto;display:flex;align-items:center;gap:10px}.userline{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:12px}.avatar{width:29px;height:29px;border-radius:50%;background:#343e5c;object-fit:cover}
+.connection{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted)}.dot{width:7px;height:7px;border-radius:50%;background:#e1b65b}.dot.ok{background:var(--good)}.dot.bad{background:var(--danger)}
+main{max-width:1480px;margin:auto;padding:0 clamp(16px,4vw,60px) 70px}.hero{min-height:340px;display:flex;align-items:end;padding:65px 0 35px;position:relative;isolation:isolate}.hero:before{content:"";position:absolute;z-index:-1;inset:0 -4vw;background:radial-gradient(ellipse at 75% 45%,#6576c533,transparent 45%)}.heroCopy{max-width:720px}.eyebrow{color:var(--accent);font-size:10px;font-weight:850;letter-spacing:2.4px;text-transform:uppercase}.hero h1{font-size:clamp(35px,6vw,66px);line-height:1.02;letter-spacing:-2.5px;margin:10px 0 12px}.hero p{color:#aab4c7;max-width:600px;margin:0}.heroActions{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px}
+.toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0 24px}.toolbar .search{flex:1;min-width:210px}.toolbar select{min-width:140px}.sectionhead{display:flex;align-items:end;justify-content:space-between;gap:12px;margin:30px 0 14px}.sectionhead h2{font-size:18px;letter-spacing:-.3px;margin:0}.sectionhead p{color:var(--muted);font-size:12px;margin:4px 0 0}
+.catalog{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:16px}.tile{min-width:0;border:1px solid #252d3d;background:#111621;border-radius:13px;overflow:hidden;transition:transform .18s,border-color .18s;cursor:pointer}.tile:hover{transform:translateY(-4px);border-color:#6879b6}.poster{width:100%;aspect-ratio:2/3;display:block;object-fit:cover;background:linear-gradient(145deg,#222b3e,#111621)}.tilebody{padding:10px 11px 12px}.tile h3{font-size:13px;line-height:1.35;margin:0 0 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tilemeta{font-size:11px;color:var(--muted);display:flex;justify-content:space-between;gap:4px}.empty{padding:28px;border:1px dashed #354056;border-radius:14px;color:var(--muted);text-align:center;grid-column:1/-1}
+.roomlayout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:17px;margin-top:22px}.playerpanel,.sidepanel{background:#101520;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}.videoWrap{background:#000;position:relative;aspect-ratio:16/9;max-height:68vh}.videoWrap video{width:100%;height:100%;object-fit:contain;display:block;background:#000}.playerempty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:#9ba7bc;padding:20px;background:radial-gradient(ellipse at center,#1c2435,#050608 70%)}.playerempty strong{display:block;color:#fff;font-size:20px;margin-bottom:6px}.playerinfo{padding:13px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;flex-wrap:wrap}.playingtitle{font-weight:750;margin-right:auto}.playercontrols{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:13px 15px}.playercontrols input[type=range]{padding:0;accent-color:var(--accent);width:110px}.playercontrols select{padding:7px 8px;font-size:12px}.sourcebox{display:flex;gap:8px;padding:0 15px 14px}.sourcebox input{flex:1}.subbox{display:flex;gap:8px;padding:0 15px 15px}.subbox input{flex:1}
+.sidepanel{display:flex;flex-direction:column;min-height:350px}.tabs{display:flex;border-bottom:1px solid var(--line)}.tabs button{flex:1;border:0;border-radius:0;background:transparent;color:var(--muted)}.tabs button.active{color:white;border-bottom:2px solid var(--accent)}.tabcontent{padding:12px;min-height:260px;overflow:auto;max-height:470px}.queueitem{display:flex;align-items:center;gap:9px;padding:9px 5px;border-bottom:1px solid #ffffff0b}.queueitem img{width:38px;height:52px;object-fit:cover;border-radius:5px;background:#222}.queueitem div{min-width:0;flex:1}.queueitem strong{display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.queueitem small{color:var(--muted);font-size:10px}.queueitem button{padding:5px 7px;font-size:11px}
+.chatlist{display:flex;flex-direction:column;gap:10px}.chatmsg{font-size:12px;overflow-wrap:anywhere}.chatmsg b{color:#c0caff}.chatmsg time{color:#65718a;font-size:10px;margin-left:6px}.chatform{display:flex;gap:7px;padding:10px;border-top:1px solid var(--line)}.chatform input{flex:1;width:10px}.participant{display:flex;align-items:center;gap:8px;padding:8px 4px}.participant .avatar{width:25px;height:25px}.participant span{flex:1;font-size:12px}.participant small{color:var(--muted);font-size:10px}
+.roombar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:22px 0 0}.roombar .roomname{font-weight:800;margin-right:auto}.pill{font-size:10px;padding:4px 8px;border-radius:20px;background:#252e44;color:#c4ceff}.roomnotice{color:var(--muted);font-size:12px;margin:8px 0}.roomnotice.error{color:#ff999e}.reactionbar{display:flex;gap:6px;padding:0 15px 14px}.reactionbar button{padding:6px 9px;font-size:16px}
+.modal{position:fixed;inset:0;background:#000b;z-index:40;display:none;align-items:center;justify-content:center;padding:20px}.modal.open{display:flex}.modalcard{width:min(680px,100%);max-height:90vh;overflow:auto;background:#141b28;border:1px solid #35405a;border-radius:18px;box-shadow:0 24px 80px #000a}.modalhead{display:flex;justify-content:space-between;align-items:center;padding:17px 20px;border-bottom:1px solid var(--line)}.modalhead h2{font-size:17px;margin:0}.modalbody{padding:20px}.detail{display:grid;grid-template-columns:140px 1fr;gap:18px}.detail img{width:100%;border-radius:10px}.detail p{color:#aab5c9;font-size:13px}.detail h3{margin:0 0 6px}.detailmeta{color:var(--muted);font-size:11px}.detailactions{display:flex;gap:8px;flex-wrap:wrap;margin-top:15px}.detailactions input{width:100%}.formrow{display:flex;gap:8px;margin:12px 0}.formrow input{flex:1}.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:60;background:#202a3d;border:1px solid #455475;border-radius:12px;padding:10px 16px;box-shadow:0 8px 35px #0009;max-width:min(90vw,550px);font-size:12px;display:none}.toast.show{display:block}
+.hidden{display:none!important}.muted{color:var(--muted)}.skeleton{animation:pulse 1.2s infinite alternate;background:#20283a}@keyframes pulse{to{opacity:.45}}
+@media(max-width:900px){.roomlayout{grid-template-columns:1fr}.sidepanel{min-height:280px}.tabcontent{max-height:330px}.hero{min-height:280px}}
+@media(max-width:600px){.topbar{height:60px;gap:10px;padding:0 13px}.nav{display:none}.brand{font-size:19px}.topright{gap:7px}.userline span{display:none}main{padding-left:14px;padding-right:14px}.hero{min-height:255px;padding:40px 0 25px}.hero h1{letter-spacing:-1.5px}.catalog{grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.toolbar{gap:7px}.toolbar select{flex:1}.playercontrols{gap:6px}.playercontrols input[type=range]{width:75px}.detail{grid-template-columns:100px 1fr}.sourcebox,.subbox{flex-wrap:wrap}.sourcebox input,.subbox input{width:100%;flex:auto}}
 </style>
 </head>
 <body>
-<header><div class="logo">MUME <span>CINEMA</span></div><div class="status" id="connection">Connecting to Discord…</div></header>
+<header class="topbar">
+  <div class="brand">MUME <b>CINEMA</b></div>
+  <nav class="nav"><button class="active" data-nav="home">Discover</button><button data-nav="room">Watch room</button></nav>
+  <div class="topright">
+    <div class="connection"><i class="dot" id="statusDot"></i><span id="statusText">Connecting…</span></div>
+    <div class="userline"><img class="avatar" id="userAvatar" alt=""><span id="userName">Discord</span></div>
+  </div>
+</header>
 <main>
-<section class="hero"><div class="eyebrow">Watch together</div><h1>Your room. Your screen.</h1><p class="sub">Discover titles, open a shared room, and synchronize playback with friends. Catalog entries are metadata; playback requires a direct HTTPS video source you have permission to use.</p></section>
-<section>
-<div class="controls">
-<select id="kind" aria-label="Catalog"><option value="movie">Movies</option><option value="tv">Series</option><option value="anime">Anime · Consumet</option></select>
-<input id="query" placeholder="Search titles…" maxlength="100"><button class="primary" id="search">Search</button>
-</div><div id="results" class="grid"></div>
-</section>
-<section class="player">
-<video id="video" controls playsinline></video>
-<div class="playerbar"><strong id="now">Nothing playing</strong><input id="mediaUrl" placeholder="Direct HTTPS video URL (authorized source)" aria-label="Video URL"><button class="primary" id="load">Load</button><button id="sync">Sync</button></div>
-</section>
-<footer>Room <span id="roomLabel">—</span> · Playback controls are shared with connected room members. The first participant becomes host.</footer>
+  <section class="hero" id="hero">
+    <div class="heroCopy">
+      <div class="eyebrow">Mume original · Watch together</div>
+      <h1>One room.<br>Every moment together.</h1>
+      <p>Discover movies, series and anime, then watch with your friends in a synchronized room. Your library, your controls, your watch party.</p>
+      <div class="heroActions"><button class="primary" id="startRoom">＋ Start a watch room</button><button class="ghost" id="joinRoom">Join with room link</button></div>
+    </div>
+  </section>
+
+  <section id="discover">
+    <div class="toolbar">
+      <select id="catalogType" aria-label="Catalog type"><option value="movie">Movies</option><option value="tv">Series</option><option value="anime">Anime · Consumet</option></select>
+      <input class="search" id="searchInput" placeholder="Search titles, genres, stories…" maxlength="100">
+      <button class="primary" id="searchButton">Search</button>
+      <button id="trendingButton">Trending</button>
+    </div>
+    <div class="sectionhead"><div><h2 id="catalogHeading">Trending movies</h2><p id="catalogSub">Hand-picked discoveries for your next watch</p></div><span class="pill" id="sourcePill">TMDB catalog</span></div>
+    <div class="catalog" id="catalog"><div class="empty">Connect Discord to load the catalog.</div></div>
+  </section>
+
+  <section id="watchRoom" class="hidden">
+    <div class="roombar"><div class="roomname" id="roomName">Watch room</div><span class="pill" id="hostBadge">HOST</span><span class="muted" id="memberCount">0 watching</span><button class="small" id="copyInvite">Copy invite</button><button class="small danger" id="leaveRoom">Leave room</button></div>
+    <div class="roomnotice" id="roomNotice">Waiting for room connection…</div>
+    <div class="roomlayout">
+      <div class="playerpanel">
+        <div class="videoWrap">
+          <video id="video" playsinline crossorigin="anonymous"></video>
+          <div class="playerempty" id="playerEmpty"><div><strong>Ready when you are</strong>Load an authorized video source to start watching together.</div></div>
+        </div>
+        <div class="playerinfo"><div class="playingtitle" id="playingTitle">Nothing playing</div><span class="pill" id="playbackStatus">PAUSED</span></div>
+        <div class="playercontrols">
+          <button class="iconbtn" id="playPause" title="Play or pause">▶</button>
+          <button class="iconbtn" id="skipBack" title="Back 10 seconds">↶</button>
+          <button class="iconbtn" id="skipForward" title="Forward 10 seconds">↷</button>
+          <input id="seek" type="range" min="0" max="1000" value="0" aria-label="Seek">
+          <span class="muted" id="timeLabel">00:00 / 00:00</span>
+          <button class="iconbtn" id="mute" title="Mute">◖</button>
+          <input id="volume" type="range" min="0" max="1" step=".05" value=".8" aria-label="Volume">
+          <select id="speed" aria-label="Playback speed"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
+          <button class="iconbtn" id="fullscreen" title="Fullscreen">⛶</button>
+        </div>
+        <div class="sourcebox"><input id="mediaUrl" placeholder="Paste an authorized HTTPS MP4 / WebM / HLS (.m3u8) source"><button class="primary" id="loadMedia">Load source</button></div>
+        <div class="subbox"><input id="subtitleUrl" placeholder="Optional HTTPS WebVTT subtitle (.vtt)"><button id="addSubtitle">Add subtitles</button><button id="pip">PiP</button></div>
+        <div class="reactionbar"><button data-reaction="👏">👏</button><button data-reaction="❤️">❤️</button><button data-reaction="😂">😂</button><button data-reaction="🔥">🔥</button><button data-reaction="😮">😮</button><button data-reaction="🎉">🎉</button><button id="voteSkip" class="small">Vote to skip</button></div>
+      </div>
+      <aside class="sidepanel">
+        <div class="tabs"><button class="active" data-tab="queue">Up next</button><button data-tab="people">People</button><button data-tab="chat">Chat</button></div>
+        <div class="tabcontent" id="queueTab"><div id="queueList" class="muted">Your queue is empty.</div><button id="nextMedia" class="small primary" style="margin-top:12px">Play next</button><button id="clearQueue" class="small" style="margin-top:12px">Clear queue</button></div>
+        <div class="tabcontent hidden" id="peopleTab"><div id="peopleList" class="muted">No one here yet.</div></div>
+        <div class="tabcontent hidden" id="chatTab"><div id="chatList" class="chatlist"></div></div>
+        <form class="chatform hidden" id="chatForm"><input id="chatInput" maxlength="500" placeholder="Say something…"><button class="primary small">Send</button></form>
+      </aside>
+    </div>
+  </section>
 </main>
+<div class="modal" id="detailModal"><div class="modalcard"><div class="modalhead"><h2 id="detailHeading">Title details</h2><button class="iconbtn" id="closeDetail">×</button></div><div class="modalbody" id="detailBody"></div></div></div>
+<div class="modal" id="roomModal"><div class="modalcard"><div class="modalhead"><h2>Start a watch room</h2><button class="iconbtn" id="closeRoomModal">×</button></div><div class="modalbody"><label>Room name</label><div class="formrow"><input id="newRoomName" maxlength="48" value="Movie night"></div><label>Room access</label><div class="formrow"><select id="roomVisibility"><option value="private">Private · Invite link only</option><option value="public">Public · Anyone can join</option></select></div><button class="primary" id="createRoomConfirm">Create room</button></div></div></div>
+<div class="modal" id="joinModal"><div class="modalcard"><div class="modalhead"><h2>Join a watch room</h2><button class="iconbtn" id="closeJoinModal">×</button></div><div class="modalbody"><label>Paste the room invite link</label><div class="formrow"><input id="inviteInput" placeholder="https://…/?room=…&invite=…"></div><button class="primary" id="joinConfirm">Join room</button></div></div></div>
+<div class="toast" id="toast"></div>
 <script type="module">
 import { DiscordSDK } from 'https://cdn.jsdelivr.net/npm/@discord/embedded-app-sdk@latest/+esm';
+import Hls from 'https://cdn.jsdelivr.net/npm/hls.js@latest/+esm';
 const $ = id => document.getElementById(id);
-let user = null, accessToken = null, socket = null, roomId = null, lastRemoteUpdate = 0;
-const sdk = new DiscordSDK(new URLSearchParams(location.search).get('client_id') || '');
-async function connectDiscord(){
-  try{
-    await sdk.ready();
-    const auth = await sdk.commands.authorize({client_id:sdk.clientId,response_type:'code',state:'mume-cinema',prompt:'none',scope:['identify']});
-    const response = await fetch('/api/auth/exchange',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code:auth.code})});
-    if(!response.ok) throw new Error('Discord sign-in could not be completed');
-    const data = await response.json();
-    accessToken = data.access_token;
-    const authenticated = await sdk.commands.authenticate({access_token:data.access_token});
-    user = authenticated.user;
-    $('connection').textContent = 'Connected · '+(user.global_name || user.username);
-    roomId = new URLSearchParams(location.search).get('room') || 'lobby';
-    $('roomLabel').textContent = roomId;
-    connectRoom();
-  }catch(error){$('connection').textContent='Open this page inside the Discord Activity';console.warn(error);}
+const params = new URLSearchParams(location.search);
+let sdk, user = null, accessToken = null, socket = null, room = null, roomInvite = params.get('invite') || '';
+let currentItems = [], currentDetail = null, hls = null, reconnectAttempts = 0, reconnectTimer = null;
+let applyingRemote = false, seekDragging = false, lastStateAt = 0, currentTab = 'queue', roomConnected = false;
+const api = async (url, options) => {
+  const opts = Object.assign({ headers: {} }, options || {});
+  opts.headers = Object.assign({}, opts.headers, { authorization: 'Bearer ' + accessToken });
+  if (opts.body && typeof opts.body !== 'string') { opts.headers['content-type'] = 'application/json'; opts.body = JSON.stringify(opts.body); }
+  const response = await fetch(url, opts);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'Request failed');
+  return data;
+};
+function toast(message) { $('toast').textContent = message; $('toast').classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => $('toast').classList.remove('show'), 2800); }
+function status(label, mode) { $('statusText').textContent = label; $('statusDot').className = 'dot ' + (mode || ''); }
+function safeUrl(value) { try { const u = new URL(value); return u.protocol === 'https:' ? u.href : null; } catch { return null; } }
+function mediaTime(value) { value = Math.max(0, Math.floor(Number(value) || 0)); const h = Math.floor(value / 3600), m = Math.floor((value % 3600) / 60), s = value % 60; return (h ? String(h).padStart(2,'0') + ':' : '') + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0'); }
+function escapeText(value) { return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function setSection(name) {
+  $('discover').classList.toggle('hidden', name !== 'home');
+  $('hero').classList.toggle('hidden', name !== 'home');
+  $('watchRoom').classList.toggle('hidden', name !== 'room');
+  document.querySelectorAll('[data-nav]').forEach(btn => btn.classList.toggle('active', btn.dataset.nav === name));
 }
-function connectRoom(){
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  socket = new WebSocket(protocol+'//'+location.host+'/ws?room='+encodeURIComponent(roomId)+'&token='+encodeURIComponent(accessToken));
-  socket.onmessage = event => {
-    const msg=JSON.parse(event.data);
-    if(msg.type==='error'){$('connection').textContent=msg.message;return;}
-    if(msg.type==='state') applyState(msg.state);
-  };
-  socket.onclose=()=>{$('connection').textContent='Room disconnected · refresh to reconnect';};
+function inviteUrl() { return location.origin + '/?room=' + encodeURIComponent(room.id) + '&invite=' + encodeURIComponent(roomInvite); }
+function send(action, extra) {
+  if (!socket || socket.readyState !== WebSocket.OPEN || !roomConnected) { toast('Room is reconnecting. Try again in a moment.'); return; }
+  socket.send(JSON.stringify(Object.assign({ action }, extra || {})));
 }
-function send(action, extra={}){if(socket?.readyState===WebSocket.OPEN && user)socket.send(JSON.stringify({action,...extra}));}
-function applyState(state){
-  lastRemoteUpdate=Date.now();
-  $('now').textContent=state.title||'Nothing playing';
-  if(state.mediaUrl && $('video').src!==state.mediaUrl){$('video').src=state.mediaUrl;}
-  if(Number.isFinite(state.currentTime) && Math.abs(($('video').currentTime||0)-state.currentTime)>2){$('video').currentTime=state.currentTime;}
-  if(state.status==='playing')$('video').play().catch(()=>{});
-  else $('video').pause();
+function destroyPlayer() {
+  if (hls) { hls.destroy(); hls = null; }
+  $('video').pause(); $('video').removeAttribute('src'); $('video').load();
+  $('video').querySelectorAll('track').forEach(x => x.remove());
 }
-$('search').onclick=async()=>{
-  const q=$('query').value.trim();if(q.length<2)return;
-  $('results').textContent='Searching…';
-  try{
-    const r=await fetch('/api/search?q='+encodeURIComponent(q)+'&type='+encodeURIComponent($('kind').value));
-    const data=await r.json();if(!r.ok)throw new Error(data.error||'Search failed');
-    $('results').replaceChildren();
-    for(const item of data.results||[]){
-      const card=document.createElement('article');card.className='item';
-      const img=document.createElement('img');img.className='poster';img.alt='';img.src=item.image||'';img.loading='lazy';
-      const title=document.createElement('h3');title.textContent=item.title;
-      const meta=document.createElement('p');meta.textContent=(item.releaseDate||'')+' · '+item.source+' · metadata';
-      card.append(img,title,meta);$('results').append(card);
+function loadPlayerSource(media) {
+  if (!media || !media.url) { destroyPlayer(); $('playerEmpty').classList.remove('hidden'); return; }
+  const url = safeUrl(media.url);
+  if (!url) { toast('The media source must use HTTPS.'); return; }
+  destroyPlayer();
+  $('playerEmpty').classList.add('hidden');
+  $('playingTitle').textContent = media.title || 'Now playing';
+  const video = $('video');
+  if (/\.m3u8(?:$|\?)/i.test(url)) {
+    if (Hls.isSupported()) {
+      hls = new Hls({ enableWorker: true, lowLatencyMode: true, maxBufferLength: 30, backBufferLength: 30 });
+      hls.loadSource(url); hls.attachMedia(video);
+      hls.on(Hls.Events.ERROR, (event, data) => { if (data.fatal) { toast('HLS playback failed. Check the source and CORS settings.'); hls.destroy(); hls = null; } });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) video.src = url;
+    else toast('This browser cannot play HLS sources.');
+  } else video.src = url;
+}
+function applyRoomState(nextRoom) {
+  if (!nextRoom) return;
+  room = nextRoom;
+  $('roomName').textContent = room.name || 'Watch room';
+  $('hostBadge').textContent = room.hostId === user.id ? 'HOST' : (room.ownerId === user.id ? 'OWNER' : 'GUEST');
+  $('memberCount').textContent = (room.participants || []).length + ' watching';
+  $('peopleList').innerHTML = (room.participants || []).map(person =>
+    '<div class="participant"><img class="avatar" src="' + (person.avatar ? 'https://cdn.discordapp.com/avatars/' + encodeURIComponent(person.id) + '/' + encodeURIComponent(person.avatar) + '.png?size=64' : '') + '" alt=""><span>' + escapeText(person.globalName || person.username) + '</span><small>' + (person.id === room.hostId ? 'HOST' : '') + '</small>' +
+    (room.hostId === user.id && person.id !== user.id ? '<button class="small" data-host="' + escapeText(person.id) + '">Make host</button>' : '') + '</div>'
+  ).join('') || '<div class="muted">No one here yet.</div>';
+  $('queueList').innerHTML = (room.queue || []).map((item, index) =>
+    '<div class="queueitem">' + (item.poster ? '<img src="' + escapeText(item.poster) + '" alt="">' : '<div class="poster" style="width:38px;height:52px"></div>') +
+    '<div><strong>' + escapeText(item.title) + '</strong><small>Added to queue · ' + (index + 1) + '</small></div><button data-remove="' + escapeText(item.id) + '">×</button></div>'
+  ).join('') || '<div class="muted">Your queue is empty.</div>';
+  $('chatList').innerHTML = (room.chat || []).map(message => '<div class="chatmsg"><b>' + escapeText(message.username) + '</b><time>' + new Date(message.at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) + '</time><div>' + escapeText(message.message) + '</div></div>').join('');
+  $('chatList').scrollTop = $('chatList').scrollHeight;
+  const state = room.state || {};
+  $('playbackStatus').textContent = state.status === 'playing' ? 'PLAYING' : 'PAUSED';
+  $('playPause').textContent = state.status === 'playing' ? 'Ⅱ' : '▶';
+  if (state.media && $('video').dataset.mediaId !== state.media.id) {
+    $('video').dataset.mediaId = state.media.id;
+    loadPlayerSource(state.media);
+    $('video').dataset.mediaId = state.media.id;
+  }
+  if (!state.media) { $('video').dataset.mediaId = ''; $('playerEmpty').classList.remove('hidden'); }
+  if (state.media && Number.isFinite(Number(state.currentTime))) {
+    const target = Number(state.currentTime) + (state.status === 'playing' ? Math.max(0, (Number(state.serverTime || Date.now()) - Date.now()) / 1000) : 0);
+    if (Math.abs(($('video').currentTime || 0) - target) > 1.8) {
+      applyingRemote = true;
+      try { $('video').currentTime = target; } catch {}
+      setTimeout(() => { applyingRemote = false; }, 900);
     }
-    if(!data.results?.length)$('results').textContent='No catalog results. Check the configured provider.';
-  }catch(e){$('results').textContent=e.message;}
+    if (state.status === 'playing' && $('video').paused) { applyingRemote = true; $('video').play().catch(() => toast('Press play once if your browser blocks autoplay.')).finally(() => setTimeout(() => { applyingRemote = false; }, 900)); }
+    if (state.status !== 'playing' && !$('video').paused) { applyingRemote = true; $('video').pause(); setTimeout(() => { applyingRemote = false; }, 500); }
+  }
+  updateTime();
+}
+function connectSocket() {
+  if (!room || !accessToken) return;
+  clearTimeout(reconnectTimer);
+  roomConnected = false;
+  status('Connecting room…', '');
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  socket = new WebSocket(protocol + '//' + location.host + '/ws?room=' + encodeURIComponent(room.id));
+  socket.onopen = () => socket.send(JSON.stringify({ type: 'auth', accessToken, inviteCode: roomInvite }));
+  socket.onmessage = event => {
+    let message; try { message = JSON.parse(event.data); } catch { return; }
+    if (message.type === 'room:joined') {
+      roomConnected = true; reconnectAttempts = 0; status('Room connected', 'ok'); applyRoomState(message.room); setSection('room'); return;
+    }
+    if (message.type === 'room:state') { applyRoomState(message.room); return; }
+    if (message.type === 'room:presence') {
+      if (room) { room.participants = message.participants; $('memberCount').textContent = message.participants.length + ' watching'; applyRoomState(room); }
+      return;
+    }
+    if (message.type === 'chat:message') {
+      if (room) { room.chat = (room.chat || []).concat(message.message).slice(-40); applyRoomState(room); }
+      return;
+    }
+    if (message.type === 'room:reaction') { toast((message.reaction.emoji || '✨') + ' reaction'); return; }
+    if (message.type === 'room:notice') { $('roomNotice').textContent = message.message; return; }
+    if (message.type === 'error') { $('roomNotice').textContent = message.message; $('roomNotice').classList.add('error'); return; }
+  };
+  socket.onerror = () => status('Connection issue', 'bad');
+  socket.onclose = () => {
+    roomConnected = false; status('Reconnecting…', '');
+    if (room) {
+      const delay = Math.min(15000, 700 * Math.pow(1.8, reconnectAttempts++));
+      reconnectTimer = setTimeout(connectSocket, delay);
+    }
+  };
+}
+async function enterRoom(roomId, invite) {
+  roomInvite = invite || '';
+  const data = await api('/api/rooms/' + encodeURIComponent(roomId) + (roomInvite ? '?invite=' + encodeURIComponent(roomInvite) : ''));
+  room = data.room;
+  params.set('room', room.id); if (roomInvite) params.set('invite', roomInvite); else params.delete('invite');
+  history.replaceState({}, '', location.pathname + '?' + params.toString());
+  connectSocket();
+}
+async function createRoom() {
+  const data = await api('/api/rooms', { method: 'POST', body: { name: $('newRoomName').value.trim() || 'Watch Party', visibility: $('roomVisibility').value } });
+  room = data.room; roomInvite = data.inviteCode;
+  params.set('room', room.id); params.set('invite', roomInvite);
+  history.replaceState({}, '', location.pathname + '?' + params.toString());
+  $('roomModal').classList.remove('open'); connectSocket();
+}
+function renderCatalog(items, title, source) {
+  currentItems = items || [];
+  $('catalogHeading').textContent = title;
+  $('sourcePill').textContent = source || 'Catalog';
+  const root = $('catalog'); root.replaceChildren();
+  if (!currentItems.length) { root.innerHTML = '<div class="empty">No titles found. Check the provider settings or try another search.</div>'; return; }
+  currentItems.forEach((item, index) => {
+    const card = document.createElement('article'); card.className = 'tile'; card.tabIndex = 0;
+    const img = document.createElement('img'); img.className = 'poster'; img.loading = 'lazy'; img.alt = item.title || 'Poster'; img.src = item.poster || '';
+    img.onerror = () => { img.style.visibility = 'hidden'; };
+    const body = document.createElement('div'); body.className = 'tilebody';
+    const name = document.createElement('h3'); name.textContent = item.title || 'Untitled';
+    const meta = document.createElement('div'); meta.className = 'tilemeta'; meta.innerHTML = '<span>' + escapeText((item.date || '').slice(0,4) || item.kind || '') + '</span><span>' + (item.rating ? '★ ' + Number(item.rating).toFixed(1) : escapeText(item.source || '')) + '</span>';
+    body.append(name, meta); card.append(img, body);
+    card.addEventListener('click', () => openDetail(item));
+    card.addEventListener('keydown', e => { if (e.key === 'Enter') openDetail(item); });
+    root.append(card);
+  });
+}
+async function loadTrending() {
+  const type = $('catalogType').value;
+  $('catalog').innerHTML = '<div class="empty">Loading catalog…</div>';
+  try {
+    const data = await api('/api/catalog/trending?type=' + type);
+    renderCatalog(data.results, 'Trending ' + (type === 'tv' ? 'series' : type === 'anime' ? 'anime' : 'movies'), type === 'anime' ? 'Consumet' : 'TMDB');
+    if (!data.configured) toast('Configure ' + (type === 'anime' ? 'CONSUMET_API_URL' : 'TMDB_API_KEY') + ' to enable this catalog.');
+  } catch (error) { $('catalog').innerHTML = '<div class="empty">' + escapeText(error.message) + '</div>'; }
+}
+async function searchCatalog() {
+  const query = $('searchInput').value.trim();
+  if (query.length < 2) return toast('Enter at least two characters.');
+  const type = $('catalogType').value;
+  $('catalog').innerHTML = '<div class="empty">Searching…</div>';
+  try {
+    const data = await api('/api/catalog/search?q=' + encodeURIComponent(query) + '&type=' + type);
+    renderCatalog(data.results, 'Search results for “' + query + '”', type === 'anime' ? 'Consumet' : 'TMDB');
+    if (!data.configured) toast('This catalog provider is not configured yet.');
+  } catch (error) { $('catalog').innerHTML = '<div class="empty">' + escapeText(error.message) + '</div>'; }
+}
+function openDetail(item) {
+  currentDetail = item;
+  $('detailHeading').textContent = item.title || 'Title details';
+  $('detailBody').innerHTML = '<div class="detail">' +
+    (item.poster ? '<img src="' + escapeText(item.poster) + '" alt="">' : '<div class="poster"></div>') +
+    '<div><h3>' + escapeText(item.title) + '</h3><div class="detailmeta">' + escapeText(item.date || '') + ' · ' + escapeText(item.source || '') + (item.rating ? ' · ★ ' + Number(item.rating).toFixed(1) : '') + '</div><p>' + escapeText(item.overview || 'No description available.') + '</p><p class="muted">Catalog entries are metadata, not playable streams. Add an authorized source URL below to watch.</p></div></div>' +
+    '<div class="detailactions"><input id="detailSource" placeholder="Authorized HTTPS video source (MP4 / WebM / HLS)"><button class="primary" id="detailPlay">Play now</button><button id="detailQueue">Add to queue</button></div>';
+  $('detailModal').classList.add('open');
+  $('detailPlay').onclick = () => useDetailSource(false);
+  $('detailQueue').onclick = () => useDetailSource(true);
+}
+function useDetailSource(queue) {
+  const url = safeUrl($('detailSource').value.trim());
+  if (!url) return toast('Enter a valid HTTPS source you are authorized to use.');
+  if (!room) return toast('Create or join a room first.');
+  const media = { id: String(currentDetail.id || Date.now()), title: currentDetail.title, url, poster: currentDetail.poster, kind: 'video' };
+  send(queue ? 'queue:add' : 'load', queue ? { media } : { media });
+  if (!queue) $('detailModal').classList.remove('open');
+  else $('detailModal').classList.remove('open');
+}
+function updateTime() {
+  const v = $('video');
+  const duration = Number.isFinite(v.duration) ? v.duration : 0;
+  const current = Number(v.currentTime) || 0;
+  $('timeLabel').textContent = mediaTime(current) + ' / ' + mediaTime(duration);
+  if (!seekDragging) $('seek').value = duration ? String(Math.min(1000, current / duration * 1000)) : '0';
+}
+async function boot() {
+  try {
+    const clientId = params.get('client_id') || '';
+    if (!clientId) throw new Error('Missing Discord client_id. Configure the Activity URL in Developer Portal.');
+    sdk = new DiscordSDK(clientId);
+    await sdk.ready();
+    const expectedState = cryptoRandom();
+    const auth = await sdk.commands.authorize({ client_id: sdk.clientId, response_type: 'code', state: expectedState, prompt: 'none', scope: ['identify'] });
+    if (auth.state !== expectedState) throw new Error('Discord authorization state did not match.');
+    const exchange = await fetch('/api/auth/exchange', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: auth.code, state: auth.state }) });
+    const authData = await exchange.json();
+    if (!exchange.ok) throw new Error(authData.error || 'Discord authorization failed.');
+    accessToken = authData.access_token;
+    const authenticated = await sdk.commands.authenticate({ access_token: accessToken });
+    user = authenticated.user;
+    $('userName').textContent = user.global_name || user.username;
+    if (user.avatar) $('userAvatar').src = 'https://cdn.discordapp.com/avatars/' + user.id + '/' + user.avatar + '.png?size=64';
+    status('Discord connected', 'ok');
+    if (params.get('room')) await enterRoom(params.get('room'), params.get('invite') || '');
+    else { setSection('home'); await loadTrending(); }
+  } catch (error) {
+    status('Not connected', 'bad');
+    $('catalog').innerHTML = '<div class="empty">' + escapeText(error.message) + '<br><br>Launch this page inside the configured Discord Activity.</div>';
+    toast(error.message);
+  }
+}
+function cryptoRandom() {
+  const bytes = new Uint8Array(16); crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => b.toString(16).padStart(2,'0')).join('');
+}
+document.querySelectorAll('[data-nav]').forEach(btn => btn.onclick = () => setSection(btn.dataset.nav));
+document.querySelectorAll('[data-tab]').forEach(btn => btn.onclick = () => {
+  currentTab = btn.dataset.tab;
+  document.querySelectorAll('[data-tab]').forEach(x => x.classList.toggle('active', x === btn));
+  ['queue','people','chat'].forEach(name => $(name + 'Tab').classList.toggle('hidden', name !== currentTab));
+  $('chatForm').classList.toggle('hidden', currentTab !== 'chat');
+});
+$('startRoom').onclick = () => $('roomModal').classList.add('open');
+$('joinRoom').onclick = () => $('joinModal').classList.add('open');
+$('closeRoomModal').onclick = () => $('roomModal').classList.remove('open');
+$('closeJoinModal').onclick = () => $('joinModal').classList.remove('open');
+$('closeDetail').onclick = () => $('detailModal').classList.remove('open');
+$('createRoomConfirm').onclick = () => createRoom().catch(e => toast(e.message));
+$('joinConfirm').onclick = () => {
+  try { const u = new URL($('inviteInput').value.trim()); const rid = u.searchParams.get('room'), inv = u.searchParams.get('invite'); if (!rid) throw new Error('The invite link is invalid.'); enterRoom(rid, inv || '').catch(e => toast(e.message)); $('joinModal').classList.remove('open'); }
+  catch (e) { toast(e.message); }
 };
-$('query').addEventListener('keydown',e=>{if(e.key==='Enter')$('search').click();});
-$('load').onclick=()=>{
-  const mediaUrl=$('mediaUrl').value.trim();
-  if(!mediaUrl.startsWith('https://')){$('connection').textContent='A direct HTTPS media URL is required';return;}
-  send('load',{mediaUrl,title:'Shared video'});
+$('searchButton').onclick = searchCatalog;
+$('searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') searchCatalog(); });
+$('trendingButton').onclick = loadTrending;
+$('catalogType').onchange = loadTrending;
+$('copyInvite').onclick = async () => { try { await navigator.clipboard.writeText(inviteUrl()); toast('Invite link copied.'); } catch { toast(inviteUrl()); } };
+$('leaveRoom').onclick = () => { if (socket) socket.close(1000, 'Left room'); room = null; roomConnected = false; setSection('home'); loadTrending(); };
+$('loadMedia').onclick = () => {
+  const url = safeUrl($('mediaUrl').value.trim());
+  if (!url) return toast('Use a valid HTTPS media URL.');
+  send('load', { media: { id: String(Date.now()), title: 'Shared video', url, kind: 'video' } });
 };
-$('sync').onclick=()=>send('seek',{currentTime:$('video').currentTime});
-$('video').addEventListener('play',()=>{if(Date.now()-lastRemoteUpdate>1200)send('play');});
-$('video').addEventListener('pause',()=>{if(Date.now()-lastRemoteUpdate>1200)send('pause');});
-$('video').addEventListener('seeked',()=>{if(Date.now()-lastRemoteUpdate>1200)send('seek',{currentTime:$('video').currentTime});});
-connectDiscord();
+$('addSubtitle').onclick = () => {
+  const url = safeUrl($('subtitleUrl').value.trim());
+  if (!url || !/\.vtt(?:$|\?)/i.test(url)) return toast('Add a valid HTTPS WebVTT (.vtt) subtitle URL.');
+  $('video').querySelectorAll('track').forEach(x => x.remove());
+  const track = document.createElement('track'); track.kind = 'subtitles'; track.label = 'Subtitles'; track.srclang = 'en'; track.src = url; track.default = true; $('video').append(track); toast('Subtitle track added on this device.');
+};
+$('playPause').onclick = () => send($('video').paused ? 'play' : 'pause');
+$('skipBack').onclick = () => send('seek', { currentTime: Math.max(0, $('video').currentTime - 10) });
+$('skipForward').onclick = () => send('seek', { currentTime: Math.min($('video').duration || 86400, $('video').currentTime + 10) });
+$('seek').onpointerdown = () => { seekDragging = true; };
+$('seek').onpointerup = () => { seekDragging = false; const duration = $('video').duration || 0; if (duration) send('seek', { currentTime: Number($('seek').value) / 1000 * duration }); };
+$('volume').oninput = () => { $('video').volume = Number($('volume').value); $('video').muted = false; };
+$('mute').onclick = () => { $('video').muted = !$('video').muted; $('mute').textContent = $('video').muted ? '×' : '◖'; };
+$('speed').onchange = () => { $('video').playbackRate = Number($('speed').value); };
+$('fullscreen').onclick = () => { const p = $('video').parentElement; if (document.fullscreenElement) document.exitFullscreen(); else p.requestFullscreen?.(); };
+$('pip').onclick = () => { if (document.pictureInPictureElement) document.exitPictureInPicture(); else $('video').requestPictureInPicture?.().catch(() => toast('Picture-in-picture is unavailable.')); };
+$('nextMedia').onclick = () => send('next');
+$('clearQueue').onclick = () => send('queue:clear');
+$('voteSkip').onclick = () => send('vote:skip');
+$('queueList').addEventListener('click', e => { const button = e.target.closest('[data-remove]'); if (button) send('queue:remove', { mediaId: button.dataset.remove }); });
+$('peopleList').addEventListener('click', e => { const button = e.target.closest('[data-host]'); if (button) send('host:transfer', { userId: button.dataset.host }); });
+$('chatForm').onsubmit = e => { e.preventDefault(); const message = $('chatInput').value.trim(); if (!message) return; send('chat:send', { message }); $('chatInput').value = ''; };
+document.querySelectorAll('[data-reaction]').forEach(btn => btn.onclick = () => send('reaction', { emoji: btn.dataset.reaction }));
+$('video').addEventListener('timeupdate', updateTime);
+$('video').addEventListener('durationchange', updateTime);
+$('video').addEventListener('ended', () => { if (room && room.hostId === user.id) send('next'); });
+$('video').addEventListener('error', () => { if ($('video').currentSrc) toast('Playback error. Check source availability, codec and CORS.'); });
+window.addEventListener('online', () => { if (room && !roomConnected) connectSocket(); });
+boot();
 </script>
 </body></html>
