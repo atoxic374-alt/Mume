@@ -157,13 +157,16 @@ function applyRoomState(nextRoom) {
   $('roomName').textContent = room.name || 'Watch room';
   $('hostBadge').textContent = room.hostId === user.id ? 'HOST' : (room.ownerId === user.id ? 'OWNER' : 'GUEST');
   $('memberCount').textContent = (room.participants || []).length + ' watching';
+  const canHost = room.hostId === user.id || room.ownerId === user.id;
+  ['settingChat','settingQueue','settingVote','settingSync','settingLoop','settingPublic','settingRoomName','saveSettings'].forEach(key => { $(key).disabled = !canHost; });
+  $('chatForm').classList.toggle('hidden', currentTab !== 'chat' || !room.settings.allowChat);
   $('peopleList').innerHTML = (room.participants || []).map(person =>
     '<div class="participant"><img class="avatar" src="' + (person.avatar ? 'https://cdn.discordapp.com/avatars/' + encodeURIComponent(person.id) + '/' + encodeURIComponent(person.avatar) + '.png?size=64' : '') + '" alt=""><span>' + escapeText(person.globalName || person.username) + '</span><small>' + (person.id === room.hostId ? 'HOST' : '') + '</small>' +
     (room.hostId === user.id && person.id !== user.id ? '<button class="small" data-host="' + escapeText(person.id) + '">Make host</button>' : '') + '</div>'
   ).join('') || '<div class="muted">No one here yet.</div>';
   $('queueList').innerHTML = (room.queue || []).map((item, index) =>
     '<div class="queueitem">' + (item.poster ? '<img src="' + escapeText(item.poster) + '" alt="">' : '<div class="poster" style="width:38px;height:52px"></div>') +
-    '<div><strong>' + escapeText(item.title) + '</strong><small>Added to queue · ' + (index + 1) + '</small></div><button data-remove="' + escapeText(item.id) + '">×</button></div>'
+    '<div><strong>' + escapeText(item.title) + '</strong><small>Added to queue · ' + (index + 1) + '</small></div>' + (canHost ? '<button data-up="' + index + '">↑</button><button data-down="' + index + '">↓</button>' : '') + '<button data-remove="' + escapeText(item.id) + '">×</button></div>'
   ).join('') || '<div class="muted">Your queue is empty.</div>';
   $('chatList').innerHTML = (room.chat || []).map(message => '<div class="chatmsg"><b>' + escapeText(message.username) + '</b><time>' + new Date(message.at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) + '</time><div>' + escapeText(message.message) + '</div></div>').join('');
   $('chatList').scrollTop = $('chatList').scrollHeight;
@@ -349,7 +352,7 @@ document.querySelectorAll('[data-tab]').forEach(btn => btn.onclick = () => {
   currentTab = btn.dataset.tab;
   document.querySelectorAll('[data-tab]').forEach(x => x.classList.toggle('active', x === btn));
   ['queue','people','chat','settings'].forEach(name => $(name + 'Tab').classList.toggle('hidden', name !== currentTab));
-  $('chatForm').classList.toggle('hidden', currentTab !== 'chat');
+  $('chatForm').classList.toggle('hidden', currentTab !== 'chat' || !room || !room.settings.allowChat);
 });
 $('startRoom').onclick = () => $('roomModal').classList.add('open');
 $('joinRoom').onclick = () => $('joinModal').classList.add('open');
@@ -392,7 +395,7 @@ $('pip').onclick = () => { if (document.pictureInPictureElement) document.exitPi
 $('nextMedia').onclick = () => send('next');
 $('clearQueue').onclick = () => send('queue:clear');
 $('voteSkip').onclick = () => send('vote:skip');
-$('queueList').addEventListener('click', e => { const button = e.target.closest('[data-remove]'); if (button) send('queue:remove', { mediaId: button.dataset.remove }); });
+$('queueList').addEventListener('click', e => { const remove = e.target.closest('[data-remove]'); if (remove) return send('queue:remove', { mediaId: remove.dataset.remove }); const up = e.target.closest('[data-up]'); if (up && Number(up.dataset.up) > 0) return send('queue:move', { fromIndex: Number(up.dataset.up), toIndex: Number(up.dataset.up) - 1 }); const down = e.target.closest('[data-down]'); if (down && room && Number(down.dataset.down) < room.queue.length - 1) return send('queue:move', { fromIndex: Number(down.dataset.down), toIndex: Number(down.dataset.down) + 1 }); });
 $('peopleList').addEventListener('click', e => { const button = e.target.closest('[data-host]'); if (button) send('host:transfer', { userId: button.dataset.host }); });
 $('chatForm').onsubmit = e => { e.preventDefault(); const message = $('chatInput').value.trim(); if (!message) return; send('chat:send', { message }); $('chatInput').value = ''; };
 document.querySelectorAll('[data-reaction]').forEach(btn => btn.onclick = () => send('reaction', { emoji: btn.dataset.reaction }));
