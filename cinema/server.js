@@ -24,7 +24,6 @@ const MAX_ROOMS = Number(process.env.CINEMA_MAX_ROOMS || 500);
 const MAX_QUEUE = 100;
 const MAX_CHAT = 100;
 const ROOM_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const INSTANCE_ID = id(8);
 const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL, max: Number(process.env.CINEMA_DB_POOL_SIZE || 5), idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000, ssl: process.env.PGSSLMODE === 'require' ? { rejectUnauthorized: process.env.PGSSL_REJECT_UNAUTHORIZED !== 'false' } : undefined }) : null;
 const rooms = new Map();
 const dirtyRooms = new Set();
@@ -337,6 +336,7 @@ function processRoomAction(room, user, msg) {
     for (const key of ['allowChat', 'allowQueue', 'syncEnabled', 'voteSkip']) if (typeof settings[key] === 'boolean') room.settings[key] = settings[key];
     if (typeof settings.loop === 'boolean') room.state.loop = settings.loop;
     if (typeof settings.name === 'string' && text(settings.name, 48)) room.name = text(settings.name, 48);
+    if (settings.visibility === 'public' || settings.visibility === 'private') room.visibility = settings.visibility;
   } else if (action === 'chat:send') {
     if (!room.settings.allowChat) throw Object.assign(new Error('Chat is disabled'), { status: 403 });
     const message = text(msg.message, 500);
