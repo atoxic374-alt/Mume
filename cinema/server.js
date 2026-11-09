@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const { URL } = require('node:url');
 const axios = require('axios');
 const WebSocket = require('ws');
+const { Pool } = require('pg');
 
 const PORT = Number(process.env.CINEMA_PORT || 3010);
 const HOST = process.env.CINEMA_HOST || '0.0.0.0';
@@ -23,6 +24,8 @@ const MAX_ROOMS = Number(process.env.CINEMA_MAX_ROOMS || 500);
 const MAX_QUEUE = 100;
 const MAX_CHAT = 100;
 const ROOM_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const INSTANCE_ID = id(8);
+const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL, max: Number(process.env.CINEMA_DB_POOL_SIZE || 5), idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000, ssl: process.env.PGSSLMODE === 'require' ? { rejectUnauthorized: process.env.PGSSL_REJECT_UNAUTHORIZED !== 'false' } : undefined }) : null;
 const rooms = new Map();
 const connections = new Map();
 const tokenCache = new Map();
@@ -157,7 +160,13 @@ function safeImage(value) {
     return u.protocol === 'https:' && !isPrivateAddress(u.hostname) ? u.href.slice(0, 2048) : null;
   } catch { return null; }
 }
-function loadRooms() {
+async function loadRooms() {
+  if (pool) {
+    await pool.query('CREATE TABLE IF NOT EXISTS cinema_rooms (id VARCHAR(32) PRIMARY KEY, data JSONB NOT NULL, updated_at BIGINT NOT NULL)');
+    const result = await pool.query('SELECT data FROM cinema_rooms WHERE updated_at > $1', [now() - ROOM_TTL_MS]);
+    for (const row of result.rows) { const room = normalizeRoom(row.data); if (room) rooms.set(room.id, room); }
+    return;
+  }
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     const parsed = JSON.parse(fs.readFileSync(ROOM_FILE, 'utf8'));
@@ -179,10 +188,21 @@ async function saveRooms() {
   isSaving = true;
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    const snapshot = JSON.stringify([...rooms.values()].map(room => Object.assign({}, room, { participants: undefined })));
-    const temp = ROOM_FILE + '.' + process.pid + '.tmp';
-    await fs.promises.writeFile(temp, snapshot, { mode: 0o600 });
-    await fs.promises.rename(temp, ROOM_FILE);
+    const snapshot = [...rooms.values()].map(room => Object.assign({}, room, { participants: undefined }));
+    if (pool) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        for (const room of snapshot) await client.query('INSERT INTO cinema_rooms (id, data, updated_at) VALUES ($1, $2::jsonb, $3) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at', [room.id, JSON.stringify(room), room.updatedAt]);
+        await client.query('DELETE FROM cinema_rooms WHERE updated_at < $1', [now() - ROOM_TTL_MS]);
+        await client.query('COMMIT');
+      } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; }
+      finally { client.release(); }
+    } else {
+      const temp = ROOM_FILE + '.' + process.pid + '.tmp';
+      await fs.promises.writeFile(temp, JSON.stringify(snapshot), { mode: 0o600 });
+      await fs.promises.rename(temp, ROOM_FILE);
+    }
   } finally {
     isSaving = false;
     if (saveAgain) { saveAgain = false; scheduleSave(); }
@@ -369,7 +389,8 @@ async function catalogTrending(type) {
   })), configured: true };
 }
 async function handleApi(req, res, url) {
-  if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true, service: 'mume-cinema', rooms: rooms.size, uptime: Math.floor(process.uptime()) });
+  if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true, service: 'mume-cinema', rooms: rooms.size, uptime: Math.floor(process.uptime()), storage: pool ? 'postgres' : 'local-json' });
+  if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { clientId: CLIENT_ID, catalogs: { tmdb: Boolean(TMDB_API_KEY), consumet: Boolean(CONSUMET_API_URL) } });
   if (req.method === 'POST' && url.pathname === '/api/auth/exchange') {
     const data = await body(req, 8192);
     if (!data.code || typeof data.code !== 'string' || !data.state || typeof data.state !== 'string') return json(res, 400, { error: 'OAuth code and state are required' });
@@ -415,7 +436,6 @@ async function handleApi(req, res, url) {
   }
   return false;
 }
-loadRooms();
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
   const ip = req.socket.remoteAddress || 'unknown';
@@ -513,9 +533,14 @@ async function shutdown() {
   clearInterval(heartbeat); clearInterval(cleanup);
   for (const ws of wss.clients) ws.close(1001, 'Server shutting down');
   await saveRooms().catch(() => {});
-  server.close(() => process.exit(0));
+  server.close(() => { if (pool) pool.end().finally(() => process.exit(0)); else process.exit(0); });
   setTimeout(() => process.exit(0), 5000).unref?.();
 }
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
-server.listen(PORT, HOST, () => console.log('[Cinema] listening on ' + HOST + ':' + PORT));
+loadRooms().then(() => {
+  server.listen(PORT, HOST, () => console.log('[Cinema] listening on ' + HOST + ':' + PORT + ' · storage=' + (pool ? 'postgres' : 'local-json')));
+}).catch(error => {
+  console.error('[Cinema] startup storage error:', error.message);
+  process.exit(1);
+});
