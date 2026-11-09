@@ -6,3 +6,9 @@ settings/bots.json
 settings/backup/
 settings/config.json
 music-updated.rar
+
+# Cinema runtime data and credentials
+cinema/data/
+.env
+.env.*
+!.env.example

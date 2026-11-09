@@ -1,0 +1,12 @@
+node_modules
+.git
+.env
+.env.*
+!.env.example
+settings/tokens.json
+settings/bots.json
+settings/config.json
+settings/backup
+cinema/data
+*.log
+npm-debug.log*

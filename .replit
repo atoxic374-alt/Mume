@@ -57,3 +57,19 @@ externalPort = 8000
 [[ports]]
 localPort = 23636
 externalPort = 80
+
+[[workflows.workflow]]
+name = "Start cinema"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run start:cinema"
+waitForPort = 3010
+
+[[ports]]
+localPort = 3010
+externalPort = 3010
