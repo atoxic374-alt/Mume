@@ -36,7 +36,7 @@ footer{color:var(--muted);font-size:12px;margin-top:25px}
 <script type="module">
 import { DiscordSDK } from 'https://cdn.jsdelivr.net/npm/@discord/embedded-app-sdk@latest/+esm';
 const $ = id => document.getElementById(id);
-let user = null, socket = null, roomId = null, lastRemoteUpdate = 0;
+let user = null, accessToken = null, socket = null, roomId = null, lastRemoteUpdate = 0;
 const sdk = new DiscordSDK(new URLSearchParams(location.search).get('client_id') || '');
 async function connectDiscord(){
   try{
@@ -45,6 +45,7 @@ async function connectDiscord(){
     const response = await fetch('/api/auth/exchange',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code:auth.code})});
     if(!response.ok) throw new Error('Discord sign-in could not be completed');
     const data = await response.json();
+    accessToken = data.access_token;
     const authenticated = await sdk.commands.authenticate({access_token:data.access_token});
     user = authenticated.user;
     $('connection').textContent = 'Connected · '+(user.global_name || user.username);
@@ -55,7 +56,7 @@ async function connectDiscord(){
 }
 function connectRoom(){
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  socket = new WebSocket(protocol+'//'+location.host+'/ws?room='+encodeURIComponent(roomId));
+  socket = new WebSocket(protocol+'//'+location.host+'/ws?room='+encodeURIComponent(roomId)+'&token='+encodeURIComponent(accessToken));
   socket.onmessage = event => {
     const msg=JSON.parse(event.data);
     if(msg.type==='error'){$('connection').textContent=msg.message;return;}
@@ -63,7 +64,7 @@ function connectRoom(){
   };
   socket.onclose=()=>{$('connection').textContent='Room disconnected · refresh to reconnect';};
 }
-function send(action, extra={}){if(socket?.readyState===WebSocket.OPEN && user)socket.send(JSON.stringify({action,userId:user.id,...extra}));}
+function send(action, extra={}){if(socket?.readyState===WebSocket.OPEN && user)socket.send(JSON.stringify({action,...extra}));}
 function applyState(state){
   lastRemoteUpdate=Date.now();
   $('now').textContent=state.title||'Nothing playing';
