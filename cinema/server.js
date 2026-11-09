@@ -143,7 +143,21 @@ server.on('upgrade', (req, socket, head) => {
   if (url.pathname !== '/ws' || !/^[a-zA-Z0-9_-]{3,48}$/.test(url.searchParams.get('room') || '')) return socket.destroy();
   wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req, url.searchParams.get('room')));
 });
-wss.on('connection', (ws, req, roomId) => {
+wss.on('connection', async (ws, req, roomId) => {
+  const requestUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  const accessToken = requestUrl.searchParams.get('token') || '';
+  let userId;
+  try {
+    if (!accessToken) throw new Error('Missing token');
+    const identity = await axios.get('https://discord.com/api/users/@me', {
+      headers: { authorization: `Bearer ${accessToken}` }, timeout: 8_000
+    });
+    userId = safeText(identity.data?.id, 32);
+    if (!userId) throw new Error('Invalid identity');
+  } catch {
+    ws.close(1008, 'Discord authentication required');
+    return;
+  }
   const room = getRoom(roomId);
   room.clients.add(ws);
   ws.send(JSON.stringify({ type: 'state', state: room.state }));
@@ -151,8 +165,6 @@ wss.on('connection', (ws, req, roomId) => {
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
     if (!['play', 'pause', 'seek', 'load'].includes(msg.action)) return;
-    const userId = safeText(msg.userId, 32);
-    if (!userId) return;
     const state = room.state;
     if (state.hostId && state.hostId !== userId) {
       ws.send(JSON.stringify({ type: 'error', message: 'Only the room host can control playback.' }));
