@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mume Cinema</title>
+<style>
+:root{color-scheme:dark;--bg:#090b10;--panel:#141821;--muted:#929bad;--accent:#8b9bff;--line:#252c39}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 15% -10%,#252c50 0,transparent 42%),var(--bg);color:#f4f6fb;font:15px/1.5 Inter,system-ui,sans-serif}
+header{height:70px;display:flex;align-items:center;justify-content:space-between;padding:0 4vw;border-bottom:1px solid var(--line);background:#090b10d9;position:sticky;top:0;z-index:2}
+.logo{font-size:22px;font-weight:850;letter-spacing:-1px}.logo span{color:var(--accent)}.status{color:var(--muted);font-size:12px}
+main{max-width:1240px;margin:auto;padding:30px 4vw 60px}.hero{padding:22px 0 28px}.eyebrow{color:var(--accent);font-weight:700;text-transform:uppercase;letter-spacing:2px;font-size:11px}
+h1{font-size:clamp(28px,5vw,48px);line-height:1.08;margin:8px 0}.sub{color:var(--muted);max-width:650px}
+.controls{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0}input,select,button{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:#fff;padding:12px 14px;font:inherit}input{min-width:220px;flex:1}button{cursor:pointer}button.primary{background:var(--accent);color:#0b1023;border:0;font-weight:800}button:disabled{opacity:.5;cursor:not-allowed}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:16px}.item{background:var(--panel);border:1px solid var(--line);border-radius:13px;overflow:hidden}.poster{width:100%;aspect-ratio:2/3;object-fit:cover;background:#202636}.item h3{font-size:14px;margin:10px 11px 4px}.item p{margin:0 11px 12px;color:var(--muted);font-size:11px}
+.player{margin-top:30px;background:#050608;border:1px solid var(--line);border-radius:16px;overflow:hidden}.player video{display:block;width:100%;max-height:62vh;background:#000}.playerbar{padding:13px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}.playerbar strong{margin-right:auto}.hint{font-size:12px;color:var(--muted)}
+footer{color:var(--muted);font-size:12px;margin-top:25px}
+@media(max-width:600px){header{padding:0 18px}main{padding:20px 18px 40px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+</head>
+<body>
+<header><div class="logo">MUME <span>CINEMA</span></div><div class="status" id="connection">Connecting to Discord…</div></header>
+<main>
+<section class="hero"><div class="eyebrow">Watch together</div><h1>Your room. Your screen.</h1><p class="sub">Discover titles, open a shared room, and synchronize playback with friends. Catalog entries are metadata; playback requires a direct HTTPS video source you have permission to use.</p></section>
+<section>
+<div class="controls">
+<select id="kind" aria-label="Catalog"><option value="movie">Movies</option><option value="tv">Series</option><option value="anime">Anime · Consumet</option></select>
+<input id="query" placeholder="Search titles…" maxlength="100"><button class="primary" id="search">Search</button>
+</div><div id="results" class="grid"></div>
+</section>
+<section class="player">
+<video id="video" controls playsinline></video>
+<div class="playerbar"><strong id="now">Nothing playing</strong><input id="mediaUrl" placeholder="Direct HTTPS video URL (authorized source)" aria-label="Video URL"><button class="primary" id="load">Load</button><button id="sync">Sync</button></div>
+</section>
+<footer>Room <span id="roomLabel">—</span> · Playback controls are shared with connected room members. The first participant becomes host.</footer>
+</main>
+<script type="module">
+import { DiscordSDK } from 'https://cdn.jsdelivr.net/npm/@discord/embedded-app-sdk@latest/+esm';
+const $ = id => document.getElementById(id);
+let user = null, socket = null, roomId = null, lastRemoteUpdate = 0;
+const sdk = new DiscordSDK(new URLSearchParams(location.search).get('client_id') || '');
+async function connectDiscord(){
+  try{
+    await sdk.ready();
+    const auth = await sdk.commands.authorize({client_id:sdk.clientId,response_type:'code',state:'mume-cinema',prompt:'none',scope:['identify']});
+    const response = await fetch('/api/auth/exchange',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code:auth.code})});
+    if(!response.ok) throw new Error('Discord sign-in could not be completed');
+    const data = await response.json();
+    const authenticated = await sdk.commands.authenticate({access_token:data.access_token});
+    user = authenticated.user;
+    $('connection').textContent = 'Connected · '+(user.global_name || user.username);
+    roomId = new URLSearchParams(location.search).get('room') || 'lobby';
+    $('roomLabel').textContent = roomId;
+    connectRoom();
+  }catch(error){$('connection').textContent='Open this page inside the Discord Activity';console.warn(error);}
+}
+function connectRoom(){
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  socket = new WebSocket(protocol+'//'+location.host+'/ws?room='+encodeURIComponent(roomId));
+  socket.onmessage = event => {
+    const msg=JSON.parse(event.data);
+    if(msg.type==='error'){$('connection').textContent=msg.message;return;}
+    if(msg.type==='state') applyState(msg.state);
+  };
+  socket.onclose=()=>{$('connection').textContent='Room disconnected · refresh to reconnect';};
+}
+function send(action, extra={}){if(socket?.readyState===WebSocket.OPEN && user)socket.send(JSON.stringify({action,userId:user.id,...extra}));}
+function applyState(state){
+  lastRemoteUpdate=Date.now();
+  $('now').textContent=state.title||'Nothing playing';
+  if(state.mediaUrl && $('video').src!==state.mediaUrl){$('video').src=state.mediaUrl;}
+  if(Number.isFinite(state.currentTime) && Math.abs(($('video').currentTime||0)-state.currentTime)>2){$('video').currentTime=state.currentTime;}
+  if(state.status==='playing')$('video').play().catch(()=>{});
+  else $('video').pause();
+}
+$('search').onclick=async()=>{
+  const q=$('query').value.trim();if(q.length<2)return;
+  $('results').textContent='Searching…';
+  try{
+    const r=await fetch('/api/search?q='+encodeURIComponent(q)+'&type='+encodeURIComponent($('kind').value));
+    const data=await r.json();if(!r.ok)throw new Error(data.error||'Search failed');
+    $('results').replaceChildren();
+    for(const item of data.results||[]){
+      const card=document.createElement('article');card.className='item';
+      const img=document.createElement('img');img.className='poster';img.alt='';img.src=item.image||'';img.loading='lazy';
+      const title=document.createElement('h3');title.textContent=item.title;
+      const meta=document.createElement('p');meta.textContent=(item.releaseDate||'')+' · '+item.source+' · metadata';
+      card.append(img,title,meta);$('results').append(card);
+    }
+    if(!data.results?.length)$('results').textContent='No catalog results. Check the configured provider.';
+  }catch(e){$('results').textContent=e.message;}
+};
+$('query').addEventListener('keydown',e=>{if(e.key==='Enter')$('search').click();});
+$('load').onclick=()=>{
+  const mediaUrl=$('mediaUrl').value.trim();
+  if(!mediaUrl.startsWith('https://')){$('connection').textContent='A direct HTTPS media URL is required';return;}
+  send('load',{mediaUrl,title:'Shared video'});
+};
+$('sync').onclick=()=>send('seek',{currentTime:$('video').currentTime});
+$('video').addEventListener('play',()=>{if(Date.now()-lastRemoteUpdate>1200)send('play');});
+$('video').addEventListener('pause',()=>{if(Date.now()-lastRemoteUpdate>1200)send('pause');});
+$('video').addEventListener('seeked',()=>{if(Date.now()-lastRemoteUpdate>1200)send('seek',{currentTime:$('video').currentTime});});
+connectDiscord();
+</script>
+</body></html>
