@@ -91,6 +91,7 @@ main{max-width:1480px;margin:auto;padding:0 clamp(16px,4vw,60px) 70px}.hero{min-
     </div>
   </section>
 </main>
+<footer style="max-width:1480px;margin:0 auto;padding:0 clamp(16px,4vw,60px) 28px;color:#68758b;font-size:11px">This product uses the TMDB API but is not endorsed or certified by TMDB. Catalog information does not include streaming rights.</footer>
 <div class="modal" id="detailModal"><div class="modalcard"><div class="modalhead"><h2 id="detailHeading">Title details</h2><button class="iconbtn" id="closeDetail">×</button></div><div class="modalbody" id="detailBody"></div></div></div>
 <div class="modal" id="roomModal"><div class="modalcard"><div class="modalhead"><h2>Start a watch room</h2><button class="iconbtn" id="closeRoomModal">×</button></div><div class="modalbody"><label>Room name</label><div class="formrow"><input id="newRoomName" maxlength="48" value="Movie night"></div><label>Room access</label><div class="formrow"><select id="roomVisibility"><option value="private">Private · Invite link only</option><option value="public">Public · Anyone can join</option></select></div><button class="primary" id="createRoomConfirm">Create room</button></div></div></div>
 <div class="modal" id="joinModal"><div class="modalcard"><div class="modalhead"><h2>Join a watch room</h2><button class="iconbtn" id="closeJoinModal">×</button></div><div class="modalbody"><label>Paste the room invite link</label><div class="formrow"><input id="inviteInput" placeholder="https://…/?room=…&invite=…"></div><button class="primary" id="joinConfirm">Join room</button></div></div></div>
@@ -267,7 +268,8 @@ async function loadTrending() {
   $('catalog').innerHTML = '<div class="empty">Loading catalog…</div>';
   try {
     const data = await api('/api/catalog/trending?type=' + type);
-    renderCatalog(data.results, 'Trending ' + (type === 'tv' ? 'series' : type === 'anime' ? 'anime' : 'movies'), type === 'anime' ? 'Consumet' : 'TMDB');
+    if (type === 'anime') { $('catalogHeading').textContent = 'Discover anime'; $('sourcePill').textContent = 'Consumet'; $('catalog').innerHTML = '<div class="empty">Search the anime catalog to discover titles. Consumet trending is not provided by this integration.</div>'; return; }
+    renderCatalog(data.results, 'Trending ' + (type === 'tv' ? 'series' : 'movies'), 'TMDB');
     if (!data.configured) toast('Configure ' + (type === 'anime' ? 'CONSUMET_API_URL' : 'TMDB_API_KEY') + ' to enable this catalog.');
   } catch (error) { $('catalog').innerHTML = '<div class="empty">' + escapeText(error.message) + '</div>'; }
 }
