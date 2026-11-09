@@ -22,6 +22,10 @@ args = "Start application"
 task = "workflow.run"
 args = "Mockup Sandbox"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start cinema"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
