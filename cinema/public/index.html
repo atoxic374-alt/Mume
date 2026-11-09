@@ -94,8 +94,8 @@ main{max-width:1480px;margin:auto;padding:0 clamp(16px,4vw,60px) 70px}.hero{min-
 <div class="modal" id="joinModal"><div class="modalcard"><div class="modalhead"><h2>Join a watch room</h2><button class="iconbtn" id="closeJoinModal">×</button></div><div class="modalbody"><label>Paste the room invite link</label><div class="formrow"><input id="inviteInput" placeholder="https://…/?room=…&invite=…"></div><button class="primary" id="joinConfirm">Join room</button></div></div></div>
 <div class="toast" id="toast"></div>
 <script type="module">
-import { DiscordSDK } from 'https://cdn.jsdelivr.net/npm/@discord/embedded-app-sdk@latest/+esm';
-import Hls from 'https://cdn.jsdelivr.net/npm/hls.js@latest/+esm';
+import { DiscordSDK } from 'https://cdn.jsdelivr.net/npm/@discord/embedded-app-sdk@2.5.0/+esm';
+import Hls from 'https://cdn.jsdelivr.net/npm/hls.js@1.6.15/+esm';
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 let sdk, user = null, accessToken = null, socket = null, room = null, roomInvite = params.get('invite') || '';
@@ -303,8 +303,10 @@ function updateTime() {
 }
 async function boot() {
   try {
-    const clientId = params.get('client_id') || '';
-    if (!clientId) throw new Error('Missing Discord client_id. Configure the Activity URL in Developer Portal.');
+    const configResponse = await fetch('/api/config');
+    const publicConfig = await configResponse.json();
+    const clientId = params.get('client_id') || publicConfig.clientId || '';
+    if (!clientId) throw new Error('Set DISCORD_CLIENT_ID in the cinema service environment.');
     sdk = new DiscordSDK(clientId);
     await sdk.ready();
     const expectedState = cryptoRandom();
