@@ -123,6 +123,7 @@ function normalizeRoom(room) {
   if (!room || !room.id) return null;
   return {
     id: text(room.id, 32),
+    inviteCode: text(room.inviteCode || id(18), 64),
     name: text(room.name || 'Watch Party', 48),
     ownerId: String(room.ownerId || ''),
     hostId: String(room.hostId || room.ownerId || ''),
@@ -397,19 +398,19 @@ async function handleApi(req, res, url) {
     if (rooms.size >= MAX_ROOMS) return json(res, 503, { error: 'Room capacity reached' });
     const roomKey = id(9);
     const room = normalizeRoom({
-      id: roomKey, name: text(data.name || 'Watch Party', 48),
+      id: roomKey, inviteCode: id(18), name: text(data.name || 'Watch Party', 48),
       ownerId: user.id, hostId: user.id, visibility: data.visibility === 'public' ? 'public' : 'private',
       createdAt: now(), updatedAt: now()
     });
     rooms.set(roomKey, room); scheduleSave();
-    return json(res, 201, { room: roomSnapshot(room), invite: '/?room=' + roomKey });
+    return json(res, 201, { room: roomSnapshot(room), inviteCode: room.inviteCode, invite: '/?room=' + roomKey + '&invite=' + room.inviteCode });
   }
   const roomMatch = url.pathname.match(/^\/api\/rooms\/([a-zA-Z0-9_-]{5,32})$/);
   if (req.method === 'GET' && roomMatch) {
     const user = await requireUser(req);
     const room = rooms.get(roomMatch[1]);
     if (!room) return json(res, 404, { error: 'Room not found' });
-    if (room.visibility === 'private' && room.ownerId !== user.id && !(connections.get(room.id) || new Map()).has(user.id)) return json(res, 403, { error: 'This room is private. Ask the host for an invite.' });
+    if (room.visibility === 'private' && room.ownerId !== user.id && url.searchParams.get('invite') !== room.inviteCode && !(connections.get(room.id) || new Map()).has(user.id)) return json(res, 403, { error: 'This room is private. Ask the host for an invite.' });
     return json(res, 200, { room: roomSnapshot(room) });
   }
   return false;
@@ -464,7 +465,7 @@ wss.on('connection', (ws, roomKey) => {
         const user = await authenticateToken(msg.accessToken);
         ws.user = user; ws.authenticated = true; clearTimeout(authTimer);
         const room = getRoom(roomKey);
-        if (room.visibility === 'private' && room.ownerId && room.ownerId !== user.id && !(connections.get(room.id) || new Map()).has(user.id)) {
+        if (room.visibility === 'private' && room.ownerId && room.ownerId !== user.id && msg.inviteCode !== room.inviteCode && !(connections.get(room.id) || new Map()).has(user.id)) {
           ws.close(1008, 'Private room'); return;
         }
         addParticipant(room, user, ws);
