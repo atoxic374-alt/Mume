@@ -193,7 +193,7 @@ async function loadRooms() {
 }
 function scheduleSave() {
   if (saveTimer) return;
-  saveTimer = setTimeout(() => { saveTimer = null; saveRooms().catch(error => console.error('[Cinema] save failed:', error.message)); }, 300);
+  saveTimer = setTimeout(() => { saveTimer = null; saveRooms().catch(error => { console.error('[Cinema] save failed:', error.message); if (dirtyRooms.size) { const retry = setTimeout(scheduleSave, 3000); retry.unref?.(); } }); }, 300);
   saveTimer.unref?.();
 }
 async function saveRooms() {
@@ -293,7 +293,7 @@ function currentTime(state) {
 function processRoomAction(room, user, msg) {
   const action = text(msg.action, 32);
   const isHost = room.hostId === user.id || room.ownerId === user.id;
-  if (action === 'play' || action === 'pause' || action === 'seek' || action === 'load' || action === 'next' || action === 'host:transfer' || action === 'settings:update' || action === 'queue:clear' || action === 'queue:move') requireHost(room, user);
+  if (action === 'play' || action === 'pause' || action === 'seek' || action === 'load' || action === 'next' || action === 'host:transfer' || action === 'invite:rotate' || action === 'participant:kick' || action === 'settings:update' || action === 'queue:clear' || action === 'queue:move') requireHost(room, user);
   if (action === 'load') {
     const media = normalizeMedia(Object.assign({}, msg.media, { addedBy: user.id }));
     if (!media) throw Object.assign(new Error('This media URL is not allowed. Use an authorized HTTPS source.'), { status: 400 });
@@ -340,6 +340,16 @@ function processRoomAction(room, user, msg) {
       room.votes = [];
       return { notice: 'The room voted to skip.' };
     }
+  } else if (action === 'invite:rotate') {
+    room.inviteCode = id(18);
+    return { inviteCode: room.inviteCode };
+  } else if (action === 'participant:kick') {
+    const targetId = String(msg.userId || '');
+    if (!targetId || targetId === user.id || targetId === room.ownerId) throw Object.assign(new Error('This member cannot be removed'), { status: 400 });
+    const target = (connections.get(room.id) || new Map()).get(targetId);
+    if (!target) throw Object.assign(new Error('Member is no longer in this room'), { status: 404 });
+    target.ws.close(4003, 'Removed by room host');
+    return { notice: 'A participant was removed from the room.' };
   } else if (action === 'host:transfer') {
     const target = String(msg.userId || '');
     if (!(connections.get(room.id) || new Map()).has(target)) throw Object.assign(new Error('The selected member is not in this room'), { status: 404 });
@@ -459,6 +469,7 @@ async function handleApi(req, res, url) {
   }
   if (req.method === 'POST' && url.pathname === '/api/rooms') {
     const user = await requireUser(req);
+    if (!limited('room-create:' + user.id, 5, 60 * 60 * 1000)) return json(res, 429, { error: 'You have created too many rooms. Try again later.' });
     const data = await body(req, 8192);
     if (rooms.size >= MAX_ROOMS) return json(res, 503, { error: 'Room capacity reached' });
     const roomKey = id(9);
@@ -543,6 +554,7 @@ wss.on('connection', (ws, roomKey) => {
     if (!limited('ws-user:' + ws.user.id, 45, 10_000)) return send(ws, { type: 'error', message: 'Slow down before sending more actions.' });
     try {
       const result = processRoomAction(room, ws.user, msg);
+      if (result.inviteCode) send(ws, { type: 'room:invite', inviteCode: result.inviteCode });
       if (result.chat) broadcast(room, { type: 'chat:message', message: result.chat });
       else if (result.reaction) broadcast(room, { type: 'room:reaction', reaction: result.reaction });
       else if (result.notice) broadcast(room, { type: 'room:notice', message: result.notice });
