@@ -9,16 +9,17 @@ Mume Cinema is a standalone watch-party service for the Mume Discord application
 - TMDB trending/search metadata for movies and series.
 - Consumet anime search metadata through an instance you configure.
 - Private rooms with invite codes and public rooms.
-- Host/owner permissions, host handoff, participant presence and reconnect handling.
-- Shared play/pause/seek/load, bounded queue, remove-own-item rules, skip voting and next-item controls.
-- Room chat, emoji reactions, participant list, and room settings.
+- Host/owner permissions, host handoff, participant removal, invite rotation, participant presence and reconnect handling.
+- Shared play/pause/seek/load, drift correction, bounded/reorderable queue, remove-own-item rules, skip voting and next-item controls.
+- Room chat, emoji reactions, participant list, and host settings for chat, queue, sync, loop, visibility and room name.
+- Short-lived in-memory metadata cache and per-user catalog/room creation rate limits.
 - MP4/WebM and HLS playback, device-local volume/speed, fullscreen, picture-in-picture and WebVTT subtitles.
 - WebSocket heartbeat, bounded payloads, rate limits, authentication, validation and graceful shutdown.
 - PostgreSQL room persistence when DATABASE_URL is configured; otherwise atomic local JSON persistence.
 
 ## Start
 
-From the repository root run npm install, then npm run start:cinema. Set the variables in cinema/.env.example in your hosting environment. The service listens on CINEMA_HOST:CINEMA_PORT (default 0.0.0.0:3010). Health check: /health.
+From the repository root run npm install, then npm run start:cinema. The Replit Project workflow also starts the cinema service on port 3010 alongside the music bot. Set the variables in cinema/.env.example in your hosting environment. The service listens on CINEMA_HOST:CINEMA_PORT (default 0.0.0.0:3010). Health check: /health.
 
 ## Discord Developer Portal
 
