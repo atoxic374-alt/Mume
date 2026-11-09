@@ -323,8 +323,7 @@ async function boot() {
     await sdk.ready();
     const expectedState = cryptoRandom();
     const auth = await sdk.commands.authorize({ client_id: sdk.clientId, response_type: 'code', state: expectedState, prompt: 'none', scope: ['identify'] });
-    if (auth.state !== expectedState) throw new Error('Discord authorization state did not match.');
-    const exchange = await fetch('/api/auth/exchange', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: auth.code, state: auth.state }) });
+    const exchange = await fetch('/api/auth/exchange', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: auth.code, state: expectedState }) });
     const authData = await exchange.json();
     if (!exchange.ok) throw new Error(authData.error || 'Discord authorization failed.');
     accessToken = authData.access_token;
