@@ -72,6 +72,7 @@ main{max-width:1480px;margin:auto;padding:0 clamp(16px,4vw,60px) 70px}.hero{min-
           <span class="muted" id="timeLabel">00:00 / 00:00</span>
           <button class="iconbtn" id="mute" title="Mute">◖</button>
           <input id="volume" type="range" min="0" max="1" step=".05" value=".8" aria-label="Volume">
+          <select id="quality" aria-label="Video quality"><option value="-1">Auto quality</option></select>
           <select id="speed" aria-label="Playback speed"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
           <button class="iconbtn" id="fullscreen" title="Fullscreen">⛶</button>
         </div>
@@ -80,10 +81,11 @@ main{max-width:1480px;margin:auto;padding:0 clamp(16px,4vw,60px) 70px}.hero{min-
         <div class="reactionbar"><button data-reaction="👏">👏</button><button data-reaction="❤️">❤️</button><button data-reaction="😂">😂</button><button data-reaction="🔥">🔥</button><button data-reaction="😮">😮</button><button data-reaction="🎉">🎉</button><button id="voteSkip" class="small">Vote to skip</button></div>
       </div>
       <aside class="sidepanel">
-        <div class="tabs"><button class="active" data-tab="queue">Up next</button><button data-tab="people">People</button><button data-tab="chat">Chat</button></div>
+        <div class="tabs"><button class="active" data-tab="queue">Up next</button><button data-tab="people">People</button><button data-tab="chat">Chat</button><button data-tab="settings">Settings</button></div>
         <div class="tabcontent" id="queueTab"><div id="queueList" class="muted">Your queue is empty.</div><button id="nextMedia" class="small primary" style="margin-top:12px">Play next</button><button id="clearQueue" class="small" style="margin-top:12px">Clear queue</button></div>
         <div class="tabcontent hidden" id="peopleTab"><div id="peopleList" class="muted">No one here yet.</div></div>
         <div class="tabcontent hidden" id="chatTab"><div id="chatList" class="chatlist"></div></div>
+        <div class="tabcontent hidden" id="settingsTab"><div class="muted" style="margin-bottom:10px">Room controls · Host only</div><label class="participant"><span>Allow chat</span><input type="checkbox" id="settingChat" style="flex:0"></label><label class="participant"><span>Allow queue</span><input type="checkbox" id="settingQueue" style="flex:0"></label><label class="participant"><span>Skip voting</span><input type="checkbox" id="settingVote" style="flex:0"></label><label class="participant"><span>Loop current video</span><input type="checkbox" id="settingLoop" style="flex:0"></label><label class="participant"><span>Public room</span><input type="checkbox" id="settingPublic" style="flex:0"></label><button id="saveSettings" class="primary small" style="margin-top:12px">Save settings</button><div class="muted" style="font-size:10px;margin-top:8px">Changes apply to everyone in this room.</div></div>
         <form class="chatform hidden" id="chatForm"><input id="chatInput" maxlength="500" placeholder="Say something…"><button class="primary small">Send</button></form>
       </aside>
     </div>
@@ -142,6 +144,7 @@ function loadPlayerSource(media) {
   if (/\.m3u8(?:$|\?)/i.test(url)) {
     if (Hls.isSupported()) {
       hls = new Hls({ enableWorker: true, lowLatencyMode: true, maxBufferLength: 30, backBufferLength: 30 });
+      hls.on(Hls.Events.MANIFEST_PARSED, () => { $('quality').replaceChildren(new Option('Auto quality', '-1')); hls.levels.forEach((level, index) => $('quality').add(new Option((level.height || 'Level ' + index) + 'p', String(index)))); });
       hls.loadSource(url); hls.attachMedia(video);
       hls.on(Hls.Events.ERROR, (event, data) => { if (data.fatal) { toast('HLS playback failed. Check the source and CORS settings.'); hls.destroy(); hls = null; } });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) video.src = url;
@@ -212,8 +215,10 @@ function connectSocket() {
     if (message.type === 'error') { $('roomNotice').textContent = message.message; $('roomNotice').classList.add('error'); return; }
   };
   socket.onerror = () => status('Connection issue', 'bad');
-  socket.onclose = () => {
-    roomConnected = false; status('Reconnecting…', '');
+  socket.onclose = event => {
+    roomConnected = false;
+    if (event.code === 1008) { status('Session or invite rejected', 'bad'); $('roomNotice').textContent = 'Discord session expired or room invite is invalid. Reopen the Activity or ask for a fresh invite.'; return; }
+    status('Reconnecting…', '');
     if (room) {
       const delay = Math.min(15000, 700 * Math.pow(1.8, reconnectAttempts++));
       reconnectTimer = setTimeout(connectSocket, delay);
@@ -282,6 +287,13 @@ function openDetail(item) {
     '<div><h3>' + escapeText(item.title) + '</h3><div class="detailmeta">' + escapeText(item.date || '') + ' · ' + escapeText(item.source || '') + (item.rating ? ' · ★ ' + Number(item.rating).toFixed(1) : '') + '</div><p>' + escapeText(item.overview || 'No description available.') + '</p><p class="muted">Catalog entries are metadata, not playable streams. Add an authorized source URL below to watch.</p></div></div>' +
     '<div class="detailactions"><input id="detailSource" placeholder="Authorized HTTPS video source (MP4 / WebM / HLS)"><button class="primary" id="detailPlay">Play now</button><button id="detailQueue">Add to queue</button></div>';
   $('detailModal').classList.add('open');
+  api('/api/catalog/details?type=' + encodeURIComponent(item.kind || $('catalogType').value) + '&id=' + encodeURIComponent(item.id || '')).then(details => {
+    if (!currentDetail || currentDetail.id !== item.id) return;
+    const meta = $('detailBody').querySelector('.detailmeta');
+    const description = $('detailBody').querySelector('.detail p');
+    if (meta) meta.textContent = [details.releaseDate || item.date || '', (details.genres || []).join(' · '), details.runtime ? details.runtime + ' min' : '', details.totalEpisodes ? details.totalEpisodes + ' episodes' : ''].filter(Boolean).join(' · ');
+    if (description) description.textContent = details.overview || details.description || item.overview || 'No description available.';
+  }).catch(() => {});
   $('detailPlay').onclick = () => useDetailSource(false);
   $('detailQueue').onclick = () => useDetailSource(true);
 }
@@ -337,7 +349,7 @@ document.querySelectorAll('[data-nav]').forEach(btn => btn.onclick = () => setSe
 document.querySelectorAll('[data-tab]').forEach(btn => btn.onclick = () => {
   currentTab = btn.dataset.tab;
   document.querySelectorAll('[data-tab]').forEach(x => x.classList.toggle('active', x === btn));
-  ['queue','people','chat'].forEach(name => $(name + 'Tab').classList.toggle('hidden', name !== currentTab));
+  ['queue','people','chat','settings'].forEach(name => $(name + 'Tab').classList.toggle('hidden', name !== currentTab));
   $('chatForm').classList.toggle('hidden', currentTab !== 'chat');
 });
 $('startRoom').onclick = () => $('roomModal').classList.add('open');
@@ -375,6 +387,7 @@ $('seek').onpointerup = () => { seekDragging = false; const duration = $('video'
 $('volume').oninput = () => { $('video').volume = Number($('volume').value); $('video').muted = false; };
 $('mute').onclick = () => { $('video').muted = !$('video').muted; $('mute').textContent = $('video').muted ? '×' : '◖'; };
 $('speed').onchange = () => { $('video').playbackRate = Number($('speed').value); };
+$('quality').onchange = () => { if (hls) hls.currentLevel = Number($('quality').value); };
 $('fullscreen').onclick = () => { const p = $('video').parentElement; if (document.fullscreenElement) document.exitFullscreen(); else p.requestFullscreen?.(); };
 $('pip').onclick = () => { if (document.pictureInPictureElement) document.exitPictureInPicture(); else $('video').requestPictureInPicture?.().catch(() => toast('Picture-in-picture is unavailable.')); };
 $('nextMedia').onclick = () => send('next');
@@ -384,9 +397,10 @@ $('queueList').addEventListener('click', e => { const button = e.target.closest(
 $('peopleList').addEventListener('click', e => { const button = e.target.closest('[data-host]'); if (button) send('host:transfer', { userId: button.dataset.host }); });
 $('chatForm').onsubmit = e => { e.preventDefault(); const message = $('chatInput').value.trim(); if (!message) return; send('chat:send', { message }); $('chatInput').value = ''; };
 document.querySelectorAll('[data-reaction]').forEach(btn => btn.onclick = () => send('reaction', { emoji: btn.dataset.reaction }));
+$('saveSettings').onclick = () => send('settings:update', { settings: { allowChat: $('settingChat').checked, allowQueue: $('settingQueue').checked, voteSkip: $('settingVote').checked, loop: $('settingLoop').checked, visibility: $('settingPublic').checked ? 'public' : 'private' } });
 $('video').addEventListener('timeupdate', updateTime);
 $('video').addEventListener('durationchange', updateTime);
-$('video').addEventListener('ended', () => { if (room && room.hostId === user.id) send('next'); });
+$('video').addEventListener('ended', () => { if (room && room.hostId === user.id) { if (room.state && room.state.loop) { send('seek', { currentTime: 0 }); send('play'); } else send('next'); } });
 $('video').addEventListener('error', () => { if ($('video').currentSrc) toast('Playback error. Check source availability, codec and CORS.'); });
 window.addEventListener('online', () => { if (room && !roomConnected) connectSocket(); });
 boot();
