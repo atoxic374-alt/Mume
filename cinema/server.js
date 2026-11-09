@@ -29,6 +29,7 @@ const rooms = new Map();
 const dirtyRooms = new Set();
 const connections = new Map();
 const tokenCache = new Map();
+const catalogCache = new Map();
 const requestLimits = new Map();
 let saveTimer = null;
 let isSaving = false;
@@ -64,6 +65,18 @@ function validateMediaUrl(value) {
     if (u.href.length > 2048) return null;
     return u.href;
   } catch { return null; }
+}
+async function cached(key, ttlMs, loader) {
+  const current = catalogCache.get(key);
+  if (current && current.expiresAt > now()) return current.value;
+  const pending = Promise.resolve().then(loader);
+  catalogCache.set(key, { value: pending, expiresAt: now() + ttlMs });
+  try {
+    const value = await pending;
+    catalogCache.set(key, { value, expiresAt: now() + ttlMs });
+    if (catalogCache.size > 800) for (const [cacheKey, entry] of catalogCache) if (entry.expiresAt <= now()) catalogCache.delete(cacheKey);
+    return value;
+  } catch (error) { catalogCache.delete(key); throw error; }
 }
 function limited(key, max, windowMs) {
   const t = now();
@@ -418,7 +431,7 @@ async function handleApi(req, res, url) {
     const type = text(url.searchParams.get('type') || 'movie', 10);
     if (query.length < 2) return json(res, 400, { error: 'Enter at least two characters' });
     if (!['movie', 'tv', 'anime'].includes(type)) return json(res, 400, { error: 'Unsupported catalog type' });
-    const data = type === 'anime' ? await searchConsumet(query) : await searchTmdb(query, type);
+    const data = await cached('search:' + type + ':' + query.toLowerCase(), 5 * 60 * 1000, () => type === 'anime' ? searchConsumet(query) : searchTmdb(query, type));
     return json(res, 200, Object.assign(data, { note: 'Catalog metadata only. Playback requires an authorized media source.' }));
   }
   if (req.method === 'GET' && url.pathname === '/api/catalog/details') {
@@ -426,20 +439,23 @@ async function handleApi(req, res, url) {
     const type = text(url.searchParams.get('type'), 10);
     const itemId = text(url.searchParams.get('id'), 250);
     if (!itemId || !['movie', 'tv', 'anime'].includes(type)) return json(res, 400, { error: 'A valid catalog type and title ID are required' });
-    if (type === 'anime') {
-      if (!CONSUMET_API_URL) return json(res, 503, { error: 'Consumet is not configured' });
-      const data = await discordRequest(CONSUMET_API_URL + '/anime/gogoanime/info?id=' + encodeURIComponent(itemId));
-      return json(res, 200, { title: text(data.title, 180), description: text(data.description, 1200), image: safeImage(data.image), genres: Array.isArray(data.genres) ? data.genres.slice(0, 20).map(x => text(x, 40)) : [], totalEpisodes: Number(data.totalEpisodes || 0), status: text(data.status, 40), type });
-    }
-    if (!TMDB_API_KEY) return json(res, 503, { error: 'TMDB is not configured' });
-    const data = await discordRequest('https://api.themoviedb.org/3/' + type + '/' + encodeURIComponent(itemId), { params: { api_key: TMDB_API_KEY, language: 'en-US' } });
-    return json(res, 200, { title: text(data.title || data.name, 180), overview: text(data.overview, 1200), poster: data.poster_path ? 'https://image.tmdb.org/t/p/w500' + data.poster_path : null, backdrop: data.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + data.backdrop_path : null, genres: (data.genres || []).slice(0, 20).map(x => text(x.name, 40)), runtime: Number(data.runtime || 0), seasons: Number(data.number_of_seasons || 0), episodes: Number(data.number_of_episodes || 0), releaseDate: text(data.release_date || data.first_air_date, 20), type });
+    const details = await cached('details:' + type + ':' + itemId, 15 * 60 * 1000, async () => {
+      if (type === 'anime') {
+        if (!CONSUMET_API_URL) throw Object.assign(new Error('Consumet is not configured'), { status: 503 });
+        const data = await discordRequest(CONSUMET_API_URL + '/anime/gogoanime/info?id=' + encodeURIComponent(itemId));
+        return { title: text(data.title, 180), description: text(data.description, 1200), image: safeImage(data.image), genres: Array.isArray(data.genres) ? data.genres.slice(0, 20).map(x => text(x, 40)) : [], totalEpisodes: Number(data.totalEpisodes || 0), status: text(data.status, 40), type };
+      }
+      if (!TMDB_API_KEY) throw Object.assign(new Error('TMDB is not configured'), { status: 503 });
+      const data = await discordRequest('https://api.themoviedb.org/3/' + type + '/' + encodeURIComponent(itemId), { params: { api_key: TMDB_API_KEY, language: 'en-US' } });
+      return { title: text(data.title || data.name, 180), overview: text(data.overview, 1200), poster: data.poster_path ? 'https://image.tmdb.org/t/p/w500' + data.poster_path : null, backdrop: data.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + data.backdrop_path : null, genres: (data.genres || []).slice(0, 20).map(x => text(x.name, 40)), runtime: Number(data.runtime || 0), seasons: Number(data.number_of_seasons || 0), episodes: Number(data.number_of_episodes || 0), releaseDate: text(data.release_date || data.first_air_date, 20), type };
+    });
+    return json(res, 200, details);
   }
   if (req.method === 'GET' && url.pathname === '/api/catalog/trending') {
     await requireUser(req);
     const type = text(url.searchParams.get('type') || 'movie', 10);
     if (!['movie', 'tv', 'anime'].includes(type)) return json(res, 400, { error: 'Unsupported catalog type' });
-    return json(res, 200, await catalogTrending(type));
+    return json(res, 200, await cached('trending:' + type, 10 * 60 * 1000, () => catalogTrending(type)));
   }
   if (req.method === 'POST' && url.pathname === '/api/rooms') {
     const user = await requireUser(req);
