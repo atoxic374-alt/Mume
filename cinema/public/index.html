@@ -85,7 +85,7 @@ main{max-width:1480px;margin:auto;padding:0 clamp(16px,4vw,60px) 70px}.hero{min-
         <div class="tabcontent" id="queueTab"><div id="queueList" class="muted">Your queue is empty.</div><button id="nextMedia" class="small primary" style="margin-top:12px">Play next</button><button id="clearQueue" class="small" style="margin-top:12px">Clear queue</button></div>
         <div class="tabcontent hidden" id="peopleTab"><div id="peopleList" class="muted">No one here yet.</div></div>
         <div class="tabcontent hidden" id="chatTab"><div id="chatList" class="chatlist"></div></div>
-        <div class="tabcontent hidden" id="settingsTab"><div class="muted" style="margin-bottom:10px">Room controls · Host only</div><label class="participant"><span>Allow chat</span><input type="checkbox" id="settingChat" style="flex:0"></label><label class="participant"><span>Allow queue</span><input type="checkbox" id="settingQueue" style="flex:0"></label><label class="participant"><span>Skip voting</span><input type="checkbox" id="settingVote" style="flex:0"></label><label class="participant"><span>Synchronize playback</span><input type="checkbox" id="settingSync" style="flex:0"></label><label class="participant"><span>Loop current video</span><input type="checkbox" id="settingLoop" style="flex:0"></label><label class="participant"><span>Public room</span><input type="checkbox" id="settingPublic" style="flex:0"></label><input id="settingRoomName" maxlength="48" placeholder="Room name"><button id="saveSettings" class="primary small" style="margin-top:12px">Save settings</button><div class="muted" style="font-size:10px;margin-top:8px">Changes apply to everyone in this room.</div></div>
+        <div class="tabcontent hidden" id="settingsTab"><div class="muted" style="margin-bottom:10px">Room controls · Host only</div><label class="participant"><span>Allow chat</span><input type="checkbox" id="settingChat" style="flex:0"></label><label class="participant"><span>Allow queue</span><input type="checkbox" id="settingQueue" style="flex:0"></label><label class="participant"><span>Skip voting</span><input type="checkbox" id="settingVote" style="flex:0"></label><label class="participant"><span>Synchronize playback</span><input type="checkbox" id="settingSync" style="flex:0"></label><label class="participant"><span>Loop current video</span><input type="checkbox" id="settingLoop" style="flex:0"></label><label class="participant"><span>Public room</span><input type="checkbox" id="settingPublic" style="flex:0"></label><input id="settingRoomName" maxlength="48" placeholder="Room name"><button id="saveSettings" class="primary small" style="margin-top:12px">Save settings</button><button id="rotateInvite" class="small" style="margin-top:12px">Regenerate invite link</button><div class="muted" style="font-size:10px;margin-top:8px">Changes apply to everyone in this room.</div></div>
         <form class="chatform hidden" id="chatForm"><input id="chatInput" maxlength="500" placeholder="Say something…"><button class="primary small">Send</button></form>
       </aside>
     </div>
@@ -163,7 +163,7 @@ function applyRoomState(nextRoom) {
   $('chatForm').classList.toggle('hidden', currentTab !== 'chat' || !room.settings.allowChat);
   $('peopleList').innerHTML = (room.participants || []).map(person =>
     '<div class="participant"><img class="avatar" src="' + (person.avatar ? 'https://cdn.discordapp.com/avatars/' + encodeURIComponent(person.id) + '/' + encodeURIComponent(person.avatar) + '.png?size=64' : '') + '" alt=""><span>' + escapeText(person.globalName || person.username) + '</span><small>' + (person.id === room.hostId ? 'HOST' : '') + '</small>' +
-    (room.hostId === user.id && person.id !== user.id ? '<button class="small" data-host="' + escapeText(person.id) + '">Make host</button>' : '') + '</div>'
+    (canHost && person.id !== user.id ? '<button class="small" data-host="' + escapeText(person.id) + '">Make host</button><button class="small danger" data-kick="' + escapeText(person.id) + '">Remove</button>' : '') + '</div>'
   ).join('') || '<div class="muted">No one here yet.</div>';
   $('queueList').innerHTML = (room.queue || []).map((item, index) =>
     '<div class="queueitem">' + (item.poster ? '<img src="' + escapeText(item.poster) + '" alt="">' : '<div class="poster" style="width:38px;height:52px"></div>') +
@@ -216,12 +216,14 @@ function connectSocket() {
     }
     if (message.type === 'room:reaction') { toast((message.reaction.emoji || '✨') + ' reaction'); return; }
     if (message.type === 'room:notice') { $('roomNotice').textContent = message.message; return; }
+    if (message.type === 'room:invite') { roomInvite = message.inviteCode; toast('A new invite link is ready. Previous invite links are no longer valid.'); return; }
     if (message.type === 'error') { $('roomNotice').textContent = message.message; $('roomNotice').classList.add('error'); return; }
   };
   socket.onerror = () => status('Connection issue', 'bad');
   socket.onclose = event => {
     roomConnected = false;
     if (event.code === 1008) { status('Session or invite rejected', 'bad'); $('roomNotice').textContent = 'Discord session expired or room invite is invalid. Reopen the Activity or ask for a fresh invite.'; return; }
+    if (event.code === 4003) { status('Removed from room', 'bad'); $('roomNotice').textContent = 'The room host removed you from this session.'; return; }
     status('Reconnecting…', '');
     if (room) {
       const delay = Math.min(15000, 700 * Math.pow(1.8, reconnectAttempts++));
@@ -398,7 +400,8 @@ $('nextMedia').onclick = () => send('next');
 $('clearQueue').onclick = () => send('queue:clear');
 $('voteSkip').onclick = () => send('vote:skip');
 $('queueList').addEventListener('click', e => { const remove = e.target.closest('[data-remove]'); if (remove) return send('queue:remove', { mediaId: remove.dataset.remove }); const up = e.target.closest('[data-up]'); if (up && Number(up.dataset.up) > 0) return send('queue:move', { fromIndex: Number(up.dataset.up), toIndex: Number(up.dataset.up) - 1 }); const down = e.target.closest('[data-down]'); if (down && room && Number(down.dataset.down) < room.queue.length - 1) return send('queue:move', { fromIndex: Number(down.dataset.down), toIndex: Number(down.dataset.down) + 1 }); });
-$('peopleList').addEventListener('click', e => { const button = e.target.closest('[data-host]'); if (button) send('host:transfer', { userId: button.dataset.host }); });
+$('peopleList').addEventListener('click', e => { const kick = e.target.closest('[data-kick]'); if (kick) return send('participant:kick', { userId: kick.dataset.kick }); const button = e.target.closest('[data-host]'); if (button) send('host:transfer', { userId: button.dataset.host }); });
+$('rotateInvite').onclick = () => send('invite:rotate');
 $('chatForm').onsubmit = e => { e.preventDefault(); const message = $('chatInput').value.trim(); if (!message) return; send('chat:send', { message }); $('chatInput').value = ''; };
 document.querySelectorAll('[data-reaction]').forEach(btn => btn.onclick = () => send('reaction', { emoji: btn.dataset.reaction }));
 $('saveSettings').onclick = () => send('settings:update', { settings: { allowChat: $('settingChat').checked, allowQueue: $('settingQueue').checked, voteSkip: $('settingVote').checked, syncEnabled: $('settingSync').checked, loop: $('settingLoop').checked, name: $('settingRoomName').value.trim(), visibility: $('settingPublic').checked ? 'public' : 'private' } });
