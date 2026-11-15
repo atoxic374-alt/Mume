@@ -1994,14 +1994,19 @@ async function requestPlayerVoiceStateRefresh(player, reason = 'voice_refresh', 
     // after, but poru's recovery loop may fire before it is ready, producing
     // "RangeError: Shard 0 not found" and leaving the player stuck forever.
     const discordClient = player.poru?.client;
-    if (discordClient?.ws?.shards?.size > 0) {
+    if (discordClient) {
         try {
             const guildId = player.guildId;
-            const shardCount = discordClient.ws.shards.size;
+            const shards = discordClient.ws?.shards;
+            const shardCount = shards?.size || 0;
+            if (shardCount === 0) {
+                markPlayerNeedsVoiceRefresh(player, `${reason}:shard_unavailable`);
+                return false;
+            }
             const shardId = guildId
                 ? Number((BigInt(guildId) >> 22n) % BigInt(shardCount))
                 : 0;
-            const shard = discordClient.ws.shards.get(shardId);
+            const shard = shards.get(shardId);
             // WebSocketShardStatus.Ready === 0 in discord.js v14
             if (!shard || shard.status !== 0) {
                 markPlayerNeedsVoiceRefresh(player, `${reason}:shard_not_ready`);
