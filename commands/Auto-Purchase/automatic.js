@@ -4,6 +4,7 @@ const ms = require('ms');
 const axios = require('axios');
 const {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChannelSelectMenuBuilder,
@@ -38,7 +39,9 @@ const {
 
 const AUTO_SETTINGS_FILE = path.join(process.cwd(), 'settings', 'automatic.json');
 const REQUESTS_FILE = path.join(process.cwd(), 'settings', 'invoices.tmp.json');
-const AUTO_IMAGE_PATH = path.join(process.cwd(), 'assets', 'image', 'Auto.png');
+const AUTO_IMAGE_PATH = path.join(__dirname, '..', '..', 'assets', 'image', 'Auto.png');
+const PUBLIC_PANEL_IMAGE_PATH = path.join(__dirname, '..', '..', 'assets', 'image', 'AutomaticPurchasePanel.png');
+const PUBLIC_PANEL_PRICE_SLOT = { x: 377.5, y: 497.8, width: 314.5, height: 30 };
 const AUTO_PROFILE_ASSET_DIR = path.join(process.cwd(), 'assets', 'automatic');
 const RENEWAL_TTL_MS = 12 * 60 * 60 * 1000;
 
@@ -298,7 +301,7 @@ function panelLink(settings = automaticSettings()) {
 
 function autoImagePayload(embed) {
   const settings = automaticSettings();
-  if (settings.panelImageUrl) {
+  if (settings.customPanelImageEnabled === true && settings.panelImageUrl) {
     embed.setImage(settings.panelImageUrl);
     return { embeds: [embed] };
   }
@@ -307,19 +310,101 @@ function autoImagePayload(embed) {
   return { embeds: [embed], files: [AUTO_IMAGE_PATH] };
 }
 
-function publicPanelPayload(client) {
-  const settings = automaticSettings();
+async function createPublicPanelImage(settings) {
+  const { createCanvas, loadImage } = require('@napi-rs/canvas');
+  const source = await loadImage(PUBLIC_PANEL_IMAGE_PATH);
+  const canvas = createCanvas(source.width, source.height);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(source, 0, 0);
+
+  const scale = source.width / 720;
+  const x = PUBLIC_PANEL_PRICE_SLOT.x * scale;
+  const y = PUBLIC_PANEL_PRICE_SLOT.y * scale;
+  const width = PUBLIC_PANEL_PRICE_SLOT.width * scale;
+  const height = PUBLIC_PANEL_PRICE_SLOT.height * scale;
+  const radius = 7 * scale;
+
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + width - radius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+  ctx.lineTo(x + width, y + height - radius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  ctx.lineTo(x + radius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
+  ctx.fillStyle = '#252629';
+  ctx.fill();
+  ctx.strokeStyle = '#343538';
+  ctx.lineWidth = scale;
+  ctx.stroke();
+
+  const priceText = `${formatMoney(settings.botPrice, settings.currency)} / MONTH`;
+  const maxTextWidth = width - 18 * scale;
+  let fontSize = 15 * scale;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  while (fontSize > 9 * scale) {
+    ctx.font = `800 ${fontSize}px Arial`;
+    if (ctx.measureText(priceText).width <= maxTextWidth) break;
+    fontSize -= scale;
+  }
+  ctx.fillStyle = '#f4f4f5';
+  ctx.fillText(priceText, x + width / 2, y + height / 2, maxTextWidth);
+  return canvas.toBuffer('image/png');
+}
+
+async function attachCustomPanelImage(imageUrl) {
+  const url = new URL(imageUrl);
+  if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Panel image URL must use HTTP or HTTPS.');
+
+  const response = await axios.get(url.toString(), {
+    responseType: 'arraybuffer',
+    timeout: 15000,
+    maxContentLength: 8 * 1024 * 1024,
+    maxBodyLength: 8 * 1024 * 1024,
+  });
+  const contentType = String(response.headers['content-type'] || '').split(';')[0].toLowerCase();
+  const extension = ({
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+  })[contentType];
+  if (!extension) throw new Error(`Unsupported panel image content type: ${contentType || 'unknown'}`);
+
+  return new AttachmentBuilder(Buffer.from(response.data), { name: `AutomaticPurchasePanel.${extension}` });
+}
+
+async function publicPanelPayload() {
   const components = publicPanelRows();
-  const embed = publicPanelEmbed(client);
-  if (settings.panelImageUrl) {
-    embed.setImage(settings.panelImageUrl);
-    return { embeds: [embed], components };
+  const settings = automaticSettings();
+  if (settings.customPanelImageEnabled === true && settings.panelImageUrl) {
+    try {
+      const attachment = await attachCustomPanelImage(settings.panelImageUrl);
+      return { files: [attachment], components };
+    } catch (error) {
+      console.error('[Auto-Purchase] Could not download the custom panel image; using the built-in image:', error?.message || error);
+    }
+  }
+  if (fs.existsSync(PUBLIC_PANEL_IMAGE_PATH)) {
+    try {
+      const image = await createPublicPanelImage(settings);
+      return {
+        files: [new AttachmentBuilder(image, { name: 'AutomaticPurchasePanel.png' })],
+        components,
+      };
+    } catch (error) {
+      console.error('[Auto-Purchase] Could not render the configured panel price:', error);
+      return { content: `Bot Price / Month: ${formatMoney(settings.botPrice, settings.currency)}`, components };
+    }
   }
   if (fs.existsSync(AUTO_IMAGE_PATH)) {
-    embed.setImage('attachment://Auto.png');
-    return { embeds: [embed], files: [AUTO_IMAGE_PATH], components };
+    return { files: [AUTO_IMAGE_PATH], components };
   }
-  return { embeds: [embed], components };
+  return { content: `Bot Price / Month: ${formatMoney(settings.botPrice, settings.currency)}`, components };
 }
 
 function buildOwnerEmbed(client, requester) {
@@ -395,47 +480,18 @@ function ownerRows() {
   ];
 }
 
-function publicPanelEmbed(client) {
-  const settings = automaticSettings();
-  const embed = new EmbedBuilder()
-    .setColor(getEmbedColor(client))
-    .setTitle('Automatic Purchase | الشراء التلقائي')
-    .setDescription([
-      '**Buy | شراء**',
-      '*حدد عدد البوتات وارسل الفاتورة في الخاص ثم انتظر قبول الإدارة.*',
-      '',
-      '**My Sub | اشتراكي**',
-      '*عرض وإدارة اشتراكاتك الحالية.*',
-      '',
-      '**Renew | تجديد**',
-      '*اطلب التجديد ثم ارسل صورة الفاتورة في الخاص خلال 12 ساعة.*',
-      '',
-      '**Pricing | الأسعار**',
-      '*احسب سعر اشتراكك تلقائياً بناءً على عدد البوتات والمدة.*',
-      '',
-      '**Support | الدعم**',
-      '*تواصل مع الإدارة مباشرة.*',
-      '',
-      `**Bot Price / Month | سعر البوت / شهر :** *${formatMoney(settings.botPrice, settings.currency)}*`,
-    ].join('\n'))
-    .setFooter({ text: `${client.user?.username || 'Music'} | Automatic`, iconURL: client.user?.displayAvatarURL({ dynamic: true }) });
-  const thumb = client.user?.displayAvatarURL({ dynamic: true, size: 256 });
-  if (thumb) embed.setThumbnail(thumb);
-  return embed;
-}
-
 function publicPanelRows() {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('auto_user_buy').setLabel('Buy | شراء').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId('auto_user_my').setLabel('My Sub | اشتراكي').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('auto_user_renew').setLabel('Renew | تجديد').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId('auto_user_links').setLabel('Links | روابط').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('auto_user_pause').setLabel('Pause/Resume | إيقاف/تشغيل').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('auto_user_renew').setLabel('RENEW').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('auto_user_my').setLabel('MY SUB').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('auto_user_buy').setLabel('BUY').setStyle(ButtonStyle.Success),
     ),
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('auto_user_pricing').setLabel('Pricing | الأسعار').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('auto_user_support').setLabel('Support | الدعم').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('auto_user_support').setLabel('SUPPORT').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('auto_user_pricing').setLabel('PRICING').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('auto_user_links').setLabel('LINKS').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('auto_user_pause').setLabel('PAUSE / RESUME').setStyle(ButtonStyle.Secondary),
     ),
   ];
 }
@@ -566,7 +622,7 @@ async function refreshSavedPublicPanel(client) {
   await message.edit({
     embeds: [],
     files: [],
-    ...publicPanelPayload(client),
+    ...(await publicPanelPayload(client)),
   }).catch(() => {});
 }
 
@@ -911,8 +967,8 @@ async function addTokensToStock(raw, onProgress = null) {
       continue;
     }
     try {
-      // Keep existing guild membership. The allocator uses it to prefer bots
-      // already inside the customer's target server.
+      // Preserve existing guild membership so allocation can reuse this bot
+      // for the server where it is already installed.
       await applyProfileToTokenHelper(token, { profile, assets, leaveGuilds: false });
     } catch {
       invalid++;
@@ -1238,7 +1294,7 @@ async function acceptPurchase(interaction, reqId) {
 
   const user = await interaction.client.users.fetch(req.userId).catch(() => null);
   if (user) {
-    user.send({
+    await user.send({
       embeds: [buildSubscriptionActivatedDm(interaction.client, {
         code,
         botCount: req.count,
@@ -1248,7 +1304,7 @@ async function acceptPurchase(interaction, reqId) {
         links: allocation.inviteLinks,
       })],
       components: buildBotInviteRows(allocation.inviteLinks),
-    }).catch(() => {});
+    }).catch(error => console.error('[acceptPurchase] Failed to send activation DM:', error?.message || error));
   }
 }
 
@@ -1732,7 +1788,7 @@ async function handlePanelChannelSelect(interaction) {
     });
   }
 
-  const msg = await targetChannel.send({ embeds: [], files: [], ...publicPanelPayload(interaction.client) });
+  const msg = await targetChannel.send({ embeds: [], files: [], ...(await publicPanelPayload(interaction.client)) });
   saveAutomaticSettings({
     panelGuildId: msg.guildId,
     panelChannelId: msg.channelId,
@@ -1758,7 +1814,7 @@ async function handleAdminImage(interaction) {
         .setCustomId('image_url')
         .setLabel('رابط الصورة (فارغ = استخدم الافتراضية)')
         .setPlaceholder('https://...')
-        .setValue(settings.panelImageUrl || '')
+        .setValue(settings.customPanelImageEnabled === true ? settings.panelImageUrl || '' : '')
         .setStyle(TextInputStyle.Short)
         .setRequired(false),
     ),
@@ -1772,7 +1828,7 @@ async function handleAdminImage(interaction) {
   if (!submit) return;
 
   const url = submit.fields.getTextInputValue('image_url').trim();
-  saveAutomaticSettings({ panelImageUrl: url || null });
+  saveAutomaticSettings({ panelImageUrl: url || null, customPanelImageEnabled: Boolean(url) });
 
   await submit.reply({
     content: url
@@ -2467,6 +2523,10 @@ function installAutomaticHandlers(client) {
     handleInvoiceDm(client, message).catch(err => console.error('[automatic:dm]', err));
   });
   setInterval(cleanupRequests, 10 * 60 * 1000).unref();
+  const refreshPanelOnReady = () => refreshSavedPublicPanel(client)
+    .catch(err => console.error('[automatic:panel-startup]', err));
+  if (client.isReady?.()) refreshPanelOnReady();
+  else client.once('ready', refreshPanelOnReady);
 }
 
 module.exports = {
