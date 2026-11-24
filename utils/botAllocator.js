@@ -10,6 +10,7 @@ const { reconcileTokenStores } = require('./tokenReconciler');
 const SERVER_ID_RE = /^\d{17,20}$/;
 const INSPECTION_TIMEOUT_MS = Math.max(3000, Number(process.env.BOT_STOCK_INSPECTION_TIMEOUT_MS || 10000));
 const RUNNING_READY_WAIT_MS = Math.max(1000, Number(process.env.BOT_STOCK_READY_WAIT_MS || 5000));
+const INSPECTION_CONCURRENCY = Math.max(1, Math.min(10, Number(process.env.BOT_STOCK_INSPECTION_CONCURRENCY || 5)));
 
 // All allocation paths in this process share one queue. This prevents two
 // simultaneous approvals from handing out the same stock token.
@@ -144,15 +145,22 @@ async function claimBotsForServer({ serverId, count }) {
     const outside = [];
     const inspection = [];
 
-    // Inspect every free candidate so that an in-server bot is always preferred,
-    // even when it appears later in bots.json. Invalid tokens remain in stock
+    // Inspect bounded batches in parallel. This keeps allocation responsive
+    // with a large stock while still stopping as soon as a batch proves that
+    // enough in-server bots have been found. Invalid tokens remain in stock
     // for the health checker/admin rather than being silently deleted.
-    for (const candidate of candidates) {
-      const token = tokenKey(candidate.token);
-      const result = await inspectBot(token, normalizedServerId, runningBots);
-      inspection.push({ token, ...result });
-      if (!result.valid) continue;
-      (result.inServer ? inside : outside).push(candidate);
+    for (let offset = 0; offset < candidates.length; offset += INSPECTION_CONCURRENCY) {
+      const batch = candidates.slice(offset, offset + INSPECTION_CONCURRENCY);
+      const results = await Promise.all(batch.map(async candidate => ({
+        candidate,
+        token: tokenKey(candidate.token),
+        result: await inspectBot(tokenKey(candidate.token), normalizedServerId, runningBots),
+      })));
+      for (const { candidate, token, result } of results) {
+        inspection.push({ token, ...result });
+        if (!result.valid) continue;
+        (result.inServer ? inside : outside).push(candidate);
+      }
       if (inside.length >= requested) break;
     }
 
