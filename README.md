@@ -21,3 +21,18 @@ Recommended production setup for RAM-constrained Lavalink servers:
 2. Add all of them to the host config.
 3. Keep `LAVALINK_NODE_STRATEGY=partition` and `LAVALINK_NODE_REPLICAS=1`.
 4. Increase replicas only after measuring RAM headroom.
+
+## Server-aware bot allocation
+
+Subscription allocation is handled by `utils/botAllocator.js`. Before assigning
+stock, it reconciles `bots.json` and `tokens.json`, excludes active or duplicate
+tokens, and checks each free bot's Discord guild cache. A free bot already in the
+requested server is preferred. If the bot is not running, Mume opens a temporary
+Guilds-only gateway session to inspect its guilds, closes that session, and then
+the normal subscription manager starts the assigned bot permanently.
+
+All allocation entry points use the same in-process lock, so concurrent approval
+actions cannot claim the same token. Invalid or timed-out stock tokens are never
+assigned. Existing guild membership is preserved when tokens are added to stock;
+profile cleanup operations for subscribed or removed bots can still explicitly
+leave guilds when required.

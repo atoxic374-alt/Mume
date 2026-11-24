@@ -20,6 +20,7 @@ const {
 
 const { owners } = require('../../config');
 const store = require('../../utils/store');
+const { claimBotsForServer, getFreeStockCount } = require('../../utils/botAllocator');
 const { check } = require('../../utils/rateLimit');
 const { getEmbedColor } = require('../../utils/embedColor');
 const {
@@ -32,6 +33,7 @@ const {
   buildServerUpdatedDm,
   buildSubscriptionBotsAddedDm,
   buildSubscriptionTimeUpdatedDm,
+  buildBotInviteRows,
 } = require('../../utils/subscriptionDm');
 
 const AUTO_SETTINGS_FILE = path.join(process.cwd(), 'settings', 'automatic.json');
@@ -679,7 +681,7 @@ function renewRequestRows(reqId, disabled = false) {
 }
 
 async function startPurchase(interaction, count, serverId, durationMs, durationLabel, durationDays) {
-  const stock = (store.get('bots') || []).length;
+  const stock = getFreeStockCount();
   if (stock < count) {
     return interaction.reply({
       embeds: [quickEmbed(interaction.client, interaction.user, 'error',
@@ -909,7 +911,9 @@ async function addTokensToStock(raw, onProgress = null) {
       continue;
     }
     try {
-      await applyProfileToTokenHelper(token, { profile, assets, leaveGuilds: true });
+      // Keep existing guild membership. The allocator uses it to prefer bots
+      // already inside the customer's target server.
+      await applyProfileToTokenHelper(token, { profile, assets, leaveGuilds: false });
     } catch {
       invalid++;
       continue;
@@ -931,12 +935,15 @@ async function approveAddBots(interaction, reqId) {
   const entry = findSubscription(req.code, req.userId);
   if (!entry) return interaction.reply({ content: '**Subscription :** *الاشتراك غير موجود.*', flags: MessageFlags.Ephemeral });
 
-  const bots = store.get('bots') || [];
-  if (bots.length < req.count) {
-    return interaction.reply({ content: `**Stock :** *المخزون غير كافي. المتاح الآن: \`${bots.length}\` بوت.*`, flags: MessageFlags.Ephemeral });
+  let allocation;
+  try {
+    allocation = await claimBotsForServer({ serverId: entry.server, count: req.count });
+  } catch (error) {
+    console.error('[approveAddBots] bot allocation failed:', error?.message || error);
+    return interaction.reply({ content: '**Stock :** *لا توجد بوتات صالحة كافية، أو لم يتم العثور على بوتات كافية داخل/خارج السيرفر.*', flags: MessageFlags.Ephemeral });
   }
 
-  const given = bots.splice(0, req.count);
+  const given = allocation.selected;
   const tokens = store.get('tokens') || [];
   const defaultStatus = automaticSettings().subBotStatus || null;
   const paused = !!entry.pausedAt;
@@ -951,7 +958,6 @@ async function approveAddBots(interaction, reqId) {
     paused,
   }));
   entry.botsCount = Number(entry.botsCount || 0) + req.count;
-  store.set('bots', bots);
   store.set('tokens', tokens);
   store.set('time', store.get('time') || []);
 
@@ -983,7 +989,9 @@ async function approveAddBots(interaction, reqId) {
         code: req.code,
         addedBots: req.count,
         totalBots: entry.botsCount,
+        links: allocation.inviteLinks,
       })],
+      components: buildBotInviteRows(allocation.inviteLinks),
     }).catch(() => {});
   }
 }
@@ -1168,9 +1176,12 @@ async function acceptPurchase(interaction, reqId) {
     return interaction.reply({ content: '**Duration :** *المدة غير محددة في الطلب. اطلب من المستخدم إعادة الطلب.*', flags: MessageFlags.Ephemeral });
   }
 
-  const bots = store.get('bots') || [];
-  if (bots.length < req.count) {
-    return interaction.reply({ content: `**Stock :** *المخزون غير كافي. المتاح الآن: \`${bots.length}\` بوت.*`, flags: MessageFlags.Ephemeral });
+  let allocation;
+  try {
+    allocation = await claimBotsForServer({ serverId: req.serverId, count: req.count });
+  } catch (error) {
+    console.error('[acceptPurchase] bot allocation failed:', error?.message || error);
+    return interaction.reply({ content: '**Stock :** *لا توجد بوتات صالحة كافية، أو لم يتم العثور على بوتات كافية داخل/خارج السيرفر.*', flags: MessageFlags.Ephemeral });
   }
 
   const code = `#${randomId(5)}`;
@@ -1185,7 +1196,7 @@ async function acceptPurchase(interaction, reqId) {
     code,
   });
 
-  const given = bots.splice(0, req.count);
+  const given = allocation.selected;
   const tokens = store.get('tokens') || [];
   const defaultStatus = automaticSettings().subBotStatus || null;
   given.forEach(bot => tokens.push({
@@ -1200,7 +1211,6 @@ async function acceptPurchase(interaction, reqId) {
 
   store.set('time', timeArray);
   store.set('tokens', tokens);
-  store.set('bots', bots);
 
   // ── تشغيل البوتات فوراً مثل madd-sub بدون انتظار الـ manager ──────────────
   try {
@@ -1235,7 +1245,9 @@ async function acceptPurchase(interaction, reqId) {
         duration: formatDuration(durationMs),
         serverId: req.serverId,
         expiresAt: expirationTime,
+        links: allocation.inviteLinks,
       })],
+      components: buildBotInviteRows(allocation.inviteLinks),
     }).catch(() => {});
   }
 }

@@ -13,8 +13,9 @@ const ms = require('ms');
 const store = require('../../utils/store');
 const { check } = require('../../utils/rateLimit');
 const { getEmbedColor } = require('../../utils/embedColor');
-const { buildSubscriptionActivatedDm } = require('../../utils/subscriptionDm');
+const { buildSubscriptionActivatedDm, buildBotInviteRows } = require('../../utils/subscriptionDm');
 const { getSubBotProfile } = require('../../utils/subBotProfile');
+const { claimBotsForServer, releaseBotsToStock } = require('../../utils/botAllocator');
 
 module.exports = {
   name: 'musicaddsub',
@@ -216,9 +217,12 @@ module.exports = {
     collector.on('end', async (collected, reason) => {
       if (reason !== 'FINISH') return;
 
-	      const bots = getBots();
-	      if (bots.length < selectedCount) {
-	        return prompt.edit({ embeds: [new EmbedBuilder().setTitle('Not Enough Bots').setDescription('لم يعد هناك عدد كاف من البوتات المتاحة لإكمال الاشتراك.').setColor(getEmbedColor(client))], components: [] });
+	      let allocation;
+	      try {
+	        allocation = await claimBotsForServer({ serverId, count: selectedCount });
+	      } catch (error) {
+	        console.error('[madd-sub] bot allocation failed:', error?.message || error);
+	        return prompt.edit({ embeds: [new EmbedBuilder().setTitle('Not Enough Bots').setDescription('لم يعد هناك عدد كاف من البوتات الصالحة أو الموجودة في الستوك لإكمال الاشتراك.').setColor(getEmbedColor(client))], components: [] });
 	      }
 
       const randomCode = generateRandomCode(5);
@@ -229,13 +233,33 @@ module.exports = {
       timeArray.push({ user: userId, server: serverId, botsCount: selectedCount, subscriptionTime: selectedDurationLabel, expirationTime, code: `#${randomCode}` });
       store.set('time', timeArray);
 
-      // Update tokens and bots
-      const givenTokens = bots.splice(0, selectedCount);
-      let tokens = store.get('tokens') || [];
+	      // Update tokens; the allocator already removed these exact bots atomically
+	      // from stock and preferred bots already present in the target server.
+	      const givenTokens = allocation.selected;
+	      let tokens = store.get('tokens') || [];
 	      const defaultStatus = getSubBotProfile().status || null;
 	      givenTokens.forEach(t => tokens.push({ token: t.token, Server: serverId, channel: null, chat: null, status: defaultStatus, client: userId, code: `#${randomCode}` }));
       store.set('tokens', tokens);
-      store.set('bots', bots);
+
+	      // If an unexpected write fails after the claim, return the exact tokens
+	      // to stock rather than losing them.
+	      try { store.flushSync(); } catch (error) {
+	        await releaseBotsToStock(givenTokens);
+	        throw error;
+	      }
+
+      // Start the assigned clients immediately; manager.js remains the
+      // recovery/backstop if a gateway connection fails.
+      try {
+        const { runsys } = require('../../music');
+        for (const bot of givenTokens) {
+          runsys(bot.token, serverId).catch(error =>
+            console.error('[madd-sub] runsys error:', error?.message || error),
+          );
+        }
+      } catch (error) {
+        console.error('[madd-sub] failed to start assigned bots:', error?.message || error);
+      }
 
       const formattedDuration = formatDuration(selectedDuration);
 
@@ -247,7 +271,9 @@ module.exports = {
           duration: formattedDuration,
           serverId,
           expiresAt: expirationTime,
-        })]
+          links: allocation.inviteLinks,
+        })],
+        components: buildBotInviteRows(allocation.inviteLinks),
       }).catch(() => {});
 
       // Log

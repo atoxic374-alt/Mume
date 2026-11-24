@@ -2,6 +2,7 @@ const { Client, GatewayIntentBits, EmbedBuilder, ButtonBuilder, ButtonStyle, Act
 const store = require('./utils/store');
 const { reconcileTokenStores } = require('./utils/tokenReconciler');
 const { getEmbedColor } = require('./utils/embedColor');
+const { claimBotsForServer, releaseBotsToStock } = require('./utils/botAllocator');
 
 // ── Extract bot ID from token (base64 first segment) ──────────────────────────
 function extractBotId(token) {
@@ -156,8 +157,6 @@ async function checkAndReplaceTokens(mainClient) {
             console.log('[TokenChecker] Reconciled token stores:', reconciliation);
         }
         let tokensArray = store.get('tokens') || [];
-        let botsArray   = store.get('bots')   || [];
-
         let changed = false;
         const replacementsToStart = [];
         const invalidTokensToRemove = new Set();
@@ -196,29 +195,23 @@ async function checkAndReplaceTokens(mainClient) {
                     }
                 };
 
-                // ── استبدال من المخزون ────────────────────────────────────
-                if (botsArray.length === 0) {
-                    console.log(`[TokenChecker] Removed invalid token for sub ${entry.code} — no replacement stock`);
-                    await stopInvalidClient();
-                    invalidTokensToRemove.add(entry.token);
-                    changed = true;
-                    return;
-                }
-
                 const oldToken = entry.token;
                 let newBot = null;
                 let newBotInfo = null;
 
-                while (botsArray.length > 0 && !newBotInfo) {
-                    newBot = botsArray.shift();
+                // Claim atomically and prefer a free bot already inside this
+                // subscription's server. The allocator validates stock tokens
+                // through a temporary gateway login when needed.
+                try {
+                    const allocation = await claimBotsForServer({ serverId: entry.Server, count: 1 });
+                    newBot = allocation.selected[0];
                     newBotInfo = await fetchBotInfo(newBot.token);
-                    if (!newBotInfo) {
-                        changed = true;
-                        console.warn(`[TokenChecker] Skipped invalid replacement token from stock — sub ${entry.code}`);
-                    }
+                } catch (error) {
+                    console.warn(`[TokenChecker] No valid replacement stock for ${entry.code}:`, error?.message || error);
                 }
 
                 if (!newBotInfo) {
+                    if (newBot) await releaseBotsToStock([newBot]);
                     console.log(`[TokenChecker] Removed invalid token for sub ${entry.code} — no valid replacement token`);
                     await stopInvalidClient();
                     invalidTokensToRemove.add(oldToken);
@@ -254,7 +247,6 @@ async function checkAndReplaceTokens(mainClient) {
 
         if (changed) {
             store.set('tokens', tokensArray);
-            store.set('bots',   botsArray);
             store.flushSync();
         }
 

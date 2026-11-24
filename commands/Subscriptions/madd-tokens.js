@@ -153,7 +153,9 @@ module.exports = {
 
             await Promise.allSettled(slice.map(async ({ value: tv, masked }) => {
                 try {
-                    await applyProfileToToken(tv, { profile, assets, leaveGuilds: true });
+                    // Preserve existing guild membership so later allocation can
+                    // detect and reuse this bot for that server.
+                    await applyProfileToToken(tv, { profile, assets, leaveGuilds: false });
                     // ← save immediately so partial runs aren't lost
                     saveTokenIncremental(tv);
                     validCount++;

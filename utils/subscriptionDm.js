@@ -1,6 +1,11 @@
 'use strict';
 
-const { EmbedBuilder } = require('discord.js');
+const {
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    EmbedBuilder,
+} = require('discord.js');
 const { getEmbedColor } = require('./embedColor');
 
 function asText(value, fallback = 'Not set | غير محدد') {
@@ -34,8 +39,26 @@ function baseEmbed(client, title, description, thumbnailUrl = null) {
     return embed;
 }
 
+function buildBotInviteRows(links = []) {
+    const validLinks = Array.isArray(links)
+        ? links.filter(link => /^https:\/\/discord\.com\/api\/oauth2\/authorize\?/i.test(String(link))).slice(0, 25)
+        : [];
+    const rows = [];
+    for (let offset = 0; offset < validLinks.length; offset += 5) {
+        const row = new ActionRowBuilder();
+        validLinks.slice(offset, offset + 5).forEach((link, index) => {
+            row.addComponents(new ButtonBuilder()
+                .setLabel(`Bot ${offset + index + 1}`)
+                .setStyle(ButtonStyle.Link)
+                .setURL(link));
+        });
+        if (row.components.length) rows.push(row);
+    }
+    return rows;
+}
+
 function buildSubscriptionActivatedDm(client, data = {}) {
-    return baseEmbed(
+    const embed = baseEmbed(
         client,
         'Subscription Activated | تم تفعيل الاشتراك',
         [
@@ -49,6 +72,10 @@ function buildSubscriptionActivatedDm(client, data = {}) {
         field('Server ID', 'ايدي السيرفر', `\`${data.serverId}\``),
         field('Expires At', 'ينتهي في', `${timestamp(data.expiresAt, 'F')}\n${timestamp(data.expiresAt, 'R')}`, false),
     );
+    if (Array.isArray(data.links) && data.links.length) {
+        embed.addFields(field('Bot Links', 'روابط البوتات', 'Use the Bot 1, Bot 2 buttons below | اضغط الأزرار بالأسفل', false));
+    }
+    return embed;
 }
 
 function buildSubscriptionTimeUpdatedDm(client, data = {}) {
@@ -81,7 +108,7 @@ function buildSubscriptionBotsAddedDm(client, data = {}) {
         field('Total Bots', 'اجمالي البوتات', `\`${data.totalBots || 0}\``),
     );
     if (Array.isArray(data.links) && data.links.length) {
-        embed.addFields(field('Bot Links', 'روابط البوتات', data.links.join('\n'), false));
+        embed.addFields(field('Bot Links', 'روابط البوتات', 'Use the Bot 1, Bot 2 buttons below | اضغط الأزرار بالأسفل', false));
     }
     return embed;
 }
@@ -140,4 +167,5 @@ module.exports = {
     buildSubscriptionRemovedDm,
     buildOwnershipTransferredDm,
     buildServerUpdatedDm,
+    buildBotInviteRows,
 };

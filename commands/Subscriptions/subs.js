@@ -7,6 +7,7 @@ const {
 const ms = require('ms');
 const store = require('../../utils/store');
 const { reconcileTokenStores } = require('../../utils/tokenReconciler');
+const { claimBotsForServer, releaseBotsToStock } = require('../../utils/botAllocator');
 const { getEmbedColor } = require('../../utils/embedColor');
 const {
   applyProfileToToken,
@@ -19,6 +20,7 @@ const {
   buildSubscriptionActivatedDm,
   buildSubscriptionRemovedDm,
   buildSubscriptionTimeUpdatedDm,
+  buildBotInviteRows,
 } = require('../../utils/subscriptionDm');
 
 // ─── Persistent button IDs ────────────────────────────────────────────────────
@@ -209,21 +211,42 @@ async function handleAddSub(interaction, client) {
   coll.on('end', async (_, reason) => {
     if (reason !== 'FINISH') return;
     // A manually edited bots.json may contain active or duplicate tokens.
-    // Clean it immediately before allocating bots to a new subscription.
-    reconcileTokenStores();
-    const bots = getBots();
-            if (bots.length < selectedCount) return prompt.edit({ embeds: [basePanelEmbed(client, 'Not Enough Bots | لا توجد بوتات كافية')], components: [] });
+    // The allocator logs free bots in temporarily and prefers ones already in
+    // the requested server.
+    let allocation;
+    try {
+      allocation = await claimBotsForServer({ serverId, count: selectedCount });
+    } catch (error) {
+      console.error('[subs] bot allocation failed:', error?.message || error);
+      return prompt.edit({ embeds: [basePanelEmbed(client, 'Not Enough Valid Bots | لا توجد بوتات صالحة كافية')], components: [] });
+    }
 
     const code = `#${generateCode(5)}`;
     const expirationTime = Date.now() + selectedDuration;
     const timeArray = store.get('time') || [];
     timeArray.push({ user: userId, server: serverId, botsCount: selectedCount, subscriptionTime: selectedDurationLabel, expirationTime, code });
     store.set('time', timeArray);
-    const givenTokens = bots.splice(0, selectedCount);
+    const givenTokens = allocation.selected;
     const tokens = store.get('tokens') || [];
     const defaultStatus = getSubBotProfile().status || null;
     givenTokens.forEach(t => tokens.push({ token: t.token, Server: serverId, channel: null, chat: null, status: defaultStatus, client: userId, code }));
-    store.set('tokens', tokens); store.set('bots', bots);
+    store.set('tokens', tokens);
+    try { store.flushSync(); } catch (error) {
+      await releaseBotsToStock(givenTokens);
+      throw error;
+    }
+
+    // Start immediately; manager.js continues to monitor and recover them.
+    try {
+      const { runsys } = require('../../music');
+      for (const bot of givenTokens) {
+        runsys(bot.token, serverId).catch(error =>
+          console.error('[subs] runsys error:', error?.message || error),
+        );
+      }
+    } catch (error) {
+      console.error('[subs] failed to start assigned bots:', error?.message || error);
+    }
 
     fetchedUser.send({ embeds: [buildSubscriptionActivatedDm(client, {
       code,
@@ -231,7 +254,8 @@ async function handleAddSub(interaction, client) {
       duration: formatDuration(selectedDuration),
       serverId,
       expiresAt: expirationTime,
-    })] }).catch(() => {});
+      links: allocation.inviteLinks,
+    })], components: buildBotInviteRows(allocation.inviteLinks) }).catch(() => {});
 
     const logCh = client.channels.cache.get(logChannelId);
             if (logCh) logCh.send({ embeds: [basePanelEmbed(client, 'Subscription Added | تمت إضافة اشتراك').addFields(
